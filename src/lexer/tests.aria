@@ -1,0 +1,326 @@
+mod lexer
+
+// ============================================================
+// Lexer Tests
+// ============================================================
+
+// --- Helper to get token at index (skip sentinel at 0) ---
+
+fn _tok_at(lex: Lexer, idx: i64) -> Token = lex.tokens[idx + 1]
+
+fn _tok_count(lex: Lexer) -> i64 = lex.tokens.len() - 1
+
+fn _kind_at(lex: Lexer, idx: i64) -> str = token_name(_tok_at(lex, idx).kind)
+
+// --- Basic token tests ---
+
+test "empty input" {
+    lex := tokenize("", "test.aria")
+    assert _tok_count(lex) == 1  // just EOF
+    assert _kind_at(lex, 0) == "EOF"
+}
+
+test "single identifier" {
+    lex := tokenize("hello", "test.aria")
+    assert _kind_at(lex, 0) == "IDENT"
+    assert _tok_at(lex, 0).text == "hello"
+    assert _kind_at(lex, 1) == "EOF"
+}
+
+test "keyword fn" {
+    lex := tokenize("fn", "test.aria")
+    assert _kind_at(lex, 0) == "fn"
+}
+
+test "keyword list" {
+    lex := tokenize("mod use pub fn type enum trait impl struct entry", "test.aria")
+    assert _kind_at(lex, 0) == "mod"
+    assert _kind_at(lex, 1) == "use"
+    assert _kind_at(lex, 2) == "pub"
+    assert _kind_at(lex, 3) == "fn"
+    assert _kind_at(lex, 4) == "type"
+    assert _kind_at(lex, 5) == "enum"
+    assert _kind_at(lex, 6) == "trait"
+    assert _kind_at(lex, 7) == "impl"
+    assert _kind_at(lex, 8) == "struct"
+    assert _kind_at(lex, 9) == "entry"
+}
+
+test "more keywords" {
+    lex := tokenize("if else match for in while loop break continue return", "test.aria")
+    assert _kind_at(lex, 0) == "if"
+    assert _kind_at(lex, 1) == "else"
+    assert _kind_at(lex, 2) == "match"
+    assert _kind_at(lex, 3) == "for"
+    assert _kind_at(lex, 4) == "in"
+    assert _kind_at(lex, 5) == "while"
+    assert _kind_at(lex, 6) == "loop"
+    assert _kind_at(lex, 7) == "break"
+    assert _kind_at(lex, 8) == "continue"
+    assert _kind_at(lex, 9) == "return"
+}
+
+test "bool literals" {
+    lex := tokenize("true false", "test.aria")
+    assert _kind_at(lex, 0) == "true"
+    assert _kind_at(lex, 1) == "false"
+}
+
+// --- Number tests ---
+
+test "decimal integer" {
+    lex := tokenize("42", "test.aria")
+    assert _kind_at(lex, 0) == "INT"
+    assert _tok_at(lex, 0).text == "42"
+}
+
+test "hex integer" {
+    lex := tokenize("0xFF", "test.aria")
+    assert _kind_at(lex, 0) == "INT"
+    assert _tok_at(lex, 0).text == "0xFF"
+}
+
+test "octal integer" {
+    lex := tokenize("0o77", "test.aria")
+    assert _kind_at(lex, 0) == "INT"
+    assert _tok_at(lex, 0).text == "0o77"
+}
+
+test "binary integer" {
+    lex := tokenize("0b1010", "test.aria")
+    assert _kind_at(lex, 0) == "INT"
+    assert _tok_at(lex, 0).text == "0b1010"
+}
+
+test "integer with underscores" {
+    lex := tokenize("1_000_000", "test.aria")
+    assert _kind_at(lex, 0) == "INT"
+    assert _tok_at(lex, 0).text == "1_000_000"
+}
+
+test "float literal" {
+    lex := tokenize("3.14", "test.aria")
+    assert _kind_at(lex, 0) == "FLOAT"
+    assert _tok_at(lex, 0).text == "3.14"
+}
+
+test "float with exponent" {
+    lex := tokenize("1.0e10", "test.aria")
+    assert _kind_at(lex, 0) == "FLOAT"
+    assert _tok_at(lex, 0).text == "1.0e10"
+}
+
+// --- String tests ---
+
+test "simple string" {
+    lex := tokenize("\"hello\"", "test.aria")
+    assert _kind_at(lex, 0) == "STRING"
+    assert _tok_at(lex, 0).text == "hello"
+}
+
+test "string with escape" {
+    lex := tokenize("\"hello\\nworld\"", "test.aria")
+    assert _kind_at(lex, 0) == "STRING"
+    assert _tok_at(lex, 0).text.contains("world")
+}
+
+// --- Operator tests ---
+
+test "single char operators" {
+    lex := tokenize("+ - * / %", "test.aria")
+    assert _kind_at(lex, 0) == "+"
+    assert _kind_at(lex, 1) == "-"
+    assert _kind_at(lex, 2) == "*"
+    assert _kind_at(lex, 3) == "/"
+    assert _kind_at(lex, 4) == "%"
+}
+
+test "comparison operators" {
+    lex := tokenize("== != < > <= >=", "test.aria")
+    assert _kind_at(lex, 0) == "=="
+    assert _kind_at(lex, 1) == "!="
+    assert _kind_at(lex, 2) == "<"
+    assert _kind_at(lex, 3) == ">"
+    assert _kind_at(lex, 4) == "<="
+    assert _kind_at(lex, 5) == ">="
+}
+
+test "logical operators" {
+    lex := tokenize("&& ||", "test.aria")
+    assert _kind_at(lex, 0) == "&&"
+    assert _kind_at(lex, 1) == "||"
+}
+
+test "bitwise operators" {
+    lex := tokenize("& | ^ ~ << >>", "test.aria")
+    assert _kind_at(lex, 0) == "&"
+    assert _kind_at(lex, 1) == "|"
+    assert _kind_at(lex, 2) == "^"
+    assert _kind_at(lex, 3) == "~"
+    assert _kind_at(lex, 4) == "<<"
+    assert _kind_at(lex, 5) == ">>"
+}
+
+test "arrow operators" {
+    lex := tokenize("-> =>", "test.aria")
+    assert _kind_at(lex, 0) == "->"
+    assert _kind_at(lex, 1) == "=>"
+}
+
+test "binding and assignment" {
+    lex := tokenize(":= =", "test.aria")
+    assert _kind_at(lex, 0) == ":="
+    assert _kind_at(lex, 1) == "="
+}
+
+test "question operators" {
+    lex := tokenize("? ?. ??", "test.aria")
+    assert _kind_at(lex, 0) == "?"
+    assert _kind_at(lex, 1) == "?."
+    assert _kind_at(lex, 2) == "??"
+}
+
+test "range operators" {
+    lex := tokenize(".. ..=", "test.aria")
+    assert _kind_at(lex, 0) == ".."
+    assert _kind_at(lex, 1) == "..="
+}
+
+test "pipeline operator" {
+    lex := tokenize("|>", "test.aria")
+    assert _kind_at(lex, 0) == "|>"
+}
+
+// --- Delimiter tests ---
+
+test "delimiters" {
+    lex := tokenize("( ) [ ]", "test.aria")
+    assert _kind_at(lex, 0) == "("
+    assert _kind_at(lex, 1) == ")"
+    assert _kind_at(lex, 2) == "["
+    assert _kind_at(lex, 3) == "]"
+}
+
+test "punctuation" {
+    lex := tokenize(", : . @", "test.aria")
+    assert _kind_at(lex, 0) == ","
+    assert _kind_at(lex, 1) == ":"
+    assert _kind_at(lex, 2) == "."
+    assert _kind_at(lex, 3) == "@"
+}
+
+// --- Comment test ---
+
+test "line comment" {
+    lex := tokenize("x // this is a comment", "test.aria")
+    assert _kind_at(lex, 0) == "IDENT"
+    assert _tok_at(lex, 0).text == "x"
+    // Comment is ignored, next should be EOF
+    assert _kind_at(lex, 1) == "EOF"
+}
+
+// --- Newline insertion tests ---
+
+test "newline after identifier" {
+    lex := tokenize("x\ny", "test.aria")
+    assert _kind_at(lex, 0) == "IDENT"
+    assert _kind_at(lex, 1) == "NEWLINE"
+    assert _kind_at(lex, 2) == "IDENT"
+}
+
+test "no newline after operator" {
+    lex := tokenize("x +\ny", "test.aria")
+    assert _kind_at(lex, 0) == "IDENT"
+    assert _kind_at(lex, 1) == "+"
+    // No NEWLINE after +
+    assert _kind_at(lex, 2) == "IDENT"
+}
+
+test "no newline inside parens" {
+    lex := tokenize("(\nx\n)", "test.aria")
+    // Inside parens, newlines are suppressed
+    assert _kind_at(lex, 0) == "("
+    assert _kind_at(lex, 1) == "IDENT"
+    assert _kind_at(lex, 2) == ")"
+}
+
+test "no newline inside brackets" {
+    lex := tokenize("[\nx\n]", "test.aria")
+    assert _kind_at(lex, 0) == "["
+    assert _kind_at(lex, 1) == "IDENT"
+    assert _kind_at(lex, 2) == "]"
+}
+
+// --- Position tracking ---
+
+test "token positions" {
+    lex := tokenize("x + y", "test.aria")
+    tok0 := _tok_at(lex, 0)
+    assert tok0.line == 1
+    assert tok0.col == 1
+
+    tok1 := _tok_at(lex, 1)
+    assert tok1.line == 1
+    assert tok1.col == 3
+
+    tok2 := _tok_at(lex, 2)
+    assert tok2.line == 1
+    assert tok2.col == 5
+}
+
+test "multiline positions" {
+    lex := tokenize("x\ny", "test.aria")
+    tok0 := _tok_at(lex, 0)
+    assert tok0.line == 1
+
+    // tok1 is NEWLINE
+    tok2 := _tok_at(lex, 2)
+    assert tok2.line == 2
+    assert tok2.col == 1
+}
+
+// --- Complex expressions ---
+
+test "function declaration tokens" {
+    lex := tokenize("fn add(a: i64, b: i64) -> i64", "test.aria")
+    assert _kind_at(lex, 0) == "fn"
+    assert _kind_at(lex, 1) == "IDENT"  // add
+    assert _kind_at(lex, 2) == "("
+    assert _kind_at(lex, 3) == "IDENT"  // a
+    assert _kind_at(lex, 4) == ":"
+    assert _kind_at(lex, 5) == "IDENT"  // i64
+    assert _kind_at(lex, 6) == ","
+    assert _kind_at(lex, 7) == "IDENT"  // b
+    assert _kind_at(lex, 8) == ":"
+    assert _kind_at(lex, 9) == "IDENT"  // i64
+    assert _kind_at(lex, 10) == ")"
+    assert _kind_at(lex, 11) == "->"
+    assert _kind_at(lex, 12) == "IDENT"  // i64
+}
+
+test "match expression tokens" {
+    lex := tokenize("match x\n    Foo => 1\n    Bar => 2", "test.aria")
+    assert _kind_at(lex, 0) == "match"
+    assert _kind_at(lex, 1) == "IDENT"
+}
+
+test "kind equality" {
+    assert kind_eq(TkPlus, TkPlus)
+    assert kind_eq(TkPlus, TkMinus) == false
+    assert kind_eq(TkIdent, TkIdent)
+}
+
+test "terminates statement" {
+    assert terminates_statement(TkIdent)
+    assert terminates_statement(TkIntLit)
+    assert terminates_statement(TkRParen)
+    assert terminates_statement(TkReturn)
+    assert terminates_statement(TkPlus) == false
+    assert terminates_statement(TkComma) == false
+    assert terminates_statement(TkEq) == false
+}
+
+test "no errors for valid input" {
+    lex := tokenize("fn main() -> i64", "test.aria")
+    assert bag_has_errors(lex.diagnostics) == false
+}

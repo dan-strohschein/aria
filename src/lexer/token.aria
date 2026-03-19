@@ -1,0 +1,294 @@
+mod lexer
+
+// ============================================================
+// Token Types and Definitions
+// ============================================================
+
+use diagnostic
+
+// --- TokenKind sum type ---
+// Every distinct token the lexer can produce (~60 variants)
+
+type TokenKind =
+    // Literals
+    | TkIdent
+    | TkIntLit
+    | TkFloatLit
+    | TkStringLit
+    | TkBoolTrue
+    | TkBoolFalse
+    // String interpolation
+    | TkStringStart
+    | TkStringMiddle
+    | TkStringEnd
+    // Keywords
+    | TkMod
+    | TkUse
+    | TkPub
+    | TkFn
+    | TkType
+    | TkEnum
+    | TkTrait
+    | TkImpl
+    | TkStruct
+    | TkEntry
+    | TkIf
+    | TkElse
+    | TkMatch
+    | TkFor
+    | TkIn
+    | TkWhile
+    | TkLoop
+    | TkBreak
+    | TkContinue
+    | TkReturn
+    | TkMut
+    | TkConst
+    | TkDefer
+    | TkWith
+    | TkCatch
+    | TkTest
+    | TkAssert
+    | TkDerives
+    | TkWhere
+    | TkAs
+    | TkIs
+    | TkSelf
+    | TkSelfType
+    // Operators
+    | TkPlus
+    | TkMinus
+    | TkStar
+    | TkSlash
+    | TkPercent
+    | TkAmpersand
+    | TkPipe
+    | TkCaret
+    | TkTilde
+    | TkBang
+    | TkLShift
+    | TkRShift
+    | TkEqEq
+    | TkBangEq
+    | TkLt
+    | TkGt
+    | TkLtEq
+    | TkGtEq
+    | TkAmpAmp
+    | TkPipePipe
+    | TkDotDot
+    | TkDotDotEq
+    | TkPipeGt
+    | TkQuestion
+    | TkQuestionDot
+    | TkQuestionQuestion
+    | TkArrow
+    | TkFatArrow
+    // Punctuation
+    | TkLParen
+    | TkRParen
+    | TkLBracket
+    | TkRBracket
+    | TkLBrace
+    | TkRBrace
+    | TkComma
+    | TkColon
+    | TkDot
+    | TkDotLBrace
+    | TkAt
+    // Assignment/Binding
+    | TkEq
+    | TkColonEq
+    // Special
+    | TkNewline
+    | TkEof
+    | TkIllegal
+
+// --- Token struct ---
+
+struct Token {
+    kind: TokenKind
+    text: str
+    line: i64
+    col: i64
+    offset: i64
+}
+
+fn new_token(kind: TokenKind, text: str, line: i64, col: i64, offset: i64) -> Token =
+    Token{kind: kind, text: text, line: line, col: col, offset: offset}
+
+// --- Token name for display ---
+
+fn token_name(kind: TokenKind) -> str = match kind {
+    TkIdent => "IDENT"
+    TkIntLit => "INT"
+    TkFloatLit => "FLOAT"
+    TkStringLit => "STRING"
+    TkBoolTrue => "true"
+    TkBoolFalse => "false"
+    TkStringStart => "STRING_START"
+    TkStringMiddle => "STRING_MIDDLE"
+    TkStringEnd => "STRING_END"
+    TkMod => "mod"
+    TkUse => "use"
+    TkPub => "pub"
+    TkFn => "fn"
+    TkType => "type"
+    TkEnum => "enum"
+    TkTrait => "trait"
+    TkImpl => "impl"
+    TkStruct => "struct"
+    TkEntry => "entry"
+    TkIf => "if"
+    TkElse => "else"
+    TkMatch => "match"
+    TkFor => "for"
+    TkIn => "in"
+    TkWhile => "while"
+    TkLoop => "loop"
+    TkBreak => "break"
+    TkContinue => "continue"
+    TkReturn => "return"
+    TkMut => "mut"
+    TkConst => "const"
+    TkDefer => "defer"
+    TkWith => "with"
+    TkCatch => "catch"
+    TkTest => "test"
+    TkAssert => "assert"
+    TkDerives => "derives"
+    TkWhere => "where"
+    TkAs => "as"
+    TkIs => "is"
+    TkSelf => "self"
+    TkSelfType => "Self"
+    TkPlus => "+"
+    TkMinus => "-"
+    TkStar => "*"
+    TkSlash => "/"
+    TkPercent => "%"
+    TkAmpersand => "&"
+    TkPipe => "|"
+    TkCaret => "^"
+    TkTilde => "~"
+    TkBang => "!"
+    TkLShift => "<<"
+    TkRShift => ">>"
+    TkEqEq => "=="
+    TkBangEq => "!="
+    TkLt => "<"
+    TkGt => ">"
+    TkLtEq => "<="
+    TkGtEq => ">="
+    TkAmpAmp => "&&"
+    TkPipePipe => "||"
+    TkDotDot => ".."
+    TkDotDotEq => "..="
+    TkPipeGt => "|>"
+    TkQuestion => "?"
+    TkQuestionDot => "?."
+    TkQuestionQuestion => "??"
+    TkArrow => "->"
+    TkFatArrow => "=>"
+    TkLParen => "("
+    TkRParen => ")"
+    TkLBracket => "["
+    TkRBracket => "]"
+    TkLBrace => "\{"
+    TkRBrace => "\}"
+    TkComma => ","
+    TkColon => ":"
+    TkDot => "."
+    TkDotLBrace => ".\{"
+    TkAt => "@"
+    TkEq => "="
+    TkColonEq => ":="
+    TkNewline => "NEWLINE"
+    TkEof => "EOF"
+    TkIllegal => "ILLEGAL"
+}
+
+// --- Keyword lookup ---
+
+fn lookup_keyword(text: str) -> TokenKind {
+    if text == "mod" { return TkMod }
+    if text == "use" { return TkUse }
+    if text == "pub" { return TkPub }
+    if text == "fn" { return TkFn }
+    if text == "type" { return TkType }
+    if text == "enum" { return TkEnum }
+    if text == "trait" { return TkTrait }
+    if text == "impl" { return TkImpl }
+    if text == "struct" { return TkStruct }
+    if text == "entry" { return TkEntry }
+    if text == "if" { return TkIf }
+    if text == "else" { return TkElse }
+    if text == "match" { return TkMatch }
+    if text == "for" { return TkFor }
+    if text == "in" { return TkIn }
+    if text == "while" { return TkWhile }
+    if text == "loop" { return TkLoop }
+    if text == "break" { return TkBreak }
+    if text == "continue" { return TkContinue }
+    if text == "return" { return TkReturn }
+    if text == "mut" { return TkMut }
+    if text == "const" { return TkConst }
+    if text == "defer" { return TkDefer }
+    if text == "with" { return TkWith }
+    if text == "catch" { return TkCatch }
+    if text == "test" { return TkTest }
+    if text == "assert" { return TkAssert }
+    if text == "derives" { return TkDerives }
+    if text == "where" { return TkWhere }
+    if text == "as" { return TkAs }
+    if text == "is" { return TkIs }
+    if text == "self" { return TkSelf }
+    if text == "Self" { return TkSelfType }
+    if text == "true" { return TkBoolTrue }
+    if text == "false" { return TkBoolFalse }
+    TkIdent
+}
+
+fn is_keyword(kind: TokenKind) -> bool {
+    name := token_name(kind)
+    // Keywords are lowercase words (not operators/symbols)
+    if name.len() == 0 { return false }
+    ch := name.charAt(0)
+    // a-z range check
+    ch == "a" || ch == "b" || ch == "c" || ch == "d" || ch == "e" ||
+    ch == "f" || ch == "g" || ch == "h" || ch == "i" || ch == "j" ||
+    ch == "k" || ch == "l" || ch == "m" || ch == "n" || ch == "o" ||
+    ch == "p" || ch == "q" || ch == "r" || ch == "s" || ch == "t" ||
+    ch == "u" || ch == "v" || ch == "w" || ch == "x" || ch == "y" ||
+    ch == "z"
+}
+
+// --- Statement terminator detection ---
+// A newline after these tokens acts as a statement terminator
+
+fn terminates_statement(kind: TokenKind) -> bool {
+    name := token_name(kind)
+    if name == "IDENT" { return true }
+    if name == "INT" { return true }
+    if name == "FLOAT" { return true }
+    if name == "STRING" { return true }
+    if name == "true" { return true }
+    if name == "false" { return true }
+    if name == "STRING_END" { return true }
+    if name == "break" { return true }
+    if name == "continue" { return true }
+    if name == "return" { return true }
+    if name == ")" { return true }
+    if name == "]" { return true }
+    // } check
+    if kind_eq(kind, TkRBrace) { return true }
+    if name == "?" { return true }
+    if name == "!" { return true }
+    if name == "self" { return true }
+    if name == "Self" { return true }
+    false
+}
+
+// Helper to compare token kinds by name since we can't use == on sum types directly
+fn kind_eq(a: TokenKind, b: TokenKind) -> bool =
+    token_name(a) == token_name(b)

@@ -1,0 +1,557 @@
+mod lexer
+
+// ============================================================
+// Lexer Implementation
+// Tokenizes Aria source code into a token stream.
+// Handles: identifiers, keywords, numbers (decimal/hex/octal/
+// binary with underscores), floats, strings with escape sequences
+// and interpolation, all operators, line comments, newline
+// insertion rules, balanced delimiter suppression.
+// ============================================================
+
+// --- Character classification ---
+
+fn _is_digit(c: str) -> bool =
+    c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
+    c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+
+fn _is_hex_digit(c: str) -> bool =
+    _is_digit(c) || c == "a" || c == "b" || c == "c" || c == "d" ||
+    c == "e" || c == "f" || c == "A" || c == "B" || c == "C" ||
+    c == "D" || c == "E" || c == "F"
+
+fn _is_octal_digit(c: str) -> bool =
+    c == "0" || c == "1" || c == "2" || c == "3" ||
+    c == "4" || c == "5" || c == "6" || c == "7"
+
+fn _is_binary_digit(c: str) -> bool = c == "0" || c == "1"
+
+fn _is_alpha(c: str) -> bool =
+    c == "a" || c == "b" || c == "c" || c == "d" || c == "e" ||
+    c == "f" || c == "g" || c == "h" || c == "i" || c == "j" ||
+    c == "k" || c == "l" || c == "m" || c == "n" || c == "o" ||
+    c == "p" || c == "q" || c == "r" || c == "s" || c == "t" ||
+    c == "u" || c == "v" || c == "w" || c == "x" || c == "y" ||
+    c == "z" || c == "A" || c == "B" || c == "C" || c == "D" ||
+    c == "E" || c == "F" || c == "G" || c == "H" || c == "I" ||
+    c == "J" || c == "K" || c == "L" || c == "M" || c == "N" ||
+    c == "O" || c == "P" || c == "Q" || c == "R" || c == "S" ||
+    c == "T" || c == "U" || c == "V" || c == "W" || c == "X" ||
+    c == "Y" || c == "Z" || c == "_"
+
+fn _is_alpha_num(c: str) -> bool = _is_alpha(c) || _is_digit(c)
+
+fn _is_whitespace(c: str) -> bool = c == " " || c == "\t" || c == "\r"
+
+// --- Lexer state ---
+
+struct Lexer {
+    source: str
+    file: str
+    pos: i64
+    line: i64
+    col: i64
+    tokens: [Token]
+    diagnostics: DiagnosticBag
+    paren_depth: i64
+    bracket_depth: i64
+    brace_depth: i64
+    interp_depth: i64
+}
+
+fn new_lexer(source: str, file: str) -> Lexer =
+    Lexer{
+        source: source,
+        file: file,
+        pos: 0,
+        line: 1,
+        col: 1,
+        tokens: [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}],
+        diagnostics: new_bag(),
+        paren_depth: 0,
+        bracket_depth: 0,
+        brace_depth: 0,
+        interp_depth: 0
+    }
+
+// --- Lexer helpers ---
+
+fn _peek(lex: Lexer) -> str {
+    if lex.pos >= lex.source.len() {
+        return ""
+    }
+    lex.source.charAt(lex.pos)
+}
+
+fn _peek_next(lex: Lexer) -> str {
+    next := lex.pos + 1
+    if next >= lex.source.len() {
+        return ""
+    }
+    lex.source.charAt(next)
+}
+
+fn _at_end(lex: Lexer) -> bool = lex.pos >= lex.source.len()
+
+fn _advance(lex: Lexer) -> Lexer {
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos + 1,
+        line: lex.line,
+        col: lex.col + 1,
+        tokens: lex.tokens,
+        diagnostics: lex.diagnostics,
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: lex.interp_depth
+    }
+}
+
+fn _add_token(lex: Lexer, kind: TokenKind, text: str, start_line: i64, start_col: i64, start_offset: i64) -> Lexer {
+    tok := new_token(kind, text, start_line, start_col, start_offset)
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos,
+        line: lex.line,
+        col: lex.col,
+        tokens: lex.tokens.append(tok),
+        diagnostics: lex.diagnostics,
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: lex.interp_depth
+    }
+}
+
+fn _add_error(lex: Lexer, code: str, message: str) -> Lexer {
+    span := new_span(lex.file, lex.line, lex.col, lex.pos, 1)
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos,
+        line: lex.line,
+        col: lex.col,
+        tokens: lex.tokens,
+        diagnostics: bag_add_error(lex.diagnostics, code, message, span),
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: lex.interp_depth
+    }
+}
+
+fn _in_delimiters(lex: Lexer) -> bool =
+    lex.paren_depth > 0 || lex.bracket_depth > 0 || lex.brace_depth > 0
+
+fn _set_depth(lex: Lexer, paren: i64, bracket: i64, brace: i64) -> Lexer =
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos,
+        line: lex.line,
+        col: lex.col,
+        tokens: lex.tokens,
+        diagnostics: lex.diagnostics,
+        paren_depth: paren,
+        bracket_depth: bracket,
+        brace_depth: brace,
+        interp_depth: lex.interp_depth
+    }
+
+fn _set_interp(lex: Lexer, depth: i64) -> Lexer =
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos,
+        line: lex.line,
+        col: lex.col,
+        tokens: lex.tokens,
+        diagnostics: lex.diagnostics,
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: depth
+    }
+
+fn _newline(lex: Lexer) -> Lexer =
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos + 1,
+        line: lex.line + 1,
+        col: 1,
+        tokens: lex.tokens,
+        diagnostics: lex.diagnostics,
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: lex.interp_depth
+    }
+
+// --- Last real token kind ---
+
+fn _last_token_kind(lex: Lexer) -> TokenKind {
+    if lex.tokens.len() <= 1 {
+        return TkEof
+    }
+    lex.tokens[lex.tokens.len() - 1].kind
+}
+
+// --- Scan identifier/keyword ---
+
+fn _scan_ident(lex: Lexer) -> Lexer {
+    start := lex.pos
+    start_col := lex.col
+    start_line := lex.line
+    mut l := lex
+    while _at_end(l) == false && _is_alpha_num(_peek(l)) {
+        l = _advance(l)
+    }
+    text := l.source.substring(start, l.pos)
+    kind := lookup_keyword(text)
+    _add_token(l, kind, text, start_line, start_col, start)
+}
+
+// --- Scan number ---
+
+fn _scan_number(lex: Lexer) -> Lexer {
+    start := lex.pos
+    start_col := lex.col
+    start_line := lex.line
+    mut l := lex
+    mut is_float := false
+
+    c := _peek(l)
+    // Check for 0x, 0o, 0b prefixes
+    if c == "0" && _at_end(l) == false {
+        next := _peek_next(l)
+        if next == "x" || next == "X" {
+            // Hex
+            l = _advance(_advance(l))
+            while _at_end(l) == false && (_is_hex_digit(_peek(l)) || _peek(l) == "_") {
+                l = _advance(l)
+            }
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkIntLit, text, start_line, start_col, start)
+        }
+        if next == "o" || next == "O" {
+            // Octal
+            l = _advance(_advance(l))
+            while _at_end(l) == false && (_is_octal_digit(_peek(l)) || _peek(l) == "_") {
+                l = _advance(l)
+            }
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkIntLit, text, start_line, start_col, start)
+        }
+        if next == "b" || next == "B" {
+            // Binary
+            l = _advance(_advance(l))
+            while _at_end(l) == false && (_is_binary_digit(_peek(l)) || _peek(l) == "_") {
+                l = _advance(l)
+            }
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkIntLit, text, start_line, start_col, start)
+        }
+    }
+
+    // Decimal integer or float
+    while _at_end(l) == false && (_is_digit(_peek(l)) || _peek(l) == "_") {
+        l = _advance(l)
+    }
+
+    // Check for float: must have digits on both sides of dot
+    if _at_end(l) == false && _peek(l) == "." {
+        // Check next char is a digit (not .. range operator)
+        if _peek_next(l) != "" && _is_digit(_peek_next(l)) {
+            is_float = true
+            l = _advance(l)  // consume .
+            while _at_end(l) == false && (_is_digit(_peek(l)) || _peek(l) == "_") {
+                l = _advance(l)
+            }
+            // Check for exponent
+            if _at_end(l) == false && (_peek(l) == "e" || _peek(l) == "E") {
+                l = _advance(l)
+                if _at_end(l) == false && (_peek(l) == "+" || _peek(l) == "-") {
+                    l = _advance(l)
+                }
+                while _at_end(l) == false && _is_digit(_peek(l)) {
+                    l = _advance(l)
+                }
+            }
+        }
+    }
+
+    text := l.source.substring(start, l.pos)
+    if is_float {
+        _add_token(l, TkFloatLit, text, start_line, start_col, start)
+    } else {
+        _add_token(l, TkIntLit, text, start_line, start_col, start)
+    }
+}
+
+// --- Scan string literal ---
+
+fn _scan_string(lex: Lexer) -> Lexer {
+    start := lex.pos
+    start_col := lex.col
+    start_line := lex.line
+    mut l := _advance(lex)  // consume opening "
+    mut text := ""
+    mut has_interp := false
+
+    while _at_end(l) == false && _peek(l) != "\"" {
+        c := _peek(l)
+        if c == "\\" {
+            // Escape sequence
+            l = _advance(l)
+            if _at_end(l) {
+                l = _add_error(l, E0002, "unterminated string literal")
+                return l
+            }
+            esc := _peek(l)
+            if esc == "n" {
+                text = text + "\n"
+            } else if esc == "r" {
+                text = text + "\r"
+            } else if esc == "t" {
+                text = text + "\t"
+            } else if esc == "\\" {
+                text = text + "\\"
+            } else if esc == "\"" {
+                text = text + "\""
+            } else if esc == "0" {
+                text = text + "\0"
+            } else {
+                text = text + esc
+            }
+            l = _advance(l)
+        } else if c == "\n" {
+            l = _add_error(l, E0002, "unterminated string literal")
+            return l
+        } else {
+            text = text + c
+            l = _advance(l)
+        }
+    }
+
+    if _at_end(l) {
+        l = _add_error(l, E0002, "unterminated string literal")
+        return l
+    }
+
+    l = _advance(l)  // consume closing "
+    _add_token(l, TkStringLit, text, start_line, start_col, start)
+}
+
+// --- Scan line comment ---
+
+fn _scan_comment(lex: Lexer) -> Lexer {
+    mut l := lex
+    while _at_end(l) == false && _peek(l) != "\n" {
+        l = _advance(l)
+    }
+    l
+}
+
+// --- Main tokenize function ---
+
+fn tokenize(source: str, file: str) -> Lexer {
+    mut lex := new_lexer(source, file)
+
+    while _at_end(lex) == false {
+        c := _peek(lex)
+
+        if c == "\n" {
+            // Newline handling
+            if _in_delimiters(lex) == false {
+                last := _last_token_kind(lex)
+                if terminates_statement(last) {
+                    lex = _add_token(lex, TkNewline, "\n", lex.line, lex.col, lex.pos)
+                }
+            }
+            lex = _newline(lex)
+        } else if _is_whitespace(c) {
+            lex = _advance(lex)
+        } else if c == "/" && _peek_next(lex) == "/" {
+            lex = _scan_comment(lex)
+        } else if _is_alpha(c) {
+            lex = _scan_ident(lex)
+        } else if _is_digit(c) {
+            lex = _scan_number(lex)
+        } else if c == "\"" {
+            lex = _scan_string(lex)
+        } else if c == "+" {
+            lex = _add_token(lex, TkPlus, "+", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "-" {
+            if _peek_next(lex) == ">" {
+                lex = _add_token(lex, TkArrow, "->", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkMinus, "-", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "*" {
+            lex = _add_token(lex, TkStar, "*", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "/" {
+            lex = _add_token(lex, TkSlash, "/", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "%" {
+            lex = _add_token(lex, TkPercent, "%", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "=" {
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkEqEq, "==", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == ">" {
+                lex = _add_token(lex, TkFatArrow, "=>", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkEq, "=", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "!" {
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkBangEq, "!=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkBang, "!", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "<" {
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkLtEq, "<=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == "<" {
+                lex = _add_token(lex, TkLShift, "<<", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkLt, "<", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == ">" {
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkGtEq, ">=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == ">" {
+                lex = _add_token(lex, TkRShift, ">>", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkGt, ">", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "&" {
+            if _peek_next(lex) == "&" {
+                lex = _add_token(lex, TkAmpAmp, "&&", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkAmpersand, "&", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "|" {
+            if _peek_next(lex) == "|" {
+                lex = _add_token(lex, TkPipePipe, "||", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == ">" {
+                lex = _add_token(lex, TkPipeGt, "|>", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkPipe, "|", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "^" {
+            lex = _add_token(lex, TkCaret, "^", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "~" {
+            lex = _add_token(lex, TkTilde, "~", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "?" {
+            if _peek_next(lex) == "." {
+                lex = _add_token(lex, TkQuestionDot, "?.", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == "?" {
+                lex = _add_token(lex, TkQuestionQuestion, "??", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkQuestion, "?", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "." {
+            if _peek_next(lex) == "." {
+                // .. or ..=
+                lex = _advance(_advance(lex))
+                if _at_end(lex) == false && _peek(lex) == "=" {
+                    lex = _add_token(lex, TkDotDotEq, "..=", lex.line, lex.col - 2, lex.pos - 2)
+                    lex = _advance(lex)
+                } else {
+                    lex = _add_token(lex, TkDotDot, "..", lex.line, lex.col - 2, lex.pos - 2)
+                }
+            } else {
+                lex = _add_token(lex, TkDot, ".", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == ":" {
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkColonEq, ":=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkColon, ":", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
+        } else if c == "," {
+            lex = _add_token(lex, TkComma, ",", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "@" {
+            lex = _add_token(lex, TkAt, "@", lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        } else if c == "(" {
+            lex = _add_token(lex, TkLParen, "(", lex.line, lex.col, lex.pos)
+            lex = _set_depth(lex, lex.paren_depth + 1, lex.bracket_depth, lex.brace_depth)
+            lex = _advance(lex)
+        } else if c == ")" {
+            lex = _add_token(lex, TkRParen, ")", lex.line, lex.col, lex.pos)
+            if lex.paren_depth > 0 {
+                lex = _set_depth(lex, lex.paren_depth - 1, lex.bracket_depth, lex.brace_depth)
+            }
+            lex = _advance(lex)
+        } else if c == "[" {
+            lex = _add_token(lex, TkLBracket, "[", lex.line, lex.col, lex.pos)
+            lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth + 1, lex.brace_depth)
+            lex = _advance(lex)
+        } else if c == "]" {
+            lex = _add_token(lex, TkRBracket, "]", lex.line, lex.col, lex.pos)
+            if lex.bracket_depth > 0 {
+                lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth - 1, lex.brace_depth)
+            }
+            lex = _advance(lex)
+        } else if c == "\{" {
+            lex = _add_token(lex, TkLBrace, "\{", lex.line, lex.col, lex.pos)
+            lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth + 1)
+            lex = _advance(lex)
+        } else if c == "\}" {
+            lex = _add_token(lex, TkRBrace, "\}", lex.line, lex.col, lex.pos)
+            if lex.brace_depth > 0 {
+                lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth - 1)
+            }
+            lex = _advance(lex)
+        } else {
+            lex = _add_error(lex, E0001, "unexpected character")
+            lex = _add_token(lex, TkIllegal, c, lex.line, lex.col, lex.pos)
+            lex = _advance(lex)
+        }
+    }
+
+    // Add EOF token
+    lex = _add_token(lex, TkEof, "", lex.line, lex.col, lex.pos)
+    lex
+}
+
+// --- Public API ---
+
+fn get_tokens(lex: Lexer) -> [Token] = lex.tokens
+
+fn get_diagnostics(lex: Lexer) -> DiagnosticBag = lex.diagnostics

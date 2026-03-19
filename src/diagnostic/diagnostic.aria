@@ -1,0 +1,449 @@
+mod diagnostic
+
+// ============================================================
+// Diagnostic Types, Error Codes, and Rendering
+// Core compiler error reporting infrastructure.
+// ============================================================
+
+// --- Severity ---
+
+type Severity =
+    | Error
+    | Warning
+    | Info
+    | Hint
+
+fn severity_to_str(s: Severity) -> str = match s {
+    Error => "error"
+    Warning => "warning"
+    Info => "info"
+    Hint => "hint"
+}
+
+// --- Label Style ---
+
+type LabelStyle =
+    | Primary
+    | Secondary
+
+fn label_style_to_str(s: LabelStyle) -> str = match s {
+    Primary => "primary"
+    Secondary => "secondary"
+}
+
+// --- Suggestion Applicability ---
+
+type Applicability =
+    | MachineApplicable
+    | MaybeIncorrect
+    | HasPlaceholders
+
+fn applicability_to_str(a: Applicability) -> str = match a {
+    MachineApplicable => "MachineApplicable"
+    MaybeIncorrect => "MaybeIncorrect"
+    HasPlaceholders => "HasPlaceholders"
+}
+
+// --- Span ---
+
+struct Span {
+    file: str
+    line: i64
+    col: i64
+    offset: i64
+    length: i64
+}
+
+fn new_span(file: str, line: i64, col: i64, offset: i64, length: i64) -> Span =
+    Span{file: file, line: line, col: col, offset: offset, length: length}
+
+fn span_end_offset(s: Span) -> i64 = s.offset + s.length
+
+fn format_span(s: Span) -> str = "{s.file}:{s.line}:{s.col}"
+
+// --- Label ---
+
+struct Label {
+    span: Span
+    message: str
+    style: LabelStyle
+}
+
+fn new_label(span: Span, message: str, style: LabelStyle) -> Label =
+    Label{span: span, message: message, style: style}
+
+fn primary_label(span: Span, message: str) -> Label =
+    Label{span: span, message: message, style: Primary}
+
+fn secondary_label(span: Span, message: str) -> Label =
+    Label{span: span, message: message, style: Secondary}
+
+// --- Suggestion ---
+
+struct Suggestion {
+    message: str
+    replacement: str
+    span: Span
+    applicability: Applicability
+}
+
+fn new_suggestion(message: str, replacement: str, span: Span, applicability: Applicability) -> Suggestion =
+    Suggestion{message: message, replacement: replacement, span: span, applicability: applicability}
+
+// --- Diagnostic ---
+
+struct Diagnostic {
+    code: str
+    severity: Severity
+    message: str
+    span: Span
+    labels: [Label]
+    notes: [str]
+    suggestions: [Suggestion]
+}
+
+fn _sentinel_span() -> Span = new_span("", 0, 0, 0, 0)
+
+fn new_diagnostic(code: str, severity: Severity, message: str, span: Span) -> Diagnostic =
+    Diagnostic{
+        code: code,
+        severity: severity,
+        message: message,
+        span: span,
+        labels: [primary_label(span, message)],
+        notes: [""],
+        suggestions: [new_suggestion("", "", span, MachineApplicable)]
+    }
+
+fn new_error(code: str, message: str, span: Span) -> Diagnostic =
+    new_diagnostic(code, Error, message, span)
+
+fn new_warning(code: str, message: str, span: Span) -> Diagnostic =
+    new_diagnostic(code, Warning, message, span)
+
+// --- DiagnosticBag ---
+
+struct DiagnosticBag {
+    diagnostics: [Diagnostic]
+    error_count: i64
+    warning_count: i64
+}
+
+fn new_bag() -> DiagnosticBag =
+    DiagnosticBag{
+        diagnostics: [new_error("", "", _sentinel_span())],
+        error_count: 0,
+        warning_count: 0
+    }
+
+fn bag_add_diagnostic(bag: DiagnosticBag, diag: Diagnostic) -> DiagnosticBag {
+    new_diagnostics := bag.diagnostics.append(diag)
+    mut new_errors := bag.error_count
+    mut new_warnings := bag.warning_count
+    sev := severity_to_str(diag.severity)
+    if sev == "error" {
+        new_errors = new_errors + 1
+    }
+    if sev == "warning" {
+        new_warnings = new_warnings + 1
+    }
+    DiagnosticBag{
+        diagnostics: new_diagnostics,
+        error_count: new_errors,
+        warning_count: new_warnings
+    }
+}
+
+fn bag_add_error(bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag =
+    bag_add_diagnostic(bag, new_error(code, message, span))
+
+fn bag_add_warning(bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag =
+    bag_add_diagnostic(bag, new_warning(code, message, span))
+
+fn bag_has_errors(bag: DiagnosticBag) -> bool = bag.error_count > 0
+
+fn bag_error_count(bag: DiagnosticBag) -> i64 = bag.error_count
+
+fn bag_warning_count(bag: DiagnosticBag) -> i64 = bag.warning_count
+
+fn bag_merge(a: DiagnosticBag, b: DiagnosticBag) -> DiagnosticBag {
+    mut result := a
+    mut i := 1  // Skip sentinel
+    while i < b.diagnostics.len() {
+        result = bag_add_diagnostic(result, b.diagnostics[i])
+        i = i + 1
+    }
+    result
+}
+
+fn format_summary(bag: DiagnosticBag) -> str =
+    "{bag.error_count} error(s), {bag.warning_count} warning(s)"
+
+// ============================================================
+// Error Code Constants
+// ============================================================
+
+// Syntax Errors (E0001-E0099)
+const E0001: str = "E0001"
+const E0002: str = "E0002"
+const E0003: str = "E0003"
+const E0004: str = "E0004"
+const E0005: str = "E0005"
+const E0006: str = "E0006"
+const E0007: str = "E0007"
+const E0008: str = "E0008"
+const E0009: str = "E0009"
+const E0010: str = "E0010"
+const E0011: str = "E0011"
+const E0012: str = "E0012"
+const E0013: str = "E0013"
+const E0014: str = "E0014"
+const E0015: str = "E0015"
+const E0016: str = "E0016"
+const E0017: str = "E0017"
+const E0018: str = "E0018"
+const E0019: str = "E0019"
+const E0020: str = "E0020"
+
+// Type Errors (E0100-E0199)
+const E0100: str = "E0100"
+const E0101: str = "E0101"
+const E0102: str = "E0102"
+const E0103: str = "E0103"
+const E0104: str = "E0104"
+const E0105: str = "E0105"
+const E0106: str = "E0106"
+const E0107: str = "E0107"
+const E0108: str = "E0108"
+const E0109: str = "E0109"
+const E0110: str = "E0110"
+const E0111: str = "E0111"
+const E0112: str = "E0112"
+const E0113: str = "E0113"
+const E0114: str = "E0114"
+
+// Trait Errors (E0200-E0299)
+const E0200: str = "E0200"
+const E0201: str = "E0201"
+const E0202: str = "E0202"
+const E0203: str = "E0203"
+const E0204: str = "E0204"
+const E0205: str = "E0205"
+
+// Effect Errors (E0300-E0399)
+const E0300: str = "E0300"
+const E0301: str = "E0301"
+
+// Pattern Errors (E0400-E0499)
+const E0400: str = "E0400"
+const E0401: str = "E0401"
+const E0402: str = "E0402"
+const E0403: str = "E0403"
+
+// Module/Import Errors (E0700-E0799)
+const E0700: str = "E0700"
+const E0701: str = "E0701"
+const E0702: str = "E0702"
+const E0703: str = "E0703"
+const E0704: str = "E0704"
+
+// Warnings
+const W0001: str = "W0001"
+const W0002: str = "W0002"
+const W0003: str = "W0003"
+const W0004: str = "W0004"
+const W0100: str = "W0100"
+
+fn describe_code(code: str) -> str {
+    if code == E0001 { return "unexpected token" }
+    if code == E0002 { return "unterminated string literal" }
+    if code == E0003 { return "unterminated string interpolation" }
+    if code == E0004 { return "invalid escape sequence" }
+    if code == E0005 { return "expected expression" }
+    if code == E0006 { return "expected type" }
+    if code == E0007 { return "expected pattern" }
+    if code == E0008 { return "expected identifier" }
+    if code == E0009 { return "expected declaration" }
+    if code == E0010 { return "invalid number literal" }
+    if code == E0011 { return "expected closing delimiter" }
+    if code == E0012 { return "expected opening delimiter" }
+    if code == E0013 { return "unexpected end of file" }
+    if code == E0014 { return "expected newline" }
+    if code == E0015 { return "expected mod declaration" }
+    if code == E0016 { return "expected function body" }
+    if code == E0017 { return "expected match arm" }
+    if code == E0018 { return "expected block" }
+    if code == E0019 { return "invalid operator" }
+    if code == E0020 { return "non-associative operator chaining" }
+    if code == E0100 { return "type mismatch" }
+    if code == E0101 { return "cannot infer type" }
+    if code == E0102 { return "incompatible types in binary operation" }
+    if code == E0103 { return "invalid unary operation" }
+    if code == E0104 { return "not callable" }
+    if code == E0105 { return "wrong number of arguments" }
+    if code == E0106 { return "return type mismatch" }
+    if code == E0107 { return "field not found" }
+    if code == E0108 { return "not a struct type" }
+    if code == E0109 { return "missing required field" }
+    if code == E0110 { return "duplicate field" }
+    if code == E0200 { return "trait not satisfied" }
+    if code == E0201 { return "missing trait method" }
+    if code == E0300 { return "effect not declared" }
+    if code == E0400 { return "non-exhaustive match" }
+    if code == E0401 { return "unreachable pattern" }
+    if code == E0700 { return "module not found" }
+    if code == E0701 { return "unresolved name" }
+    if code == E0702 { return "duplicate declaration" }
+    if code == E0703 { return "import cycle" }
+    if code == E0704 { return "private symbol" }
+    if code == W0001 { return "unused variable" }
+    if code == W0002 { return "unused function" }
+    if code == W0003 { return "unused import" }
+    if code == W0004 { return "shadowed variable" }
+    if code == W0100 { return "unreachable code" }
+    "unknown error code"
+}
+
+// ============================================================
+// Rendering
+// ============================================================
+
+fn _repeat_char(ch: str, count: i64) -> str {
+    mut result := ""
+    mut i := 0
+    while i < count {
+        result = result + ch
+        i = i + 1
+    }
+    result
+}
+
+fn _get_source_line(source: str, target_line: i64) -> str {
+    lines := source.split("\n")
+    idx := target_line - 1
+    if idx >= 0 && idx < lines.len() {
+        return lines[idx]
+    }
+    ""
+}
+
+fn _line_number_width(line: i64) -> i64 {
+    if line < 10 { return 1 }
+    if line < 100 { return 2 }
+    if line < 1000 { return 3 }
+    if line < 10000 { return 4 }
+    5
+}
+
+fn _pad_left(s: str, width: i64) -> str {
+    padding := width - s.len()
+    if padding <= 0 {
+        return s
+    }
+    _repeat_char(" ", padding) + s
+}
+
+fn render_text(diag: Diagnostic, source: str) -> str {
+    sev := severity_to_str(diag.severity)
+    nl := "\n"
+    mut output := sev + "[" + diag.code + "]: " + diag.message + nl
+    output = output + "  --> " + format_span(diag.span) + nl
+
+    source_line := _get_source_line(source, diag.span.line)
+    if source_line.len() > 0 {
+        line_str := "{diag.span.line}"
+        width := _line_number_width(diag.span.line)
+        gutter := _repeat_char(" ", width)
+
+        output = output + gutter + " |" + nl
+        output = output + _pad_left(line_str, width) + " | " + source_line + nl
+
+        col_offset := diag.span.col - 1
+        mut underline_len := diag.span.length
+        if underline_len < 1 {
+            underline_len = 1
+        }
+        carets := _repeat_char("^", underline_len)
+        spaces := _repeat_char(" ", col_offset)
+        output = output + gutter + " | " + spaces + carets + nl
+    }
+
+    // Notes
+    mut i := 0
+    while i < diag.notes.len() {
+        note := diag.notes[i]
+        if note.len() > 0 {
+            output = output + "  = note: " + note + nl
+        }
+        i = i + 1
+    }
+
+    output
+}
+
+fn _escape_json_str(s: str) -> str {
+    // Simple escape: just replace known problematic chars
+    mut result := s.replace("\\", "\\\\")
+    result = result.replace("\"", "\\\"")
+    result
+}
+
+fn _q() -> str = "\""
+
+fn _json_str(key: str, value: str) -> str {
+    q := _q()
+    q + key + q + ":" + q + value + q
+}
+
+fn _json_int(key: str, value: i64) -> str {
+    q := _q()
+    val_str := "{value}"
+    q + key + q + ":" + val_str
+}
+
+fn render_json_diagnostic(diag: Diagnostic) -> str {
+    sev := severity_to_str(diag.severity)
+    msg := _escape_json_str(diag.message)
+    file := _escape_json_str(diag.span.file)
+    end_off := span_end_offset(diag.span)
+    q := _q()
+
+    lb := "\{"
+    rb := "\}"
+    mut json := lb
+    json = json + _json_str("code", diag.code) + ","
+    json = json + _json_str("severity", sev) + ","
+    json = json + _json_str("message", msg) + ","
+    json = json + _json_str("file", file) + ","
+    json = json + _json_int("line", diag.span.line) + ","
+    json = json + _json_int("column", diag.span.col) + ","
+    off_str := "{diag.span.offset}"
+    end_str := "{end_off}"
+    json = json + q + "span" + q + ":[" + off_str + "," + end_str + "]"
+    json = json + rb
+    json
+}
+
+fn render_json_bag(bag: DiagnosticBag) -> str {
+    q := _q()
+    lb := "\{"
+    rb := "\}"
+    mut json := lb + q + "diagnostics" + q + ":["
+    mut first := true
+    mut i := 1
+    while i < bag.diagnostics.len() {
+        if first {
+            first = false
+        } else {
+            json = json + ","
+        }
+        json = json + render_json_diagnostic(bag.diagnostics[i])
+        i = i + 1
+    }
+    json = json + "],"
+    json = json + q + "summary" + q + ":" + lb
+    json = json + _json_int("errors", bag.error_count) + ","
+    json = json + _json_int("warnings", bag.warning_count)
+    json = json + rb + rb
+    json
+}

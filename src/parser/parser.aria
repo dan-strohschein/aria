@@ -1,0 +1,748 @@
+mod parser
+
+// ============================================================
+// Recursive Descent Parser
+// ============================================================
+
+// Dependencies: diagnostic, lexer, ast, precedence (compiled together)
+
+struct Parser {
+    tokens: [Token]
+    pos: i64
+    diagnostics: DiagnosticBag
+}
+
+fn new_parser(tokens: [Token]) -> Parser =
+    Parser{tokens: tokens, pos: 0, diagnostics: new_bag()}
+
+fn _cur(p: Parser) -> Token {
+    if p.pos >= p.tokens.len() {
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+    }
+    p.tokens[p.pos]
+}
+
+fn _ck(p: Parser) -> str = token_name(_cur(p).kind)
+
+fn _pk(p: Parser) -> str {
+    next := p.pos + 1
+    if next >= p.tokens.len() { return "EOF" }
+    token_name(p.tokens[next].kind)
+}
+
+fn _cspan(p: Parser) -> Span {
+    tok := _cur(p)
+    new_span("", tok.line, tok.col, tok.offset, tok.text.len())
+}
+
+fn _adv(p: Parser) -> Parser =
+    Parser{tokens: p.tokens, pos: p.pos + 1, diagnostics: p.diagnostics}
+
+fn _expect(p: Parser, expected: str) -> Parser {
+    if _ck(p) == expected { return _adv(p) }
+    tok := _cur(p)
+    span := new_span("", tok.line, tok.col, tok.offset, tok.text.len())
+    Parser{tokens: p.tokens, pos: p.pos,
+           diagnostics: bag_add_error(p.diagnostics, E0001, "expected " + expected + ", got " + _ck(p), span)}
+}
+
+fn _skip_nl(p: Parser) -> Parser {
+    mut pp := p
+    while _ck(pp) == "NEWLINE" { pp = _adv(pp) }
+    pp
+}
+
+fn _perror(p: Parser, code: str, msg: str) -> Parser {
+    tok := _cur(p)
+    span := new_span("", tok.line, tok.col, tok.offset, tok.text.len())
+    Parser{tokens: p.tokens, pos: p.pos,
+           diagnostics: bag_add_error(p.diagnostics, code, msg, span)}
+}
+
+// --- Parse result ---
+
+struct PR {
+    p: Parser
+    e: Expr
+}
+
+// --- Public API: parse a token stream ---
+
+fn parse(tokens: [Token]) -> PR {
+    mut p := new_parser(tokens)
+    p = _skip_nl(p)
+
+    if _ck(p) == "mod" {
+        p = _adv(p)
+        p = _adv(p)
+        p = _skip_nl(p)
+    }
+
+    while _ck(p) == "use" {
+        p = _adv(p)
+        while _ck(p) != "NEWLINE" && _ck(p) != "EOF" { p = _adv(p) }
+        p = _skip_nl(p)
+    }
+
+    mut count := 0
+    mut last := _no_expr()
+    while _ck(p) != "EOF" {
+        p = _skip_nl(p)
+        if _ck(p) == "EOF" {
+            return PR{p: p, e: mk_block(count, _no_span())}
+        }
+        result := _parse_top(p)
+        p = result.p
+        last = result.e
+        count = count + 1
+        p = _skip_nl(p)
+    }
+
+    PR{p: p, e: mk_block(count, _no_span())}
+}
+
+fn _parse_top(p: Parser) -> PR {
+    k := _ck(p)
+    if k == "fn" { return _parse_fn(p) }
+    if k == "pub" {
+        pp := _adv(p)
+        return _parse_top(pp)
+    }
+    if k == "type" || k == "struct" { return _parse_type_decl(p) }
+    if k == "enum" { return _parse_enum_decl(p) }
+    if k == "trait" { return _parse_trait_decl(p) }
+    if k == "impl" { return _parse_impl_decl(p) }
+    if k == "const" { return _parse_const_decl(p) }
+    if k == "entry" { return _parse_entry(p) }
+    if k == "test" { return _parse_test(p) }
+    _parse_stmt(p)
+}
+
+// --- Function declaration ---
+
+fn _parse_fn(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    if _ck(pp) == "[" {
+        pp = _adv(pp)
+        while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+        pp = _adv(pp)
+    }
+    pp = _expect(pp, "(")
+    while _ck(pp) != ")" && _ck(pp) != "EOF" { pp = _adv(pp) }
+    pp = _adv(pp)
+    if _ck(pp) == "->" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+    }
+    if _ck(pp) == "!" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+    }
+    if _ck(pp) == "with" {
+        pp = _adv(pp)
+        lb := "\{"
+        while _ck(pp) != "NEWLINE" && _ck(pp) != "EOF" && _ck(pp) != "=" && _ck(pp) != lb {
+            pp = _adv(pp)
+        }
+    }
+    mut body := _no_expr()
+    lb := "\{"
+    if _ck(pp) == "=" {
+        pp = _adv(pp)
+        result := _parse_expr(pp, 0)
+        pp = result.p
+        body = result.e
+    } else if _ck(pp) == lb {
+        result := _parse_block(pp)
+        pp = result.p
+        body = result.e
+    } else {
+        pp = _skip_nl(pp)
+        if _ck(pp) == lb {
+            result := _parse_block(pp)
+            pp = result.p
+            body = result.e
+        }
+    }
+    PR{p: pp, e: mk_ident(name, span)}
+}
+
+fn _skip_type(p: Parser) -> Parser {
+    mut pp := p
+    k := _ck(pp)
+    if k == "IDENT" || k == "Self" {
+        pp = _adv(pp)
+        while _ck(pp) == "." && _pk(pp) != "." { pp = _adv(_adv(pp)) }
+        if _ck(pp) == "[" {
+            pp = _adv(pp)
+            mut d := 1
+            while d > 0 && _ck(pp) != "EOF" {
+                if _ck(pp) == "[" { d = d + 1 }
+                if _ck(pp) == "]" { d = d - 1 }
+                if d > 0 { pp = _adv(pp) }
+            }
+            pp = _adv(pp)
+        }
+        if _ck(pp) == "?" { pp = _adv(pp) }
+        if _ck(pp) == "!" {
+            pp = _adv(pp)
+            pp = _skip_type(pp)
+        }
+        return pp
+    }
+    if k == "[" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+        pp = _expect(pp, "]")
+        return pp
+    }
+    if k == "(" {
+        pp = _adv(pp)
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            pp = _skip_type(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _adv(pp)
+        if _ck(pp) == "->" {
+            pp = _adv(pp)
+            pp = _skip_type(pp)
+        }
+        return pp
+    }
+    if k == "fn" {
+        pp = _adv(pp)
+        pp = _expect(pp, "(")
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            pp = _skip_type(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _adv(pp)
+        if _ck(pp) == "->" {
+            pp = _adv(pp)
+            pp = _skip_type(pp)
+        }
+        return pp
+    }
+    pp
+}
+
+fn _skip_braces(p: Parser) -> Parser {
+    lb := "\{"
+    rb := "\}"
+    if _ck(p) != lb { return p }
+    mut pp := _adv(p)
+    mut d := 1
+    while d > 0 && _ck(pp) != "EOF" {
+        if _ck(pp) == lb { d = d + 1 }
+        if _ck(pp) == rb { d = d - 1 }
+        if d > 0 { pp = _adv(pp) }
+    }
+    _adv(pp)
+}
+
+fn _parse_type_decl(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    if _ck(pp) == "[" {
+        pp = _adv(pp)
+        while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+        pp = _adv(pp)
+    }
+    lb := "\{"
+    if _ck(pp) == "=" {
+        pp = _adv(pp)
+        pp = _skip_nl(pp)
+    }
+    if _ck(pp) == "|" {
+        while _ck(pp) == "|" {
+            pp = _adv(pp)
+            pp = _skip_nl(pp)
+            pp = _adv(pp)
+            if _ck(pp) == "(" {
+                pp = _adv(pp)
+                while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                    pp = _skip_type(pp)
+                    if _ck(pp) == "," { pp = _adv(pp) }
+                }
+                pp = _adv(pp)
+            } else if _ck(pp) == lb { pp = _skip_braces(pp) }
+            pp = _skip_nl(pp)
+        }
+        if _ck(pp) == "derives" {
+            pp = _adv(pp)
+            if _ck(pp) == "[" {
+                pp = _adv(pp)
+                while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+                pp = _adv(pp)
+            }
+        }
+    } else if _ck(pp) == lb {
+        pp = _skip_braces(pp)
+        if _ck(pp) == "derives" {
+            pp = _adv(pp)
+            if _ck(pp) == "[" {
+                pp = _adv(pp)
+                while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+                pp = _adv(pp)
+            }
+        }
+    }
+    PR{p: pp, e: mk_ident(name, span)}
+}
+
+fn _parse_enum_decl(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    pp = _skip_braces(pp)
+    PR{p: pp, e: mk_ident(name, span)}
+}
+
+fn _parse_trait_decl(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    lb := "\{"
+    while _ck(pp) != lb && _ck(pp) != "EOF" { pp = _adv(pp) }
+    pp = _skip_braces(pp)
+    PR{p: pp, e: mk_ident(name, span)}
+}
+
+fn _parse_impl_decl(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    lb := "\{"
+    while _ck(pp) != lb && _ck(pp) != "EOF" { pp = _adv(pp) }
+    pp = _skip_braces(pp)
+    PR{p: pp, e: mk_ident("impl", span)}
+}
+
+fn _parse_const_decl(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    if _ck(pp) == ":" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+    }
+    pp = _expect(pp, "=")
+    result := _parse_expr(pp, 0)
+    PR{p: result.p, e: mk_binding(name, false, span)}
+}
+
+fn _parse_entry(p: Parser) -> PR {
+    pp := _adv(p)
+    result := _parse_block(pp)
+    PR{p: result.p, e: result.e}
+}
+
+fn _parse_test(p: Parser) -> PR {
+    pp := _adv(p)
+    if _ck(pp) == "STRING" || _ck(pp) == "IDENT" { pp = _adv(pp) }
+    result := _parse_block(pp)
+    PR{p: result.p, e: result.e}
+}
+
+// --- Statement ---
+
+fn _parse_stmt(p: Parser) -> PR {
+    k := _ck(p)
+    if k == "mut" { return _parse_mut(p) }
+    if k == "return" { return _parse_return(p) }
+    if k == "break" { return PR{p: _adv(p), e: mk_break(_cspan(p))} }
+    if k == "continue" { return PR{p: _adv(p), e: mk_continue(_cspan(p))} }
+    if k == "for" { return _parse_for(p) }
+    if k == "while" { return _parse_while(p) }
+    if k == "loop" { return _parse_loop(p) }
+    if k == "defer" {
+        pp := _adv(p)
+        r := _parse_expr(pp, 0)
+        return PR{p: r.p, e: mk_deferred(r.e.span)}
+    }
+    if k == "assert" { return _parse_assert(p) }
+
+    result := _parse_expr(p, 0)
+    pp := result.p
+
+    if _ck(pp) == ":=" {
+        pp = _adv(pp)
+        val := _parse_expr(pp, 0)
+        pp = _skip_nl(val.p)
+        return PR{p: pp, e: mk_binding(result.e.s1, false, result.e.span)}
+    }
+    if _ck(pp) == ":" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+        pp = _expect(pp, "=")
+        val := _parse_expr(pp, 0)
+        pp = _skip_nl(val.p)
+        return PR{p: pp, e: mk_binding(result.e.s1, false, result.e.span)}
+    }
+    if _ck(pp) == "=" {
+        pp = _adv(pp)
+        val := _parse_expr(pp, 0)
+        pp = _skip_nl(val.p)
+        return PR{p: pp, e: mk_assign(result.e.span)}
+    }
+
+    pp = _skip_nl(pp)
+    PR{p: pp, e: result.e}
+}
+
+fn _parse_mut(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    name := _cur(pp).text
+    pp = _adv(pp)
+    if _ck(pp) == ":" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+        pp = _expect(pp, "=")
+    } else { pp = _expect(pp, ":=") }
+    val := _parse_expr(pp, 0)
+    PR{p: val.p, e: mk_binding(name, true, span)}
+}
+
+// --- Expression parsing (Pratt) ---
+
+fn _parse_expr(p: Parser, min_bp: i64) -> PR {
+    mut result := _parse_prefix(p)
+    mut pp := result.p
+    mut left := result.e
+
+    mut running := true
+    while running {
+        kind := _cur(pp).kind
+        post_bp := postfix_binding_power(kind)
+        if post_bp > 0 && post_bp >= min_bp {
+            post := _parse_postfix(pp, left)
+            pp = post.p
+            left = post.e
+        } else {
+            bp := infix_binding_power(kind)
+            if bp.left > 0 && bp.left >= min_bp {
+                op := _cur(pp).text
+                span := _cspan(pp)
+                pp = _adv(pp)
+                right := _parse_expr(pp, bp.right)
+                pp = right.p
+                left = mk_binary(op, left, right.e, span)
+            } else {
+                running = false
+            }
+        }
+    }
+
+    PR{p: pp, e: left}
+}
+
+fn _parse_prefix(p: Parser) -> PR {
+    k := _ck(p)
+
+    if k == "-" || k == "!" || k == "~" {
+        op := _cur(p).text
+        span := _cspan(p)
+        pp := _adv(p)
+        bp := prefix_binding_power(_cur(p).kind)
+        r := _parse_expr(pp, bp)
+        return PR{p: r.p, e: mk_unary(op, r.e, span)}
+    }
+    if k == "INT" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_int_lit(tok.text, _cspan(p))}
+    }
+    if k == "FLOAT" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_float_lit(tok.text, _cspan(p))}
+    }
+    if k == "STRING" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_string_lit(tok.text, _cspan(p))}
+    }
+    if k == "true" { return PR{p: _adv(p), e: mk_bool_lit(true, _cspan(p))} }
+    if k == "false" { return PR{p: _adv(p), e: mk_bool_lit(false, _cspan(p))} }
+    if k == "if" { return _parse_if(p) }
+    if k == "match" { return _parse_match(p) }
+    if k == "fn" { return _parse_closure_expr(p) }
+    if k == "(" { return _parse_grouped(p) }
+    if k == "[" { return _parse_array(p) }
+    if k == "IDENT" || k == "Self" || k == "self" {
+        name := _cur(p).text
+        span := _cspan(p)
+        pp := _adv(p)
+        lb := "\{"
+        if _ck(pp) == lb { return _parse_struct_lit(pp, name, span) }
+        return PR{p: pp, e: mk_ident(name, span)}
+    }
+
+    pp := _perror(p, E0005, "expected expression, got " + k)
+    PR{p: _adv(pp), e: _no_expr()}
+}
+
+fn _parse_postfix(p: Parser, left: Expr) -> PR {
+    k := _ck(p)
+    if k == "." {
+        span := _cspan(p)
+        pp := _adv(p)
+        field := _cur(pp).text
+        pp = _adv(pp)
+        if _ck(pp) == "(" {
+            pp = _adv(pp)
+            mut count := 0
+            while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                pp = _skip_nl(pp)
+                r := _parse_expr(pp, 0)
+                pp = r.p
+                count = count + 1
+                pp = _skip_nl(pp)
+                if _ck(pp) == "," { pp = _adv(pp) }
+            }
+            pp = _expect(pp, ")")
+            return PR{p: pp, e: mk_method_call(field, span)}
+        }
+        return PR{p: pp, e: mk_field_access(field, span)}
+    }
+    if k == "(" {
+        span := _cspan(p)
+        pp := _adv(p)
+        mut count := 0
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            r := _parse_expr(pp, 0)
+            pp = r.p
+            count = count + 1
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _expect(pp, ")")
+        return PR{p: pp, e: mk_call(left, count, span)}
+    }
+    if k == "[" {
+        span := _cspan(p)
+        pp := _adv(p)
+        idx := _parse_expr(pp, 0)
+        pp = _expect(idx.p, "]")
+        return PR{p: pp, e: mk_index(span)}
+    }
+    if k == "?" { return PR{p: _adv(p), e: mk_propagate(_cspan(p))} }
+    if k == "!" { return PR{p: _adv(p), e: mk_assert_ok(_cspan(p))} }
+    PR{p: p, e: left}
+}
+
+fn _parse_block(p: Parser) -> PR {
+    span := _cspan(p)
+    lb := "\{"
+    rb := "\}"
+    if _ck(p) != lb {
+        pp := _perror(p, E0018, "expected block")
+        return PR{p: pp, e: _no_expr()}
+    }
+    pp := _adv(p)
+    pp = _skip_nl(pp)
+    mut count := 0
+    mut last := _no_expr()
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        result := _parse_stmt(pp)
+        pp = result.p
+        last = result.e
+        count = count + 1
+        pp = _skip_nl(pp)
+    }
+    pp = _adv(pp)
+    PR{p: pp, e: mk_block(count, span)}
+}
+
+fn _parse_if(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    cond := _parse_expr(pp, 0)
+    pp = cond.p
+    then_br := _parse_block(pp)
+    pp = then_br.p
+    mut has_else := false
+    if _ck(pp) == "else" {
+        pp = _adv(pp)
+        has_else = true
+        if _ck(pp) == "if" {
+            r := _parse_if(pp)
+            pp = r.p
+        } else {
+            r := _parse_block(pp)
+            pp = r.p
+        }
+    }
+    PR{p: pp, e: mk_if(has_else, span)}
+}
+
+fn _parse_match(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    subject := _parse_expr(pp, 0)
+    pp = subject.p
+    lb := "\{"
+    rb := "\}"
+    pp = _skip_nl(pp)
+    pp = _expect(pp, lb)
+    pp = _skip_nl(pp)
+    mut count := 0
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        pp = _adv(pp)  // pattern name
+        if _ck(pp) == "(" { pp = _skip_parens(pp) } else if _ck(pp) == lb { pp = _skip_braces(pp) }
+        if _ck(pp) == "if" {
+            pp = _adv(pp)
+            g := _parse_expr(pp, 0)
+            pp = g.p
+        }
+        pp = _expect(pp, "=>")
+        body := _parse_expr(pp, 0)
+        pp = body.p
+        count = count + 1
+        pp = _skip_nl(pp)
+    }
+    pp = _adv(pp)
+    PR{p: pp, e: mk_match(count, span)}
+}
+
+fn _skip_parens(p: Parser) -> Parser {
+    if _ck(p) != "(" { return p }
+    mut pp := _adv(p)
+    mut d := 1
+    while d > 0 && _ck(pp) != "EOF" {
+        if _ck(pp) == "(" { d = d + 1 }
+        if _ck(pp) == ")" { d = d - 1 }
+        if d > 0 { pp = _adv(pp) }
+    }
+    _adv(pp)
+}
+
+fn _parse_closure_expr(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    pp = _expect(pp, "(")
+    mut params := ""
+    while _ck(pp) != ")" && _ck(pp) != "EOF" {
+        if params.len() > 0 { params = params + "," }
+        params = params + _cur(pp).text
+        pp = _adv(pp)
+        if _ck(pp) == ":" {
+            pp = _adv(pp)
+            pp = _skip_type(pp)
+        }
+        if _ck(pp) == "," { pp = _adv(pp) }
+    }
+    pp = _adv(pp)
+    if _ck(pp) == "->" {
+        pp = _adv(pp)
+        pp = _skip_type(pp)
+    }
+    pp = _expect(pp, "=>")
+    body := _parse_expr(pp, 0)
+    PR{p: body.p, e: mk_closure(params, body.e.span)}
+}
+
+fn _parse_grouped(p: Parser) -> PR {
+    pp := _adv(p)
+    pp = _skip_nl(pp)
+    result := _parse_expr(pp, 0)
+    pp = result.p
+    while _ck(pp) != ")" && _ck(pp) != "EOF" { pp = _adv(pp) }
+    pp = _adv(pp)
+    PR{p: pp, e: result.e}
+}
+
+fn _parse_array(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    pp = _skip_nl(pp)
+    mut count := 0
+    while _ck(pp) != "]" && _ck(pp) != "EOF" {
+        pp = _skip_nl(pp)
+        r := _parse_expr(pp, 0)
+        pp = r.p
+        count = count + 1
+        pp = _skip_nl(pp)
+        if _ck(pp) == "," { pp = _adv(pp) }
+    }
+    pp = _expect(pp, "]")
+    PR{p: pp, e: mk_array(count, span)}
+}
+
+fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
+    pp := _adv(p)
+    pp = _skip_nl(pp)
+    mut count := 0
+    rb := "\}"
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        pp = _adv(pp)  // field name
+        if _ck(pp) == ":" {
+            pp = _adv(pp)
+            r := _parse_expr(pp, 0)
+            pp = r.p
+        }
+        count = count + 1
+        pp = _skip_nl(pp)
+        if _ck(pp) == "," {
+            pp = _adv(pp)
+            pp = _skip_nl(pp)
+        }
+    }
+    pp = _adv(pp)
+    PR{p: pp, e: mk_struct_lit(name, count, span)}
+}
+
+fn _parse_for(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    pat := _cur(pp).text
+    pp = _adv(pp)
+    pp = _expect(pp, "in")
+    iter := _parse_expr(pp, 0)
+    pp = iter.p
+    body := _parse_block(pp)
+    PR{p: body.p, e: mk_for(pat, body.e.span)}
+}
+
+fn _parse_while(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    cond := _parse_expr(pp, 0)
+    pp = cond.p
+    body := _parse_block(pp)
+    PR{p: body.p, e: mk_while(body.e.span)}
+}
+
+fn _parse_loop(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    body := _parse_block(pp)
+    PR{p: body.p, e: mk_loop(body.e.span)}
+}
+
+fn _parse_return(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    k := _ck(pp)
+    rb := "\}"
+    if k == "NEWLINE" || k == "EOF" || k == rb {
+        return PR{p: pp, e: mk_return(false, span)}
+    }
+    val := _parse_expr(pp, 0)
+    PR{p: val.p, e: mk_return(true, span)}
+}
+
+fn _parse_assert(p: Parser) -> PR {
+    span := _cspan(p)
+    pp := _adv(p)
+    expr := _parse_expr(pp, 0)
+    PR{p: expr.p, e: mk_call(mk_ident("assert", span), 1, span)}
+}
+
+fn parser_diagnostics(p: Parser) -> DiagnosticBag = p.diagnostics

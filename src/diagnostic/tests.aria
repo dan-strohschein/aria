@@ -1,0 +1,199 @@
+mod diagnostic
+
+// ============================================================
+// Diagnostic Tests
+// ============================================================
+
+// --- Span tests ---
+
+test "span creation" {
+    s := new_span("test.aria", 1, 5, 4, 3)
+    assert s.file == "test.aria"
+    assert s.line == 1
+    assert s.col == 5
+    assert s.offset == 4
+    assert s.length == 3
+}
+
+test "span end offset" {
+    s := new_span("test.aria", 1, 1, 10, 5)
+    assert span_end_offset(s) == 15
+}
+
+test "format span" {
+    s := new_span("src/main.aria", 42, 13, 500, 7)
+    assert format_span(s) == "src/main.aria:42:13"
+}
+
+// --- Severity tests ---
+
+test "severity to string" {
+    assert severity_to_str(Error) == "error"
+    assert severity_to_str(Warning) == "warning"
+    assert severity_to_str(Info) == "info"
+    assert severity_to_str(Hint) == "hint"
+}
+
+// --- Label tests ---
+
+test "primary label" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    lbl := primary_label(s, "expected int")
+    assert lbl.message == "expected int"
+    assert label_style_to_str(lbl.style) == "primary"
+}
+
+test "secondary label" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    lbl := secondary_label(s, "defined here")
+    assert lbl.message == "defined here"
+    assert label_style_to_str(lbl.style) == "secondary"
+}
+
+// --- Diagnostic tests ---
+
+test "new error diagnostic" {
+    s := new_span("test.aria", 5, 10, 50, 3)
+    diag := new_error("E0100", "type mismatch", s)
+    assert diag.code == "E0100"
+    assert severity_to_str(diag.severity) == "error"
+    assert diag.message == "type mismatch"
+    assert diag.span.line == 5
+}
+
+test "new warning diagnostic" {
+    s := new_span("test.aria", 1, 1, 0, 1)
+    diag := new_warning("W0001", "unused variable", s)
+    assert diag.code == "W0001"
+    assert severity_to_str(diag.severity) == "warning"
+    assert diag.message == "unused variable"
+}
+
+// --- DiagnosticBag tests ---
+
+test "new bag is empty" {
+    bag := new_bag()
+    assert bag_has_errors(bag) == false
+    assert bag_error_count(bag) == 0
+    assert bag_warning_count(bag) == 0
+}
+
+test "bag add error" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag := new_bag()
+    bag2 := bag_add_error(bag, "E0100", "type mismatch", s)
+    assert bag_has_errors(bag2)
+    assert bag_error_count(bag2) == 1
+    assert bag_warning_count(bag2) == 0
+}
+
+test "bag add warning" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag := new_bag()
+    bag2 := bag_add_warning(bag, "W0001", "unused var", s)
+    assert bag_has_errors(bag2) == false
+    assert bag_error_count(bag2) == 0
+    assert bag_warning_count(bag2) == 1
+}
+
+test "bag multiple diagnostics" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag := new_bag()
+    bag2 := bag_add_error(bag, "E0100", "error 1", s)
+    bag3 := bag_add_error(bag2, "E0101", "error 2", s)
+    bag4 := bag_add_warning(bag3, "W0001", "warning 1", s)
+    assert bag_error_count(bag4) == 2
+    assert bag_warning_count(bag4) == 1
+}
+
+test "bag format summary" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag := new_bag()
+    bag2 := bag_add_error(bag, "E0100", "err", s)
+    bag3 := bag_add_warning(bag2, "W0001", "warn", s)
+    summary := format_summary(bag3)
+    assert summary.contains("1 error(s)")
+    assert summary.contains("1 warning(s)")
+}
+
+test "bag merge" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag1 := new_bag()
+    bag1b := bag_add_error(bag1, "E0100", "err1", s)
+    bag2 := new_bag()
+    bag2b := bag_add_error(bag2, "E0101", "err2", s)
+    bag2c := bag_add_warning(bag2b, "W0001", "warn1", s)
+    merged := bag_merge(bag1b, bag2c)
+    assert bag_error_count(merged) == 2
+    assert bag_warning_count(merged) == 1
+}
+
+// --- Error code tests ---
+
+test "error code descriptions" {
+    assert describe_code("E0001") == "unexpected token"
+    assert describe_code("E0100") == "type mismatch"
+    assert describe_code("E0701") == "unresolved name"
+    assert describe_code("W0001") == "unused variable"
+    assert describe_code("XXXX") == "unknown error code"
+}
+
+// --- Render tests ---
+
+test "render text basic" {
+    s := new_span("test.aria", 2, 5, 15, 3)
+    diag := new_error("E0100", "type mismatch", s)
+    source := "fn main()\n    x := 42\nend"
+    output := render_text(diag, source)
+    assert output.contains("error")
+    assert output.contains("E0100")
+    assert output.contains("type mismatch")
+    assert output.contains("test.aria:2:5")
+}
+
+test "render json diagnostic" {
+    s := new_span("test.aria", 3, 10, 25, 5)
+    diag := new_error("E0105", "wrong args", s)
+    json := render_json_diagnostic(diag)
+    assert json.contains("E0105")
+    assert json.contains("error")
+    assert json.contains("wrong args")
+    assert json.contains("test.aria")
+}
+
+test "render json bag" {
+    s := new_span("test.aria", 1, 1, 0, 5)
+    bag := new_bag()
+    bag2 := bag_add_error(bag, "E0100", "err", s)
+    json := render_json_bag(bag2)
+    assert json.contains("diagnostics")
+    assert json.contains("E0100")
+    assert json.contains("\"errors\":1")
+}
+
+// --- Helper tests ---
+
+test "repeat char" {
+    assert _repeat_char("^", 3) == "^^^"
+    assert _repeat_char(" ", 0) == ""
+    assert _repeat_char("-", 1) == "-"
+}
+
+test "get source line" {
+    source := "line one\nline two\nline three"
+    assert _get_source_line(source, 1) == "line one"
+    assert _get_source_line(source, 2) == "line two"
+    assert _get_source_line(source, 3) == "line three"
+}
+
+test "pad left" {
+    assert _pad_left("5", 3) == "  5"
+    assert _pad_left("42", 3) == " 42"
+    assert _pad_left("123", 3) == "123"
+}
+
+test "escape json" {
+    assert _escape_json_str("hello") == "hello"
+    result := _escape_json_str("a\"b")
+    assert result.contains("\\")
+}

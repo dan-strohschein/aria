@@ -1,0 +1,144 @@
+mod parser
+
+// ============================================================
+// Parser Tests
+// ============================================================
+
+fn _lex_parse(source: str) -> PR {
+    lex := tokenize(source, "test.aria")
+    parse(get_tokens(lex))
+}
+
+fn _ek(e: Expr) -> str = expr_kind_name(e.kind)
+
+fn _parse_one(source: str) -> PR {
+    lex := tokenize(source, "test.aria")
+    tokens := get_tokens(lex)
+    // Skip sentinel at index 0: create parser starting at pos 1
+    p := Parser{tokens: tokens, pos: 1, diagnostics: new_bag()}
+    _parse_expr(p, 0)
+}
+
+test "parse integer literal" {
+    r := _parse_one("42")
+    assert _ek(r.e) == "IntLit"
+    assert r.e.s1 == "42"
+}
+
+test "parse float literal" {
+    r := _parse_one("3.14")
+    assert _ek(r.e) == "FloatLit"
+    assert r.e.s1 == "3.14"
+}
+
+test "parse string literal" {
+    r := _parse_one("\"hello\"")
+    assert _ek(r.e) == "StringLit"
+    assert r.e.s1 == "hello"
+}
+
+test "parse identifier" {
+    r := _parse_one("foo")
+    assert _ek(r.e) == "Ident"
+    assert r.e.s1 == "foo"
+}
+
+test "parse bool true" {
+    r := _parse_one("true")
+    assert _ek(r.e) == "BoolLit"
+    assert r.e.b1 == true
+}
+
+test "parse bool false" {
+    r := _parse_one("false")
+    assert _ek(r.e) == "BoolLit"
+    assert r.e.b1 == false
+}
+
+test "parse binary add" {
+    r := _parse_one("1 + 2")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "+"
+}
+
+test "parse binary mul" {
+    r := _parse_one("3 * 4")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "*"
+}
+
+test "parse precedence mul before add" {
+    r := _parse_one("1 + 2 * 3")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "+"
+}
+
+test "parse unary negation" {
+    r := _parse_one("-5")
+    assert _ek(r.e) == "Unary"
+    assert r.e.s1 == "-"
+}
+
+test "parse comparison" {
+    r := _parse_one("a == b")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "=="
+}
+
+test "parse logical and" {
+    r := _parse_one("x && y")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "&&"
+}
+
+test "parse logical or" {
+    r := _parse_one("x || y")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "||"
+}
+
+test "parse field access" {
+    r := _parse_one("x.y")
+    assert _ek(r.e) == "FieldAccess"
+    assert r.e.s1 == "y"
+}
+
+test "parse method call" {
+    r := _parse_one("x.len()")
+    assert _ek(r.e) == "MethodCall"
+    assert r.e.s1 == "len"
+}
+
+test "parse function call" {
+    r := _parse_one("foo(1, 2)")
+    assert _ek(r.e) == "Call"
+}
+
+test "parse index" {
+    r := _parse_one("arr[0]")
+    assert _ek(r.e) == "Index"
+}
+
+test "parse array literal" {
+    r := _parse_one("[1, 2, 3]")
+    assert _ek(r.e) == "Array"
+    assert r.e.list_count == 3
+}
+
+test "parse empty array" {
+    r := _parse_one("[]")
+    assert _ek(r.e) == "Array"
+    assert r.e.list_count == 0
+}
+
+test "parse program" {
+    r := _lex_parse("mod main\nconst X: i64 = 42")
+    assert _ek(r.e) == "Block"
+    assert bag_has_errors(r.p.diagnostics) == false
+}
+
+test "parse full program no errors" {
+    source := "mod main\nfn add(a: i64, b: i64) -> i64 = a + b"
+    r := _lex_parse(source)
+    assert bag_has_errors(r.p.diagnostics) == false
+}

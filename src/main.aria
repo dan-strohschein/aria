@@ -1,0 +1,211 @@
+mod main
+
+// ============================================================
+// Aria Self-Hosting Compiler — CLI Entry Point
+// ============================================================
+
+use diagnostic
+use codes
+use render
+
+// --- CLI Command ---
+
+type Command =
+    | CmdCheck
+    | CmdBuild
+    | CmdRun
+    | CmdTest
+    | CmdHelp
+    | CmdVersion
+    | CmdUnknown
+
+// --- CLI Options ---
+
+struct Options {
+    command: Command
+    files: [str]
+    format: str
+    target: str
+}
+
+fn default_options() -> Options =
+    Options{
+        command: CmdHelp,
+        files: [""],
+        format: "text",
+        target: "native"
+    }
+
+// --- Argument parsing ---
+
+fn parse_command(arg: str) -> Command {
+    if arg == "check" { return CmdCheck }
+    if arg == "build" { return CmdBuild }
+    if arg == "run" { return CmdRun }
+    if arg == "test" { return CmdTest }
+    if arg == "help" { return CmdHelp }
+    if arg == "--help" { return CmdHelp }
+    if arg == "-h" { return CmdHelp }
+    if arg == "version" { return CmdVersion }
+    if arg == "--version" { return CmdVersion }
+    if arg == "-v" { return CmdVersion }
+    CmdUnknown
+}
+
+fn command_to_str(cmd: Command) -> str = match cmd {
+    CmdCheck => "check"
+    CmdBuild => "build"
+    CmdRun => "run"
+    CmdTest => "test"
+    CmdHelp => "help"
+    CmdVersion => "version"
+    CmdUnknown => "unknown"
+}
+
+fn _is_flag(arg: str) -> bool =
+    arg.len() > 0 && arg.charAt(0) == "-"
+
+fn _parse_flag_value(arg: str) -> str {
+    // Parse --flag=value, return value
+    mut i := 0
+    while i < arg.len() {
+        if arg.charAt(i) == "=" {
+            return arg.substring(i + 1, arg.len())
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn parse_args(args: [str]) -> Options {
+    mut opts := default_options()
+    mut cmd_set := false
+    mut files := [""]
+    mut has_files := false
+
+    // args[0] is the program name, start from 1
+    mut i := 1
+    while i < args.len() {
+        arg := args[i]
+        if _is_flag(arg) {
+            if arg.startsWith("--format=") {
+                opts = Options{
+                    command: opts.command,
+                    files: opts.files,
+                    format: _parse_flag_value(arg),
+                    target: opts.target
+                }
+            }
+            if arg.startsWith("--target=") {
+                opts = Options{
+                    command: opts.command,
+                    files: opts.files,
+                    format: opts.format,
+                    target: _parse_flag_value(arg)
+                }
+            }
+        } else if cmd_set == false {
+            opts = Options{
+                command: parse_command(arg),
+                files: opts.files,
+                format: opts.format,
+                target: opts.target
+            }
+            cmd_set = true
+        } else {
+            if has_files {
+                files = files.append(arg)
+            } else {
+                files = [arg]
+                has_files = true
+            }
+        }
+        i = i + 1
+    }
+
+    if has_files {
+        opts = Options{
+            command: opts.command,
+            files: files,
+            format: opts.format,
+            target: opts.target
+        }
+    }
+    opts
+}
+
+// --- Version ---
+
+const COMPILER_VERSION: str = "0.1.0-dev"
+
+fn print_version() -> i64 {
+    println("aria " + COMPILER_VERSION + " (self-hosting)")
+    0
+}
+
+// --- Help ---
+
+fn print_help() -> i64 {
+    println("aria " + COMPILER_VERSION + " -- the Aria self-hosting compiler")
+    println("")
+    println("Usage: aria <command> [flags] [files...]")
+    println("")
+    println("Commands:")
+    println("  check     Type-check source files")
+    println("  build     Compile source files to executable")
+    println("  run       Compile and run source files")
+    println("  test      Compile and run test blocks")
+    println("")
+    println("Flags:")
+    println("  --format=text|json  Output format (default: text)")
+    println("  --target=TARGET     Target platform")
+    println("  --version, -v       Print version")
+    println("  --help, -h          Print this help")
+    0
+}
+
+// --- Pipeline skeleton ---
+
+fn run_check(files: [str], format: str) -> i64 {
+    // TODO: Implement full pipeline
+    // 1. Read source files
+    // 2. Lex
+    // 3. Parse
+    // 4. Resolve names
+    // 5. Type check
+    // 6. Report diagnostics
+    if files.len() == 0 {
+        println("error: no input files")
+        return 1
+    }
+    println("check: not yet implemented")
+    0
+}
+
+fn run_build(files: [str], format: str, target: str) -> i64 {
+    // TODO: Implement full pipeline + codegen
+    if files.len() == 0 {
+        println("error: no input files")
+        return 1
+    }
+    println("build: not yet implemented")
+    0
+}
+
+fn run_test(files: [str], format: str) -> i64 {
+    // TODO: Implement test runner
+    if files.len() == 0 {
+        println("error: no input files")
+        return 1
+    }
+    println("test: not yet implemented")
+    0
+}
+
+// --- Entry point ---
+
+entry {
+    // TODO: Use args() once bootstrap supports it
+    // For now, just print help
+    print_help()
+}

@@ -1,0 +1,272 @@
+mod parser
+
+// ============================================================
+// AST Node Types - Simplified for bootstrap compatibility
+// Uses a tag enum + flat struct approach.
+// Children are stored as indices into a shared node pool.
+// ============================================================
+
+// Dependencies: diagnostic, lexer (compiled together)
+
+// --- Expression Kind ---
+
+type ExprKind =
+    | EkIntLit
+    | EkFloatLit
+    | EkStringLit
+    | EkBoolLit
+    | EkIdent
+    | EkBinary
+    | EkUnary
+    | EkCall
+    | EkMethodCall
+    | EkFieldAccess
+    | EkIndex
+    | EkBlock
+    | EkIf
+    | EkMatch
+    | EkClosure
+    | EkArray
+    | EkStruct
+    | EkAssign
+    | EkBinding
+    | EkReturn
+    | EkBreak
+    | EkContinue
+    | EkFor
+    | EkWhile
+    | EkLoop
+    | EkDefer
+    | EkPipeline
+    | EkRange
+    | EkPropagate
+    | EkAssertOk
+    | EkNone
+
+fn expr_kind_name(k: ExprKind) -> str = match k {
+    EkIntLit => "IntLit"
+    EkFloatLit => "FloatLit"
+    EkStringLit => "StringLit"
+    EkBoolLit => "BoolLit"
+    EkIdent => "Ident"
+    EkBinary => "Binary"
+    EkUnary => "Unary"
+    EkCall => "Call"
+    EkMethodCall => "MethodCall"
+    EkFieldAccess => "FieldAccess"
+    EkIndex => "Index"
+    EkBlock => "Block"
+    EkIf => "If"
+    EkMatch => "Match"
+    EkClosure => "Closure"
+    EkArray => "Array"
+    EkStruct => "Struct"
+    EkAssign => "Assign"
+    EkBinding => "Binding"
+    EkReturn => "Return"
+    EkBreak => "Break"
+    EkContinue => "Continue"
+    EkFor => "For"
+    EkWhile => "While"
+    EkLoop => "Loop"
+    EkDefer => "Defer"
+    EkPipeline => "Pipeline"
+    EkRange => "Range"
+    EkPropagate => "Propagate"
+    EkAssertOk => "AssertOk"
+    EkNone => "None"
+}
+
+// --- Expr node ---
+// Uses child indices into a NodePool instead of recursive [Expr]
+
+struct Expr {
+    kind: ExprKind
+    s1: str
+    s2: str
+    b1: bool
+    b2: bool
+    // Child indices into the pool
+    c0: i64
+    c1: i64
+    c2: i64
+    // For lists: start index and count in pool
+    list_start: i64
+    list_count: i64
+    span: Span
+}
+
+// --- Node pool ---
+
+struct NodePool {
+    nodes: [Expr]
+}
+
+fn _no_span() -> Span = new_span("", 0, 0, 0, 0)
+
+fn _sentinel_expr() -> Expr =
+    Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()}
+
+fn new_pool() -> NodePool =
+    NodePool{nodes: [_sentinel_expr()]}
+
+fn pool_add(pool: NodePool, e: Expr) -> NodePool {
+    NodePool{nodes: pool.nodes.append(e)}
+}
+
+fn pool_get(pool: NodePool, idx: i64) -> Expr {
+    if idx >= 0 && idx < pool.nodes.len() {
+        return pool.nodes[idx]
+    }
+    _sentinel_expr()
+}
+
+fn pool_size(pool: NodePool) -> i64 = pool.nodes.len()
+
+// --- Expression constructors (allocate into pool) ---
+
+fn _no_expr() -> Expr = _sentinel_expr()
+
+fn mk_int_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkIntLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_float_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkFloatLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_string_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkStringLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_bool_lit(value: bool, span: Span) -> Expr =
+    Expr{kind: EkBoolLit, s1: "", s2: "", b1: value, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_ident(name: str, span: Span) -> Expr =
+    Expr{kind: EkIdent, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+// Binary: s1=op, c0=left_idx, c1=right_idx (in pool)
+// For now we store children inline since pool requires threading
+fn mk_binary(op: str, left: Expr, right: Expr, span: Span) -> Expr =
+    Expr{kind: EkBinary, s1: op, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_unary(op: str, operand: Expr, span: Span) -> Expr =
+    Expr{kind: EkUnary, s1: op, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_call(callee: Expr, args_count: i64, span: Span) -> Expr =
+    Expr{kind: EkCall, s1: callee.s1, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: args_count, span: span}
+
+fn mk_method_call(method: str, span: Span) -> Expr =
+    Expr{kind: EkMethodCall, s1: method, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_field_access(field: str, span: Span) -> Expr =
+    Expr{kind: EkFieldAccess, s1: field, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_index(span: Span) -> Expr =
+    Expr{kind: EkIndex, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_block(count: i64, span: Span) -> Expr =
+    Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: count, span: span}
+
+fn mk_if(has_else: bool, span: Span) -> Expr =
+    Expr{kind: EkIf, s1: "", s2: "", b1: has_else, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_match(arms_count: i64, span: Span) -> Expr =
+    Expr{kind: EkMatch, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: arms_count, span: span}
+
+fn mk_array(count: i64, span: Span) -> Expr =
+    Expr{kind: EkArray, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: count, span: span}
+
+fn mk_struct_lit(name: str, field_count: i64, span: Span) -> Expr =
+    Expr{kind: EkStruct, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: field_count, span: span}
+
+fn mk_assign(span: Span) -> Expr =
+    Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_binding(name: str, is_mut: bool, span: Span) -> Expr =
+    Expr{kind: EkBinding, s1: name, s2: "", b1: is_mut, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_return(has_value: bool, span: Span) -> Expr =
+    Expr{kind: EkReturn, s1: "", s2: "", b1: has_value, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_break(span: Span) -> Expr =
+    Expr{kind: EkBreak, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_continue(span: Span) -> Expr =
+    Expr{kind: EkContinue, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_for(pattern_name: str, span: Span) -> Expr =
+    Expr{kind: EkFor, s1: pattern_name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_while(span: Span) -> Expr =
+    Expr{kind: EkWhile, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_loop(span: Span) -> Expr =
+    Expr{kind: EkLoop, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_closure(params_str: str, span: Span) -> Expr =
+    Expr{kind: EkClosure, s1: params_str, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_propagate(span: Span) -> Expr =
+    Expr{kind: EkPropagate, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_assert_ok(span: Span) -> Expr =
+    Expr{kind: EkAssertOk, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_pipeline(span: Span) -> Expr =
+    Expr{kind: EkPipeline, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_range(inclusive: bool, span: Span) -> Expr =
+    Expr{kind: EkRange, s1: "", s2: "", b1: inclusive, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_deferred(span: Span) -> Expr =
+    Expr{kind: EkDefer, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+// --- Declaration Kind ---
+
+type DeclKind =
+    | DkFn
+    | DkType
+    | DkEnum
+    | DkTrait
+    | DkImpl
+    | DkConst
+    | DkEntry
+    | DkTest
+    | DkUse
+    | DkNone
+
+// --- Program ---
+
+struct Program {
+    module_name: str
+    node_count: i64
+}

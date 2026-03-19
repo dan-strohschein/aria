@@ -1,0 +1,128 @@
+mod parser
+
+// ============================================================
+// Operator Precedence
+// Pratt parser binding powers from the Aria spec.
+// ============================================================
+
+// Dependencies: lexer (compiled together)
+
+// Binding power pair: (left, right)
+// Left-associative: right = left + 1
+// Right-associative: right = left - 1 (or left for prefix)
+// Non-associative: right = left (same)
+
+struct BindingPower {
+    left: i64
+    right: i64
+}
+
+fn no_binding_power() -> BindingPower = BindingPower{left: 0, right: 0}
+
+// --- Infix binding powers ---
+
+fn infix_binding_power(kind: TokenKind) -> BindingPower {
+    name := token_name(kind)
+
+    // Level 1: Binding/Assignment (non-assoc)
+    if name == ":=" { return BindingPower{left: 10, right: 10} }
+    if name == "=" { return BindingPower{left: 10, right: 10} }
+
+    // Level 2: Pipeline (left-assoc)
+    if name == "|>" { return BindingPower{left: 20, right: 21} }
+
+    // Level 3: Null coalesce (left-assoc)
+    if name == "??" { return BindingPower{left: 30, right: 31} }
+
+    // Level 4: Logical OR (left-assoc)
+    if name == "||" { return BindingPower{left: 40, right: 41} }
+
+    // Level 5: Logical AND (left-assoc)
+    if name == "&&" { return BindingPower{left: 50, right: 51} }
+
+    // Level 6: Comparison (non-assoc)
+    if name == "==" { return BindingPower{left: 60, right: 60} }
+    if name == "!=" { return BindingPower{left: 60, right: 60} }
+    if name == "<" { return BindingPower{left: 60, right: 60} }
+    if name == ">" { return BindingPower{left: 60, right: 60} }
+    if name == "<=" { return BindingPower{left: 60, right: 60} }
+    if name == ">=" { return BindingPower{left: 60, right: 60} }
+
+    // Level 7: Range (non-assoc)
+    if name == ".." { return BindingPower{left: 70, right: 70} }
+    if name == "..=" { return BindingPower{left: 70, right: 70} }
+
+    // Level 8: Bitwise OR (left-assoc)
+    if name == "|" { return BindingPower{left: 80, right: 81} }
+
+    // Level 9: Bitwise XOR (left-assoc)
+    if name == "^" { return BindingPower{left: 90, right: 91} }
+
+    // Level 10: Bitwise AND (left-assoc)
+    if name == "&" { return BindingPower{left: 100, right: 101} }
+
+    // Level 11: Shift (left-assoc)
+    if name == "<<" { return BindingPower{left: 110, right: 111} }
+    if name == ">>" { return BindingPower{left: 110, right: 111} }
+
+    // Level 12: Additive (left-assoc)
+    if name == "+" { return BindingPower{left: 120, right: 121} }
+    if name == "-" { return BindingPower{left: 120, right: 121} }
+
+    // Level 13: Multiplicative (left-assoc)
+    if name == "*" { return BindingPower{left: 130, right: 131} }
+    if name == "/" { return BindingPower{left: 130, right: 131} }
+    if name == "%" { return BindingPower{left: 130, right: 131} }
+
+    no_binding_power()
+}
+
+// --- Prefix binding powers ---
+
+fn prefix_binding_power(kind: TokenKind) -> i64 {
+    name := token_name(kind)
+    // Level 14: Unary prefix (right-assoc)
+    if name == "-" { return 140 }
+    if name == "!" { return 140 }
+    if name == "~" { return 140 }
+    0
+}
+
+// --- Postfix binding powers ---
+
+fn postfix_binding_power(kind: TokenKind) -> i64 {
+    name := token_name(kind)
+    // Level 15: Error propagation / assert (postfix)
+    if name == "?" { return 150 }
+    if name == "!" { return 150 }
+    // Level 16: Field access, call, index (postfix)
+    if name == "." { return 160 }
+    if name == "?." { return 160 }
+    if name == "(" { return 160 }
+    if name == "[" { return 160 }
+    0
+}
+
+// --- Check if token is an infix operator ---
+
+fn is_infix_op(kind: TokenKind) -> bool {
+    bp := infix_binding_power(kind)
+    bp.left > 0
+}
+
+fn is_prefix_op(kind: TokenKind) -> bool =
+    prefix_binding_power(kind) > 0
+
+fn is_postfix_op(kind: TokenKind) -> bool =
+    postfix_binding_power(kind) > 0
+
+fn is_comparison_op(kind: TokenKind) -> bool {
+    name := token_name(kind)
+    name == "==" || name == "!=" || name == "<" || name == ">" ||
+    name == "<=" || name == ">="
+}
+
+fn is_assignment_op(kind: TokenKind) -> bool {
+    name := token_name(kind)
+    name == "=" || name == ":="
+}
