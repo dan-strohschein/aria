@@ -83,10 +83,9 @@ fn parse_args(args: [str]) -> Options {
     mut opts := default_options()
     mut cmd_set := false
     mut files := [""]
-    mut has_files := false
 
-    // args[0] is the program name, start from 1
-    mut i := 1
+    // args[0] = sentinel, args[1] = program name, start from 2
+    mut i := 2
     while i < args.len() {
         arg := args[i]
         if _is_flag(arg) {
@@ -115,23 +114,16 @@ fn parse_args(args: [str]) -> Options {
             }
             cmd_set = true
         } else {
-            if has_files {
-                files = files.append(arg)
-            } else {
-                files = [arg]
-                has_files = true
-            }
+            files = files.append(arg)
         }
         i = i + 1
     }
 
-    if has_files {
-        opts = Options{
-            command: opts.command,
-            files: files,
-            format: opts.format,
-            target: opts.target
-        }
+    opts = Options{
+        command: opts.command,
+        files: files,
+        format: opts.format,
+        target: opts.target
     }
     opts
 }
@@ -182,34 +174,30 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
 }
 
 fn run_check(files: [str], format: str) -> i64 {
-    if files.len() == 0 {
+    if files.len() <= 1 {
         println("error: no input files")
         return 1
     }
-    // TODO: Read files from disk once bootstrap supports it
-    // For now, pipeline is wired but requires source strings
-    println("check: pipeline wired (lex -> resolve -> check)")
-    println("       file reading not yet available in bootstrap")
+    // TODO: Implement multi-file check
+    println("check: not yet implemented")
     0
 }
 
 fn run_build(files: [str], format: str, target: str) -> i64 {
-    if files.len() == 0 {
+    if files.len() <= 1 {
         println("error: no input files")
         return 1
     }
-    // Read source file
-    source := _ariaReadFile(files[0])
-    file := files[0]
+    file := files[1]
 
-    // Determine output path (strip .aria, add no extension)
+    // Determine output path (strip .aria extension)
     mut output := "a.out"
     if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
         output = file.substring(0, file.len() - 5)
     }
 
     // Run full pipeline: lex → resolve → check → lower → emit → write
-    diags := generate_from_source(source, file, output)
+    diags := generate_from_sources(files, output)
     if bag_has_errors(diags) {
         println(format_summary(diags))
         return 1
@@ -231,7 +219,20 @@ fn run_test(files: [str], format: str) -> i64 {
 // --- Entry point ---
 
 entry {
-    // TODO: Use args() once bootstrap supports it
-    // For now, just print help
-    print_help()
+    args := _ariaArgs()
+    if args.len() < 3 {
+        print_help()
+    } else {
+        opts := parse_args(args)
+        cmd := command_to_str(opts.command)
+        if cmd == "build" {
+            run_build(opts.files, opts.format, opts.target)
+        } else if cmd == "check" {
+            run_check(opts.files, opts.format)
+        } else if cmd == "version" {
+            print_version()
+        } else {
+            print_help()
+        }
+    }
 }

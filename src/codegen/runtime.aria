@@ -444,6 +444,120 @@ fn build_int_to_str_runtime() -> RuntimeFunc {
     RuntimeFunc{name: "_aria_int_to_str", code: code}
 }
 
+// --- _aria_args() -> array ptr ---
+// Returns the args array pointer saved in X19 by the entry trampoline.
+
+fn build_args_runtime() -> RuntimeFunc {
+    mut code := [0]
+    code = code.append(enc_mov_reg(X0, X19))
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_args", code: code}
+}
+
+// --- _aria_args_init(argc: i64, argv: i64) -> array ptr ---
+// Builds a [str] array from argc/argv. X0 = argc, X1 = argv (char**).
+// Array layout: header (24 bytes) + data ((argc+1) * 16 bytes)
+// Each string element is 16 bytes: (ptr, len).
+// data[0] = sentinel (0, 0), data[1..argc] = argv strings.
+
+fn build_args_init_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))   // 0
+    code = code.append(enc_mov_reg(X29, SP))              // 1
+    code = code.append(enc_sub_imm(SP, SP, 48))           // 2
+
+    // Save argc and argv
+    code = code.append(enc_str_imm(X0, SP, 0))           // 3: [sp+0] = argc
+    code = code.append(enc_str_imm(X1, SP, 1))           // 4: [sp+8] = argv
+
+    // total_elems = argc + 1 (sentinel)
+    code = code.append(enc_add_imm(X2, X0, 1))           // 5: X2 = total_elems
+    code = code.append(enc_str_imm(X2, SP, 2))           // 6: [sp+16] = total_elems
+
+    // Alloc size = 24 + total_elems * 16
+    code = code.append(enc_movz(X3, 4, 0))               // 7: shift = 4
+    code = code.append(enc_lsl_reg(X3, X2, X3))          // 8: X3 = total_elems * 16
+    code = code.append(enc_add_imm(X0, X3, 24))          // 9: X0 = size
+
+    // Align to 16
+    code = code.append(enc_add_imm(X0, X0, 15))          // 10
+    code = code.append(enc_movn(X4, 14, 0))              // 11: ~15
+    code = code.append(enc_and_reg(X1, X0, X4))          // 12: aligned size
+
+    // mmap(0, size, PROT_RW, MAP_PRIVATE|MAP_ANON, -1, 0)
+    code = code.append(enc_movz(X0, 0, 0))               // 13: addr
+    code = code.append(enc_movz(X2, 3, 0))               // 14: PROT_RW
+    code = code.append(enc_movz(X3, 0x1002, 0))          // 15: MAP_PRIVATE|MAP_ANON
+    code = code.append(enc_movn(X4, 0, 0))               // 16: fd = -1
+    code = code.append(enc_movz(X5, 0, 0))               // 17: offset
+    code = code.append(enc_movz(X16, 197, 0))            // 18: mmap
+    code = code.append(enc_svc(0x80))                     // 19
+    // X0 = array_ptr
+    code = code.append(enc_str_imm(X0, SP, 3))           // 20: [sp+24] = array_ptr
+
+    // Set header: length, capacity, data_ptr
+    code = code.append(enc_ldr_imm(X1, SP, 2))           // 21: total_elems
+    code = code.append(enc_str_imm(X1, X0, 0))           // 22: [ptr+0] = length
+    code = code.append(enc_str_imm(X1, X0, 1))           // 23: [ptr+8] = capacity
+    code = code.append(enc_add_imm(X2, X0, 24))          // 24: data_ptr = ptr + 24
+    code = code.append(enc_str_imm(X2, X0, 2))           // 25: [ptr+16] = data_ptr
+
+    // Sentinel at data[0]: ptr=0, len=0
+    code = code.append(enc_str_imm(XZR, X2, 0))          // 26: data[0].ptr = 0
+    code = code.append(enc_str_imm(XZR, X2, 1))          // 27: data[0].len = 0
+
+    // Loop: i=0..argc-1
+    code = code.append(enc_ldr_imm(X3, SP, 0))           // 28: X3 = argc
+    code = code.append(enc_movz(X4, 0, 0))               // 29: X4 = i = 0
+    code = code.append(enc_ldr_imm(X5, SP, 1))           // 30: X5 = argv
+
+    // loop_start: (position 31)
+    code = code.append(enc_cmp_reg(X4, X3))              // 31: cmp i, argc
+    code = code.append(enc_b_cond(COND_GE, 22))          // 32: if i >= argc, jump to loop_end (pos 54)
+
+    // c_str = argv[i] = [argv + i*8]
+    code = code.append(enc_movz(X6, 3, 0))               // 33: shift = 3
+    code = code.append(enc_lsl_reg(X6, X4, X6))          // 34: i * 8
+    code = code.append(enc_add_reg(X6, X5, X6))          // 35: argv + i*8
+    code = code.append(enc_ldr_imm(X6, X6, 0))           // 36: X6 = c_str = argv[i]
+
+    // strlen: scan for \0
+    code = code.append(enc_mov_reg(X7, X6))              // 37: X7 = scan ptr
+    code = code.append(enc_movz(X8, 0, 0))               // 38: X8 = len = 0
+    // strlen_loop: (position 39)
+    code = code.append(enc_ldrb_imm(X9, X7, 0))          // 39: X9 = *scan
+    code = code.append(enc_cbz(X9, 4))                    // 40: if 0, strlen_done (pos 44)
+    code = code.append(enc_add_imm(X7, X7, 1))           // 41: scan++
+    code = code.append(enc_add_imm(X8, X8, 1))           // 42: len++
+    code = code.append(enc_b(-4))                          // 43: back to strlen_loop (pos 39)
+    // strlen_done: (position 44)
+
+    // Store at data[(i+1)*16]
+    code = code.append(enc_add_imm(X10, X4, 1))          // 44: i + 1
+    code = code.append(enc_movz(X11, 4, 0))              // 45: shift = 4
+    code = code.append(enc_lsl_reg(X10, X10, X11))       // 46: (i+1) * 16
+    code = code.append(enc_ldr_imm(X11, SP, 3))          // 47: array_ptr
+    code = code.append(enc_add_imm(X11, X11, 24))        // 48: data base
+    code = code.append(enc_add_reg(X11, X11, X10))       // 49: data + (i+1)*16
+    code = code.append(enc_str_imm(X6, X11, 0))          // 50: store c_str ptr
+    code = code.append(enc_str_imm(X8, X11, 1))          // 51: store len
+
+    // i++, loop back
+    code = code.append(enc_add_imm(X4, X4, 1))           // 52: i++
+    code = code.append(enc_b(-22))                         // 53: back to loop_start (pos 31)
+    // loop_end: (position 54)
+
+    // Return array_ptr
+    code = code.append(enc_ldr_imm(X0, SP, 3))           // 54
+
+    // Epilogue
+    code = code.append(enc_add_imm(SP, SP, 48))          // 55
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))    // 56
+    code = code.append(enc_ret())                          // 57
+    RuntimeFunc{name: "_aria_args_init", code: code}
+}
+
 // --- Collect all runtime functions ---
 
 fn build_runtime_funcs() -> [RuntimeFunc] {
@@ -456,5 +570,7 @@ fn build_runtime_funcs() -> [RuntimeFunc] {
     funcs = funcs.append(build_read_file_runtime())
     funcs = funcs.append(build_write_binary_file_runtime())
     funcs = funcs.append(build_int_to_str_runtime())
+    funcs = funcs.append(build_args_runtime())
+    funcs = funcs.append(build_args_init_runtime())
     funcs
 }

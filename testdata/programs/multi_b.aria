@@ -1,0 +1,5 @@
+mod multi
+
+entry {
+    assert add(20, 22) == 42
+}

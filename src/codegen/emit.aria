@@ -536,12 +536,23 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
         mut ee := _load_temp(e, X0, inst.arg1)    // array header ptr
         ee = _load_temp(ee, X1, inst.arg2)          // index
         ee = _emit_word(ee, enc_ldr_imm(X2, X0, 2)) // data_ptr = [arr+16]
-        // Compute element address: data_ptr + index * 8
-        ee = _emit_words(ee, enc_load_imm64(X3, 3))   // shift amount = 3
-        ee = _emit_word(ee, enc_lsl_reg(X1, X1, X3))   // index * 8
-        ee = _emit_word(ee, enc_add_reg(X2, X2, X1))   // data_ptr + index*8
-        ee = _emit_word(ee, enc_ldr_imm(X0, X2, 0))    // load element
-        ee = _store_temp(ee, X0, inst.dest)
+        if inst.type_id == 12 {
+            // String array: 16-byte stride, load ptr+len pair
+            ee = _emit_words(ee, enc_load_imm64(X3, 4))   // shift amount = 4
+            ee = _emit_word(ee, enc_lsl_reg(X1, X1, X3))   // index * 16
+            ee = _emit_word(ee, enc_add_reg(X2, X2, X1))   // data_ptr + index*16
+            ee = _emit_word(ee, enc_ldr_imm(X0, X2, 0))    // load ptr
+            ee = _emit_word(ee, enc_ldr_imm(X1, X2, 1))    // load len ([+8])
+            ee = _store_temp(ee, X0, inst.dest)
+            ee = _store_temp(ee, X1, inst.dest + 1)
+        } else {
+            // Normal array: 8-byte stride
+            ee = _emit_words(ee, enc_load_imm64(X3, 3))   // shift amount = 3
+            ee = _emit_word(ee, enc_lsl_reg(X1, X1, X3))   // index * 8
+            ee = _emit_word(ee, enc_add_reg(X2, X2, X1))   // data_ptr + index*8
+            ee = _emit_word(ee, enc_ldr_imm(X0, X2, 0))    // load element
+            ee = _store_temp(ee, X0, inst.dest)
+        }
         return ee
     }
     if op == "ArrayLen" {

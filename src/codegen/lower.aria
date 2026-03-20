@@ -786,7 +786,7 @@ fn _lower_expr(l: Lowerer) -> LT {
 
         if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
             ll = _ladv(ll)
-            right := _lower_primary(ll)
+            right := _lower_atom(ll)
             ll = right.l
             // Check if left operand is a string for +
             left_type := _lget_type(ll, left)
@@ -805,7 +805,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             }
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
-            right := _lower_primary(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -829,7 +829,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = _lset_type(ll, nt.temp, 1)
         } else if k == "&&" {
             ll = _ladv(ll)
-            right := _lower_primary(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -837,7 +837,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "||" {
             ll = _ladv(ll)
-            right := _lower_primary(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -929,10 +929,20 @@ fn _lower_expr(l: Lowerer) -> LT {
             idx := _lower_expr(ll)
             ll = idx.l
             if _lk(ll) == "]" { ll = _ladv(ll) }
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
-            left = nt.temp
+            // Check if indexing a string array (type 13)
+            left_type := _lget_type(ll, left)
+            if left_type == 13 {
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
+                left = nt.temp
+            }
         } else {
             running = false
         }
@@ -948,7 +958,7 @@ fn _lower_primary(l: Lowerer) -> LT {
 
     if k == "-" || k == "!" || k == "~" {
         ll := _ladv(l)
-        operand := _lower_primary(ll)
+        operand := _lower_atom(ll)
         nt := _lnew_temp(operand.l)
         lll := _lemit(nt.l, new_inst(_unary_op(k), nt.temp, operand.temp, 0, "", 0))
         return LT{l: lll, temp: nt.temp}
@@ -1148,8 +1158,9 @@ fn _lower_primary(l: Lowerer) -> LT {
                 if _lk(ll) == ")" { ll = _ladv(ll) }
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                // Return empty array for now
-                ll = _lemit(ll, new_inst(OpArrayNew, nt.temp, 0, 0, "", 0))
+                // Call _aria_args runtime to get the args array (type 13 = [str])
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_args", 0))
+                ll = _lset_type(ll, nt.temp, 13)
                 return LT{l: ll, temp: nt.temp}
             }
             // Unknown function — skip args
@@ -1536,11 +1547,10 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
     LT{l: ll, temp: nt.temp}
 }
 
-// --- Lower condition expression (stops before {) ---
-// Uses _lower_cond_atom which is like _lower_expr but won't
-// consume { as a struct literal.
+// --- Lower atom: primary + postfix (.field, .method(), [index]) ---
+// Used as operand parser for binary ops and conditions.
 
-fn _lower_cond_atom(l: Lowerer) -> LT {
+fn _lower_atom(l: Lowerer) -> LT {
     lb := "\{"
     result := _lower_primary(l)
     mut ll := result.l
@@ -1560,11 +1570,39 @@ fn _lower_cond_atom(l: Lowerer) -> LT {
                     ll = mr.l
                     left = mr.temp
                 } else {
-                    fidx := _field_index_any(ll.registry, field)
-                    nt := _lnew_temp(ll)
-                    ll = nt.l
-                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field, 0))
-                    left = nt.temp
+                    // Type-aware field access
+                    left_type := _lget_type(ll, left)
+                    mut fidx := 0
+                    if left_type >= 100 {
+                        sname := _struct_name_from_type(ll.registry, left_type)
+                        if sname != "" {
+                            fidx = _field_index(ll.registry, sname, field)
+                        } else {
+                            fidx = _field_index_any(ll.registry, field)
+                        }
+                    } else {
+                        fidx = _field_index_any(ll.registry, field)
+                    }
+                    mut ft := 0
+                    if left_type >= 100 {
+                        sname := _struct_name_from_type(ll.registry, left_type)
+                        if sname != "" {
+                            ft = _field_type_id(ll, sname, field)
+                        }
+                    }
+                    mut nt_temp := 0
+                    if ft == 12 {
+                        nt := _lnew_str_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    } else {
+                        nt := _lnew_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
+                    if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
+                    left = nt_temp
                 }
             } else {
                 running = false
@@ -1574,10 +1612,20 @@ fn _lower_cond_atom(l: Lowerer) -> LT {
             idx := _lower_expr(ll)
             ll = idx.l
             if _lk(ll) == "]" { ll = _ladv(ll) }
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
-            left = nt.temp
+            // Check if indexing a string array (type 13)
+            left_type := _lget_type(ll, left)
+            if left_type == 13 {
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
+                left = nt.temp
+            }
         } else if k == "(" {
             cr := _lower_call_args(ll, left)
             ll = cr.l
@@ -1591,7 +1639,7 @@ fn _lower_cond_atom(l: Lowerer) -> LT {
 
 fn _lower_if_cond(l: Lowerer) -> LT {
     lb := "\{"
-    result := _lower_cond_atom(l)
+    result := _lower_atom(l)
     mut ll := result.l
     mut left := result.temp
 
@@ -1602,7 +1650,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             running = false
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
-            right := _lower_cond_atom(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1623,7 +1671,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             }
         } else if k == "&&" {
             ll = _ladv(ll)
-            right := _lower_cond_atom(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1631,7 +1679,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "||" {
             ll = _ladv(ll)
-            right := _lower_cond_atom(ll)
+            right := _lower_atom(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1639,7 +1687,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
             ll = _ladv(ll)
-            right := _lower_cond_atom(ll)
+            right := _lower_atom(ll)
             ll = right.l
             left_type := _lget_type(ll, left)
             if k == "+" && left_type == 12 {

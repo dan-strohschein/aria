@@ -86,5 +86,15 @@ entry {
         println("str_simple OK")
     }
 
+    // Test 11: Array index in expressions (arr[1] + arr[2])
+    src11 := _ariaReadFile("testdata/programs/index_expr_test.aria")
+    diags11 := generate_from_source(src11, "index_expr_test.aria", "/tmp/aria_index_expr_test")
+    if bag_has_errors(diags11) {
+        println("index_expr_test had errors:")
+        println(render_json_bag(diags11))
+    } else {
+        println("index_expr_test OK")
+    }
+
     println("wrote test binaries")
 }

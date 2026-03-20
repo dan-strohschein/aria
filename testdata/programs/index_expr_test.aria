@@ -1,0 +1,8 @@
+entry {
+    mut arr := [0]
+    arr = arr.append(10)
+    arr = arr.append(20)
+    arr = arr.append(30)
+    total := arr[1] + arr[2] + arr[3]
+    assert total == 60
+}
