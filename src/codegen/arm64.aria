@@ -359,6 +359,50 @@ fn enc_brk(imm16: i64) -> i64 {
 }
 
 // ============================================================
+// Post-index load/store (for memcpy loops)
+// ============================================================
+
+// LDRB post-index: Rt = [Rn]; Rn += imm9
+// Encoding: 00 111 0 00 01 0 imm9 01 Rn Rt
+fn enc_ldrb_post(rt: i64, rn: i64, imm9: i64) -> i64 {
+    base := 0x38400400
+    base | _encode_field(imm9, 9, 12) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// STRB post-index: [Rn] = Rt; Rn += imm9
+// Encoding: 00 111 0 00 00 0 imm9 01 Rn Rt
+fn enc_strb_post(rt: i64, rn: i64, imm9: i64) -> i64 {
+    base := 0x38000400
+    base | _encode_field(imm9, 9, 12) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// SUBS immediate: Rd = Rn - imm12, set flags
+// Encoding: sf=1 op=1 S=1 100010 sh=0 imm12 Rn Rd
+fn enc_subs_imm(rd: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0xF1000000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SUBS register: Rd = Rn - Rm, set flags
+fn enc_subs_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xEB000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// LDR register offset: Rt = [Rn + Rm, LSL #3]
+// Encoding: 11 111 0 01 01 1 Rm 011 1 10 Rn Rt
+fn enc_ldr_reg(rt: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xF8607800
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// STR register offset: [Rn + Rm, LSL #3] = Rt
+fn enc_str_reg(rt: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xF8207800
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// ============================================================
 // Helpers for common patterns
 // ============================================================
 

@@ -232,6 +232,8 @@ fn _pass1(r: Resolver) -> Resolver {
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkFunction, span, false, is_pub)
             }
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
         } else if k == "type" || k == "struct" {
             rr = _radv(rr)  // skip "type"/"struct"
             if _rk(rr) == "IDENT" {
@@ -242,6 +244,8 @@ fn _pass1(r: Resolver) -> Resolver {
                 // Look for sum type variants after = |
                 rr = _pass1_collect_variants(rr)
             }
+            // _pass1_collect_variants already leaves rr positioned correctly
+            rr = _rskip_nl(rr)
         } else if k == "enum" {
             rr = _radv(rr)
             if _rk(rr) == "IDENT" {
@@ -249,6 +253,8 @@ fn _pass1(r: Resolver) -> Resolver {
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkEnum, span, false, is_pub)
             }
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
         } else if k == "trait" {
             rr = _radv(rr)
             if _rk(rr) == "IDENT" {
@@ -256,6 +262,8 @@ fn _pass1(r: Resolver) -> Resolver {
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkTrait, span, false, is_pub)
             }
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
         } else if k == "const" {
             rr = _radv(rr)
             if _rk(rr) == "IDENT" {
@@ -263,11 +271,16 @@ fn _pass1(r: Resolver) -> Resolver {
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkConst, span, false, is_pub)
             }
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
+        } else if k == "entry" || k == "test" || k == "impl" {
+            // These have bodies — skip to next declaration boundary
+            rr = _skip_to_next_top(rr)
+        } else {
+            // Unknown — advance past it
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
         }
-
-        // Advance to next token
-        rr = _radv(rr)
-        rr = _rskip_nl(rr)
     }
 
     rr

@@ -1,0 +1,26 @@
+// Test string operations
+fn concat_and_print(a: str, b: str) -> i64 {
+    c := a + b
+    println(c)
+    1
+}
+
+entry {
+    // String concat with function args
+    concat_and_print("hello", " world")
+
+    // String literal equality
+    if "abc" == "abc" {
+        println("eq literal OK")
+    }
+
+    // Variable equality with literal
+    x := "test"
+    if x == "test" {
+        println("eq var OK")
+    }
+
+    // Const integer
+    assert 40 + 2 == 42
+    println("all OK")
+}

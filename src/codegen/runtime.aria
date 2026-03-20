@@ -82,30 +82,366 @@ fn build_println_str_runtime() -> RuntimeFunc {
 }
 
 // --- _aria_alloc(size: i64) -> ptr ---
-// Uses mmap syscall for each allocation (simple but correct).
+// Bump allocator: first call mmaps 64MB, subsequent calls bump a pointer.
 // x0 = size in bytes. Returns pointer in x0.
+// Global state stored at start of region: [base_ptr, bump_ptr]
+// Uses x9 as scratch to hold region base loaded via ADRP+LDR from a
+// dedicated 8-byte "alloc_state" variable (appended after this function).
+//
+// Simplified: uses mmap per call for now (bump allocator requires
+// writable globals which need GOT setup). Each call mmaps independently.
+// This works correctly and avoids kernel issues.
 
 fn build_alloc_runtime() -> RuntimeFunc {
     mut code := [0]
     // Prologue
     code = code.append(enc_stp_pre(X29, X30, SP, -2))
     code = code.append(enc_mov_reg(X29, SP))
+    code = code.append(enc_sub_imm(SP, SP, 16))
 
-    // mmap(0, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0)
-    code = code.append(enc_mov_reg(X1, X0))       // x1 = size (move from arg)
-    code = code.append(enc_movz(X0, 0, 0))        // x0 = addr (0 = kernel chooses)
-    code = code.append(enc_movz(X2, 3, 0))        // x2 = PROT_READ|PROT_WRITE
-    // MAP_PRIVATE=0x2, MAP_ANON=0x1000 → 0x1002
-    code = code.append(enc_movz(X3, 0x1002, 0))   // x3 = MAP_PRIVATE|MAP_ANON
-    code = code.append(enc_movn(X4, 0, 0))         // x4 = -1 (fd)
-    code = code.append(enc_movz(X5, 0, 0))         // x5 = 0 (offset)
-    code = code.append(enc_movz(X16, 197, 0))      // syscall 197 (mmap)
+    // Save requested size to stack
+    code = code.append(enc_str_imm(X0, SP, 0))        // [sp+0] = size
+
+    // Align size to 16 bytes: size = (size + 15) & ~15
+    code = code.append(enc_add_imm(X0, X0, 15))
+    code = code.append(enc_movn(X1, 14, 0))            // X1 = ~15 = -16
+    code = code.append(enc_and_reg(X1, X0, X1))        // X1 = aligned size
+
+    // mmap(0, aligned_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0)
+    code = code.append(enc_movz(X0, 0, 0))             // addr = 0
+    code = code.append(enc_movz(X2, 3, 0))             // PROT_READ|PROT_WRITE
+    code = code.append(enc_movz(X3, 0x1002, 0))        // MAP_PRIVATE|MAP_ANON
+    code = code.append(enc_movn(X4, 0, 0))              // fd = -1
+    code = code.append(enc_movz(X5, 0, 0))              // offset = 0
+    code = code.append(enc_movz(X16, 197, 0))           // mmap syscall
     code = code.append(enc_svc(0x80))
 
-    // Epilogue — result already in x0
+    // Epilogue — result in x0
+    code = code.append(enc_add_imm(SP, SP, 16))
     code = code.append(enc_ldp_post(X29, X30, SP, 2))
     code = code.append(enc_ret())
     RuntimeFunc{name: "_aria_alloc", code: code}
+}
+
+// --- _aria_memcpy(dst: i64, src: i64, len: i64) ---
+// Copies len bytes from src to dst. x0=dst, x1=src, x2=len.
+// Byte-copy loop using post-index addressing.
+
+fn build_memcpy_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // If len == 0, skip
+    code = code.append(enc_cbz(X2, 5))               // CBZ x2, +5 (skip to ret)
+    // Loop: LDRB w3, [x1], #1 / STRB w3, [x0], #1 / SUBS x2, x2, #1 / B.NE loop
+    code = code.append(enc_ldrb_post(X3, X1, 1))     // w3 = *src++
+    code = code.append(enc_strb_post(X3, X0, 1))     // *dst++ = w3
+    code = code.append(enc_subs_imm(X2, X2, 1))      // len--; set flags
+    code = code.append(enc_b_cond(COND_NE, -3))      // if len != 0, loop back
+    // Return
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_memcpy", code: code}
+}
+
+// --- _aria_read_file(path_ptr, path_len) -> (ptr, len) ---
+// Reads entire file into memory. Returns fat pointer in x0 (ptr), x1 (len).
+// Uses macOS syscalls: open(5), fstat(339), read(3), close(6).
+
+fn build_read_file_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))
+    code = code.append(enc_mov_reg(X29, SP))
+    code = code.append(enc_sub_imm(SP, SP, 256))       // 256 bytes for locals + stat buf
+
+    // Save args: [sp+0] = path_ptr, [sp+8] = path_len
+    code = code.append(enc_str_imm(X0, SP, 0))
+    code = code.append(enc_str_imm(X1, SP, 1))
+
+    // Copy path to stack with null terminator at [sp+160]
+    // dst = sp+160, src = x0, len = x1
+    code = code.append(enc_add_imm(X0, SP, 160))       // dst
+    code = code.append(enc_ldr_imm(X1, SP, 0))         // src = path_ptr
+    code = code.append(enc_ldr_imm(X2, SP, 1))         // len = path_len
+    // Inline memcpy: save regs and BL _aria_memcpy
+    code = code.append(enc_str_imm(X2, SP, 2))         // save len at [sp+16]
+    // Swap x0/x1 for memcpy(dst, src, len) — dst already in x0
+    // Actually x0=dst, x1=src is correct order, and x2=len too
+    // BL _aria_memcpy — patched later by codegen
+    // But runtime functions can't do BL patching... use inline byte copy
+    // Simple inline copy loop:
+    code = code.append(enc_cbz(X2, 5))                 // if len==0 skip
+    code = code.append(enc_ldrb_post(X3, X1, 1))
+    code = code.append(enc_strb_post(X3, X0, 1))
+    code = code.append(enc_subs_imm(X2, X2, 1))
+    code = code.append(enc_b_cond(COND_NE, -3))
+
+    // Null-terminate: store 0 byte at path_ptr + path_len
+    code = code.append(enc_add_imm(X0, SP, 160))
+    code = code.append(enc_ldr_imm(X1, SP, 1))         // path_len
+    code = code.append(enc_add_reg(X0, X0, X1))
+    code = code.append(enc_strb_imm(XZR, X0, 0))       // null byte
+
+    // open(path, O_RDONLY=0, 0) — syscall 5
+    code = code.append(enc_add_imm(X0, SP, 160))       // path
+    code = code.append(enc_movz(X1, 0, 0))             // O_RDONLY
+    code = code.append(enc_movz(X2, 0, 0))             // mode
+    code = code.append(enc_movz(X16, 5, 0))            // open
+    code = code.append(enc_svc(0x80))
+    code = code.append(enc_str_imm(X0, SP, 3))         // [sp+24] = fd
+
+    // fstat(fd, &stat_buf) — syscall 339
+    // stat buf at [sp+16] (reusing space, 144 bytes needed but we have room)
+    // Actually use a different area: stat at [sp+16..sp+159]
+    code = code.append(enc_ldr_imm(X0, SP, 3))         // fd
+    code = code.append(enc_add_imm(X1, SP, 32))        // stat buf at sp+32
+    code = code.append(enc_movz(X16, 339, 0))          // fstat64
+    code = code.append(enc_svc(0x80))
+
+    // File size is at stat_buf offset 96 = sp+32+96 = sp+128 = slot 16
+    code = code.append(enc_ldr_imm(X0, SP, 16))        // file_size = [sp+128]
+    code = code.append(enc_str_imm(X0, SP, 4))         // [sp+32] = file_size (reuse after fstat)
+
+    // Allocate buffer: mmap(0, file_size, PROT_RW, MAP_ANON|MAP_PRIVATE, -1, 0)
+    code = code.append(enc_ldr_imm(X1, SP, 4))         // size = file_size
+    // Align to page (round up to 4096)
+    code = code.append(enc_add_imm(X1, X1, 4095))
+    code = code.append(enc_movz(X2, 0xF000, 0))
+    code = code.append(enc_movk(X2, 0xFFFF, 1))
+    code = code.append(enc_movk(X2, 0xFFFF, 2))
+    code = code.append(enc_movk(X2, 0xFFFF, 3))        // X2 = ~4095
+    code = code.append(enc_and_reg(X1, X1, X2))
+    code = code.append(enc_movz(X0, 0, 0))             // addr
+    code = code.append(enc_movz(X2, 3, 0))             // PROT_RW
+    code = code.append(enc_movz(X3, 0x1002, 0))        // MAP_PRIVATE|MAP_ANON
+    code = code.append(enc_movn(X4, 0, 0))             // fd = -1
+    code = code.append(enc_movz(X5, 0, 0))             // offset
+    code = code.append(enc_movz(X16, 197, 0))          // mmap
+    code = code.append(enc_svc(0x80))
+    code = code.append(enc_str_imm(X0, SP, 5))         // [sp+40] = buf_ptr
+
+    // read(fd, buf, size) — syscall 3
+    code = code.append(enc_ldr_imm(X0, SP, 3))         // fd
+    code = code.append(enc_ldr_imm(X1, SP, 5))         // buf
+    code = code.append(enc_ldr_imm(X2, SP, 4))         // size
+    code = code.append(enc_movz(X16, 3, 0))            // read
+    code = code.append(enc_svc(0x80))
+
+    // close(fd) — syscall 6
+    code = code.append(enc_ldr_imm(X0, SP, 3))         // fd
+    code = code.append(enc_movz(X16, 6, 0))            // close
+    code = code.append(enc_svc(0x80))
+
+    // Return: x0 = buf_ptr, x1 = file_size
+    code = code.append(enc_ldr_imm(X0, SP, 5))         // buf_ptr
+    code = code.append(enc_ldr_imm(X1, SP, 4))         // file_size
+
+    // Epilogue
+    code = code.append(enc_add_imm(SP, SP, 256))
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_read_file", code: code}
+}
+
+// --- _aria_write_binary_file(path_ptr, path_len, data_ptr, data_len) ---
+// Writes binary data (array of i64 byte values) to a file.
+// x0=path_ptr, x1=path_len, x2=data_ptr (array of i64), x3=data_len
+// Uses macOS syscalls: open(5), write(4), close(6), chmod(15).
+
+fn build_write_binary_file_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))
+    code = code.append(enc_mov_reg(X29, SP))
+    code = code.append(enc_sub_imm(SP, SP, 256))
+
+    // Save args
+    code = code.append(enc_str_imm(X0, SP, 0))     // [sp+0] = path_ptr
+    code = code.append(enc_str_imm(X1, SP, 1))     // [sp+8] = path_len
+    code = code.append(enc_str_imm(X2, SP, 2))     // [sp+16] = data_ptr
+    code = code.append(enc_str_imm(X3, SP, 3))     // [sp+24] = data_len
+
+    // Copy path to stack at [sp+128] with null terminator
+    code = code.append(enc_add_imm(X0, SP, 128))   // dst
+    code = code.append(enc_ldr_imm(X1, SP, 0))     // src
+    code = code.append(enc_ldr_imm(X2, SP, 1))     // len
+    code = code.append(enc_cbz(X2, 5))
+    code = code.append(enc_ldrb_post(X3, X1, 1))
+    code = code.append(enc_strb_post(X3, X0, 1))
+    code = code.append(enc_subs_imm(X2, X2, 1))
+    code = code.append(enc_b_cond(COND_NE, -3))
+    // Null terminate
+    code = code.append(enc_add_imm(X0, SP, 128))
+    code = code.append(enc_ldr_imm(X1, SP, 1))
+    code = code.append(enc_add_reg(X0, X0, X1))
+    code = code.append(enc_strb_imm(XZR, X0, 0))
+
+    // open(path, O_WRONLY|O_CREAT|O_TRUNC=0x601, 0755=0x1ED) — syscall 5
+    code = code.append(enc_add_imm(X0, SP, 128))
+    code = code.append(enc_movz(X1, 0x601, 0))     // O_WRONLY|O_CREAT|O_TRUNC
+    code = code.append(enc_movz(X2, 0x1ED, 0))     // 0755
+    code = code.append(enc_movz(X16, 5, 0))
+    code = code.append(enc_svc(0x80))
+    code = code.append(enc_str_imm(X0, SP, 4))     // [sp+32] = fd
+
+    // The data is [i64] where each i64 is a byte value.
+    // We need to convert to a byte buffer, then write.
+    // Allocate byte buffer via mmap
+    code = code.append(enc_ldr_imm(X1, SP, 3))     // data_len
+    code = code.append(enc_add_imm(X1, X1, 4095))  // align up
+    code = code.append(enc_movz(X2, 0xF000, 0))
+    code = code.append(enc_movk(X2, 0xFFFF, 1))
+    code = code.append(enc_movk(X2, 0xFFFF, 2))
+    code = code.append(enc_movk(X2, 0xFFFF, 3))
+    code = code.append(enc_and_reg(X1, X1, X2))
+    code = code.append(enc_movz(X0, 0, 0))
+    code = code.append(enc_movz(X2, 3, 0))
+    code = code.append(enc_movz(X3, 0x1002, 0))
+    code = code.append(enc_movn(X4, 0, 0))
+    code = code.append(enc_movz(X5, 0, 0))
+    code = code.append(enc_movz(X16, 197, 0))
+    code = code.append(enc_svc(0x80))
+    code = code.append(enc_str_imm(X0, SP, 5))     // [sp+40] = byte_buf
+
+    // Convert [i64] to bytes: for each element, store low byte
+    // data is an array with header: [length, capacity, data_ptr]
+    // The data_ptr points to the actual i64 elements
+    code = code.append(enc_ldr_imm(X5, SP, 2))     // X5 = array header ptr
+    code = code.append(enc_ldr_imm(X6, X5, 0))     // X6 = array length
+    code = code.append(enc_ldr_imm(X7, X5, 2))     // X7 = array data_ptr
+    code = code.append(enc_ldr_imm(X0, SP, 5))     // X0 = byte_buf dst
+    code = code.append(enc_movz(X8, 0, 0))         // X8 = index = 0
+    // Skip sentinel element (index 0) — array starts at index 1
+    // Actually the data_ptr already points to element 0, and element 0
+    // is the sentinel. We skip it by starting at element 1.
+    code = code.append(enc_subs_imm(X6, X6, 1))    // length - 1 (skip sentinel)
+    code = code.append(enc_cbz(X6, 6))             // if 0 elements, skip loop
+    code = code.append(enc_add_imm(X7, X7, 8))     // skip sentinel element
+    // Loop: load i64, store low byte
+    code = code.append(enc_ldr_imm(X9, X7, 0))     // X9 = *data_ptr (i64 value)
+    code = code.append(enc_strb_post(X9, X0, 1))   // *byte_buf++ = low byte
+    code = code.append(enc_add_imm(X7, X7, 8))     // data_ptr += 8
+    code = code.append(enc_subs_imm(X6, X6, 1))    // length--
+    code = code.append(enc_b_cond(COND_NE, -4))    // loop if not done
+
+    // write(fd, byte_buf, data_len-1) — syscall 4
+    code = code.append(enc_ldr_imm(X0, SP, 4))     // fd
+    code = code.append(enc_ldr_imm(X1, SP, 5))     // byte_buf
+    code = code.append(enc_ldr_imm(X2, SP, 2))     // array header
+    code = code.append(enc_ldr_imm(X2, X2, 0))     // array length
+    code = code.append(enc_sub_imm(X2, X2, 1))     // minus sentinel
+    code = code.append(enc_movz(X16, 4, 0))
+    code = code.append(enc_svc(0x80))
+
+    // close(fd) — syscall 6
+    code = code.append(enc_ldr_imm(X0, SP, 4))
+    code = code.append(enc_movz(X16, 6, 0))
+    code = code.append(enc_svc(0x80))
+
+    // chmod(path, 0755) — syscall 15
+    code = code.append(enc_add_imm(X0, SP, 128))
+    code = code.append(enc_movz(X1, 0x1ED, 0))
+    code = code.append(enc_movz(X16, 15, 0))
+    code = code.append(enc_svc(0x80))
+
+    // Epilogue
+    code = code.append(enc_add_imm(SP, SP, 256))
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_write_binary_file", code: code}
+}
+
+// --- _aria_int_to_str(val: i64) -> (ptr, len) ---
+// Converts integer to decimal string. Returns fat pointer in x0, x1.
+
+fn build_int_to_str_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))
+    code = code.append(enc_mov_reg(X29, SP))
+    code = code.append(enc_sub_imm(SP, SP, 48))
+
+    // Save input value
+    code = code.append(enc_str_imm(X0, SP, 0))         // [sp+0] = val
+
+    // Handle negative: if val < 0, negate and set flag
+    code = code.append(enc_movz(X8, 0, 0))             // X8 = is_negative flag
+    code = code.append(enc_cmp_imm(X0, 0))
+    code = code.append(enc_b_cond(COND_GE, 3))         // if >= 0, skip negate
+    code = code.append(enc_neg(X0, X0))                 // val = -val
+    code = code.append(enc_movz(X8, 1, 0))             // is_negative = 1
+
+    // Store working value and neg flag
+    code = code.append(enc_str_imm(X0, SP, 1))         // [sp+8] = abs_val
+    code = code.append(enc_str_imm(X8, SP, 2))         // [sp+16] = is_negative
+
+    // Digit extraction: divide by 10 repeatedly, push remainders to stack buffer
+    // Buffer at [sp+24..sp+47] — 24 chars max
+    code = code.append(enc_add_imm(X1, SP, 47))        // X1 = end of buffer
+    code = code.append(enc_movz(X2, 0, 0))             // X2 = digit count
+    code = code.append(enc_movz(X3, 10, 0))            // X3 = divisor
+
+    // Handle val == 0 special case
+    code = code.append(enc_ldr_imm(X0, SP, 1))         // abs_val
+    code = code.append(enc_cbnz(X0, 5))                // if != 0, do loop
+    code = code.append(enc_movz(X4, 48, 0))            // '0'
+    code = code.append(enc_strb_imm(X4, X1, 0))        // store '0'
+    code = code.append(enc_sub_imm(X1, X1, 1))
+    code = code.append(enc_add_imm(X2, X2, 1))
+    code = code.append(enc_b(7))                        // skip to after loop
+
+    // Digit loop: val / 10, remainder + '0' → buffer
+    code = code.append(enc_sdiv(X4, X0, X3))           // X4 = val / 10
+    code = code.append(enc_mul(X5, X4, X3))            // X5 = (val/10)*10
+    code = code.append(enc_sub_reg(X5, X0, X5))        // X5 = val % 10
+    code = code.append(enc_add_imm(X5, X5, 48))        // X5 = digit + '0'
+    code = code.append(enc_strb_imm(X5, X1, 0))        // store digit
+    code = code.append(enc_sub_imm(X1, X1, 1))         // buf--
+    code = code.append(enc_add_imm(X2, X2, 1))         // digit_count++
+    code = code.append(enc_mov_reg(X0, X4))            // val = val / 10
+    code = code.append(enc_cbnz(X0, -8))               // if val != 0, continue
+
+    // Add '-' sign if negative
+    code = code.append(enc_ldr_imm(X8, SP, 2))         // is_negative
+    code = code.append(enc_cbz(X8, 4))                 // skip if not negative
+    code = code.append(enc_movz(X4, 45, 0))            // '-'
+    code = code.append(enc_strb_imm(X4, X1, 0))
+    code = code.append(enc_sub_imm(X1, X1, 1))
+    code = code.append(enc_add_imm(X2, X2, 1))
+
+    // Now digits are in reverse order at [X1+1..sp+47], count = X2
+    // Allocate string buffer: mmap
+    code = code.append(enc_str_imm(X1, SP, 3))         // save X1 (buf end)
+    code = code.append(enc_str_imm(X2, SP, 4))         // save X2 (count)
+    code = code.append(enc_movz(X1, 4096, 0))          // mmap size
+    code = code.append(enc_movz(X0, 0, 0))
+    code = code.append(enc_movz(X2, 3, 0))
+    code = code.append(enc_movz(X3, 0x1002, 0))
+    code = code.append(enc_movn(X4, 0, 0))
+    code = code.append(enc_movz(X5, 0, 0))
+    code = code.append(enc_movz(X16, 197, 0))
+    code = code.append(enc_svc(0x80))
+    // X0 = allocated buffer
+    code = code.append(enc_str_imm(X0, SP, 5))         // save result ptr
+
+    // Copy digits from stack buffer to allocated buffer
+    code = code.append(enc_ldr_imm(X1, SP, 3))         // src start
+    code = code.append(enc_add_imm(X1, X1, 1))         // digits start at X1+1
+    code = code.append(enc_ldr_imm(X2, SP, 4))         // count
+    // Copy loop
+    code = code.append(enc_cbz(X2, 5))
+    code = code.append(enc_ldrb_post(X3, X1, 1))
+    code = code.append(enc_strb_post(X3, X0, 1))
+    code = code.append(enc_subs_imm(X2, X2, 1))
+    code = code.append(enc_b_cond(COND_NE, -3))
+
+    // Return: x0 = ptr, x1 = len
+    code = code.append(enc_ldr_imm(X0, SP, 5))
+    code = code.append(enc_ldr_imm(X1, SP, 4))
+
+    // Epilogue
+    code = code.append(enc_add_imm(SP, SP, 48))
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_int_to_str", code: code}
 }
 
 // --- Collect all runtime functions ---
@@ -116,5 +452,9 @@ fn build_runtime_funcs() -> [RuntimeFunc] {
     funcs = funcs.append(build_write_runtime())
     funcs = funcs.append(build_println_str_runtime())
     funcs = funcs.append(build_alloc_runtime())
+    funcs = funcs.append(build_memcpy_runtime())
+    funcs = funcs.append(build_read_file_runtime())
+    funcs = funcs.append(build_write_binary_file_runtime())
+    funcs = funcs.append(build_int_to_str_runtime())
     funcs
 }

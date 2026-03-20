@@ -147,12 +147,15 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
     }
 
     // --- Phase C: Patch BL instructions ---
+    // Collect all patches as (index, value) pairs, then apply in single pass
+    mut patch_indices := [0]
+    mut patch_values := [0]
+
     mut pi := 1
     while pi < call_offsets.len() {
         call_abs := call_offsets[pi]
         target_name := call_targets[pi]
 
-        // Look up target function offset
         mut target_offset := -1
         mut ti := 1
         while ti < func_offsets_names.len() {
@@ -163,23 +166,11 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
         }
 
         if target_offset >= 0 {
-            // BL offset = target - call_site (in instructions)
             bl_offset := target_offset - call_abs
-            // Patch all_code at call_abs + 1 (sentinel offset)
             code_idx := call_abs + 1
-            mut new_code := [0]
-            mut ci := 1
-            while ci < all_code.len() {
-                if ci == code_idx {
-                    new_code = new_code.append(enc_bl(bl_offset))
-                } else {
-                    new_code = new_code.append(all_code[ci])
-                }
-                ci = ci + 1
-            }
-            all_code = new_code
+            patch_indices = patch_indices.append(code_idx)
+            patch_values = patch_values.append(enc_bl(bl_offset))
         }
-
         pi = pi + 1
     }
 
@@ -198,59 +189,66 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
     }
 
     // --- Phase D: Patch string constant addresses ---
-    // Compute absolute address of each string constant in the cstring section
-    // text_vmaddr = 0x100000000
-    // code_offset computed from header size (same as macho.aria)
-    // String data starts at: code_offset + code_size
-    text_vmaddr := 0x100000000
+    // Use PC-relative ADR instructions for ASLR compatibility.
+    // String data is placed right after code in the __TEXT segment.
+    // ADR computes Xd = PC + offset, which is position-independent.
     code_size := (all_code.len() - 1) * 4
 
-    // Compute code_offset same as in build_macho
-    header_and_lc := 32 + 72 + (72 + 80) + 72 + 16 + 16 + 24 + 80 + 32 + 24 + 24 + 24 + 56 + 16
-    mut code_off := header_and_lc
-    if code_off % 4 != 0 { code_off = code_off + (4 - code_off % 4) }
-
-    cstring_base := text_vmaddr + code_off + code_size
-
-    // Compute per-string offsets within cstring data
-    mut string_addrs := [0]  // sentinel
+    // Compute per-string byte offsets within cstring data
+    mut string_byte_offsets := [0]  // sentinel
     mut str_off := 0
     mut ssi := 1
     while ssi < m.string_constants.len() {
-        string_addrs = string_addrs.append(cstring_base + str_off)
+        string_byte_offsets = string_byte_offsets.append(str_off)
         s := m.string_constants[ssi]
         str_off = str_off + s.len() + 1  // +1 for null terminator
         ssi = ssi + 1
     }
 
-    // Patch string load instructions
+    // Collect string fixup patches using ADR (PC-relative)
     mut sfi := 1
     while sfi < str_fixup_offsets.len() {
         fix_abs := str_fixup_offsets[sfi]
         str_id := str_fixup_ids[sfi]
-        if str_id > 0 && str_id < string_addrs.len() {
-            addr := string_addrs[str_id]
-            // Generate MOVZ/MOVK sequence for 64-bit address
-            addr_insts := enc_load_imm64(X0, addr)
-            // Patch 4 slots (NOPs) starting at fix_abs
-            mut ai := 1
-            while ai < addr_insts.len() && ai <= 4 {
-                code_idx := fix_abs + ai  // +0 sentinel offset already included
-                mut new_code := [0]
-                mut ci := 1
-                while ci < all_code.len() {
-                    if ci == code_idx {
-                        new_code = new_code.append(addr_insts[ai])
-                    } else {
-                        new_code = new_code.append(all_code[ci])
-                    }
-                    ci = ci + 1
-                }
-                all_code = new_code
-                ai = ai + 1
-            }
+        if str_id > 0 && str_id < string_byte_offsets.len() {
+            str_data_off := string_byte_offsets[str_id]
+            // ADR instruction is at 0-based instruction index fix_abs,
+            // which is at byte offset fix_abs * 4 from start of code.
+            // String data starts at byte offset code_size from start of code.
+            // Target string is at code_size + str_data_off from start of code.
+            adr_byte_pos := fix_abs * 4
+            target_byte_pos := code_size + str_data_off
+            pc_offset := target_byte_pos - adr_byte_pos
+            // Patch the single NOP with ADR X0, #pc_offset
+            code_idx := fix_abs + 1  // 1-based array index
+            patch_indices = patch_indices.append(code_idx)
+            patch_values = patch_values.append(enc_adr(X0, pc_offset))
         }
         sfi = sfi + 1
+    }
+
+    // Apply all patches in a single pass
+    if patch_indices.len() > 1 {
+        mut new_code := [0]
+        mut ci := 1
+        while ci < all_code.len() {
+            // Check if this index needs patching (use first matching patch)
+            mut patch_val := -1
+            mut ppi := 1
+            while ppi < patch_indices.len() {
+                if patch_indices[ppi] == ci && patch_val < 0 {
+                    patch_val = patch_values[ppi]
+                }
+                ppi = ppi + 1
+            }
+            if patch_val >= 0 {
+                new_code = new_code.append(patch_val)
+            } else {
+                new_code = new_code.append(all_code[ci])
+            }
+            ci = ci + 1
+        }
+        all_code = new_code
     }
 
     // Build Mach-O

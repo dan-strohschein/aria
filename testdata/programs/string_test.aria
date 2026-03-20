@@ -1,0 +1,26 @@
+// Test string operations
+
+fn greet(name: str) -> str =
+    "hello " + name
+
+entry {
+    // String concat through function
+    msg := greet("world")
+    println(msg)
+
+    // String literal equality
+    if "abc" == "abc" {
+        println("literal eq OK")
+    }
+
+    // String length
+    s := "hello world"
+    assert s.len() == 11
+
+    // Const
+    assert MAGIC == 42
+
+    println("string_test passed")
+}
+
+const MAGIC: i64 = 42

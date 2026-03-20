@@ -196,16 +196,13 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
     if op == "ConstStr" {
         // String as fat pointer: two stack slots — [dest] = ptr, [dest+1] = len
         // inst.arg1 = string index, inst.arg2 = string length
-        // Emit 4 placeholder NOPs for ptr (MOVZ + up to 3 MOVK), record for fixup
+        // Emit 1 placeholder NOP for ADR (PC-relative address load), record for fixup
         ps := PendingString{code_index: _code_pos(e), string_id: inst.arg1, dest_temp: inst.dest, str_len: inst.arg2}
         mut ee := Emitter{code: e.code, label_offsets: e.label_offsets,
                      pending_branches: e.pending_branches, pending_calls: e.pending_calls,
                      pending_strings: e.pending_strings.append(ps),
                      frame_size: e.frame_size, temp_count: e.temp_count}
-        // Emit 4 NOPs as placeholders for the 64-bit pointer load
-        ee = _emit_word(ee, enc_nop())
-        ee = _emit_word(ee, enc_nop())
-        ee = _emit_word(ee, enc_nop())
+        // Emit 1 NOP as placeholder for ADR instruction (patched by codegen)
         ee = _emit_word(ee, enc_nop())
         ee = _store_temp(ee, X0, inst.dest)
         // Store length in dest+1
@@ -279,6 +276,10 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
 
     if op == "Ret" {
         mut ee := _load_temp(e, X0, inst.arg1)
+        // If returning a string (type_id==12), also load len into X1
+        if inst.type_id == 12 {
+            ee = _load_temp(ee, X1, inst.arg1 + 1)
+        }
         ee = _emit_words(ee, enc_epilogue(e.frame_size))
         return ee
     }
@@ -361,27 +362,39 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
         return ee
     }
     if op == "StrEq" {
-        // Compare two fat-pointer strings
-        // inst.arg1, inst.arg2 = string temps
-        // Compare lengths first, then byte-by-byte
+        // Compare two fat-pointer strings: lengths then byte-by-byte
         mut ee := _load_temp(e, X0, inst.arg1 + 1)   // len1
         ee = _load_temp(ee, X1, inst.arg2 + 1)        // len2
         ee = _emit_word(ee, enc_cmp_reg(X0, X1))
-        // If lengths differ, result = 0
-        ee = _emit_word(ee, enc_cset(X0, COND_EQ))
+        // If lengths differ, skip to ne_result (+12 instructions ahead)
+        ee = _emit_word(ee, enc_b_cond(COND_NE, 12))
+        // Lengths equal, now compare bytes
+        ee = _load_temp(ee, X2, inst.arg1)             // ptr1  (+1)
+        ee = _load_temp(ee, X3, inst.arg2)             // ptr2  (+2)
+        // X0 still has len1
+        ee = _emit_word(ee, enc_cbz(X0, 7))            // if len==0, equal (+7 to MOVZ 1)
+        // Byte compare loop
+        ee = _emit_word(ee, enc_ldrb_post(X4, X2, 1))  // *ptr1++  (+4)
+        ee = _emit_word(ee, enc_ldrb_post(X5, X3, 1))  // *ptr2++  (+5)
+        ee = _emit_word(ee, enc_cmp_reg(X4, X5))        //          (+6)
+        ee = _emit_word(ee, enc_b_cond(COND_NE, 4))     // mismatch → ne_result (+4 to MOVZ 0)
+        ee = _emit_word(ee, enc_subs_imm(X0, X0, 1))    // len--    (+8)
+        ee = _emit_word(ee, enc_b_cond(COND_NE, -5))    // loop     (-5 to LDRB)
+        // All bytes match — equal
+        ee = _emit_word(ee, enc_movz(X0, 1, 0))         // result=1 (+10)
+        ee = _emit_word(ee, enc_b(2))                    // skip ne  (+2 to store)
+        // ne_result:
+        ee = _emit_word(ee, enc_movz(X0, 0, 0))         // result=0 (+12)
+        // end: store result
         ee = _store_temp(ee, X0, inst.dest)
-        // TODO: byte-by-byte comparison for full correctness
-        // For now, length-based comparison is a simplification
         return ee
     }
     if op == "StrConcat" {
         // Allocate new buffer, copy both strings
-        // inst.arg1, inst.arg2 = string temps
         mut ee := _load_temp(e, X0, inst.arg1 + 1)   // len1
         ee = _load_temp(ee, X1, inst.arg2 + 1)        // len2
         ee = _emit_word(ee, enc_add_reg(X0, X0, X1))  // total len
-        // Save total len
-        ee = _store_temp(ee, X0, inst.dest + 1)
+        ee = _store_temp(ee, X0, inst.dest + 1)        // save total len
         // Alloc total_len bytes
         pc := PendingCall{code_index: _code_pos(ee), target_name: "_aria_alloc"}
         ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
@@ -389,32 +402,112 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
                      pending_calls: ee.pending_calls.append(pc), pending_strings: ee.pending_strings,
                      frame_size: ee.frame_size, temp_count: ee.temp_count}
         ee = _emit_word(ee, enc_bl(0))
-        // X0 = new buffer. Store as dest ptr
-        ee = _store_temp(ee, X0, inst.dest)
-        // TODO: memcpy both strings into buffer
-        // For now, just return empty buffer with correct length
+        ee = _store_temp(ee, X0, inst.dest)             // save new buf ptr
+        // memcpy(buf, str1_ptr, str1_len)
+        // X0 is already dst
+        ee = _load_temp(ee, X1, inst.arg1)              // src = str1_ptr
+        ee = _load_temp(ee, X2, inst.arg1 + 1)          // len = str1_len
+        pc2 := PendingCall{code_index: _code_pos(ee), target_name: "_aria_memcpy"}
+        ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
+                     pending_branches: ee.pending_branches,
+                     pending_calls: ee.pending_calls.append(pc2), pending_strings: ee.pending_strings,
+                     frame_size: ee.frame_size, temp_count: ee.temp_count}
+        ee = _emit_word(ee, enc_bl(0))
+        // memcpy(buf + len1, str2_ptr, str2_len)
+        ee = _load_temp(ee, X0, inst.dest)              // buf
+        ee = _load_temp(ee, X1, inst.arg1 + 1)          // len1
+        ee = _emit_word(ee, enc_add_reg(X0, X0, X1))   // dst = buf + len1
+        ee = _load_temp(ee, X1, inst.arg2)              // src = str2_ptr
+        ee = _load_temp(ee, X2, inst.arg2 + 1)          // len = str2_len
+        pc3 := PendingCall{code_index: _code_pos(ee), target_name: "_aria_memcpy"}
+        ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
+                     pending_branches: ee.pending_branches,
+                     pending_calls: ee.pending_calls.append(pc3), pending_strings: ee.pending_strings,
+                     frame_size: ee.frame_size, temp_count: ee.temp_count}
+        ee = _emit_word(ee, enc_bl(0))
         return ee
     }
     if op == "StrContains" {
-        // Simplified: always return 0 for now
-        mut ee := _emit_words(e, enc_load_imm64(X0, 0))
+        // Sliding window substring search
+        // haystack = inst.arg1, needle = inst.arg2
+        mut ee := _load_temp(e, X0, inst.arg1 + 1)     // haystack_len
+        ee = _load_temp(ee, X1, inst.arg2 + 1)          // needle_len
+        // If needle_len == 0, return 1
+        ee = _emit_word(ee, enc_cbz(X1, 2))             // if needle_len == 0
+        ee = _emit_word(ee, enc_b(2))                    // skip
+        ee = _emit_words(ee, enc_load_imm64(X0, 1))
+        ee = _emit_word(ee, enc_b(20))                   // jump to end (approx)
+        // If haystack_len < needle_len, return 0
+        ee = _emit_word(ee, enc_cmp_reg(X0, X1))
+        ee = _emit_word(ee, enc_b_cond(COND_GE, 2))     // if haystack >= needle, continue
+        ee = _emit_words(ee, enc_load_imm64(X0, 0))
+        ee = _emit_word(ee, enc_b(14))                   // jump to end (approx)
+        // Outer loop: i = 0..haystack_len-needle_len
+        ee = _emit_word(ee, enc_sub_reg(X6, X0, X1))    // X6 = max_start = h_len - n_len
+        ee = _emit_word(ee, enc_add_imm(X6, X6, 1))     // +1 (inclusive)
+        ee = _emit_word(ee, enc_movz(X7, 0, 0))         // X7 = i = 0
+        ee = _load_temp(ee, X2, inst.arg1)               // haystack_ptr
+        ee = _load_temp(ee, X3, inst.arg2)               // needle_ptr
+        ee = _load_temp(ee, X1, inst.arg2 + 1)           // needle_len
+        // outer_loop:
+        ee = _emit_word(ee, enc_cmp_reg(X7, X6))
+        ee = _emit_word(ee, enc_b_cond(COND_GE, 10))    // if i >= max, not found
+        // inner compare: check needle_len bytes at haystack[i..]
+        ee = _emit_word(ee, enc_add_reg(X8, X2, X7))    // X8 = hay + i
+        ee = _emit_word(ee, enc_mov_reg(X9, X3))         // X9 = needle_ptr
+        ee = _emit_word(ee, enc_mov_reg(X10, X1))        // X10 = needle_len counter
+        // inner_loop:
+        ee = _emit_word(ee, enc_ldrb_imm(X11, X8, 0))
+        ee = _emit_word(ee, enc_ldrb_imm(X12, X9, 0))
+        ee = _emit_word(ee, enc_cmp_reg(X11, X12))
+        ee = _emit_word(ee, enc_b_cond(COND_NE, 6))     // mismatch → next i
+        ee = _emit_word(ee, enc_add_imm(X8, X8, 1))
+        ee = _emit_word(ee, enc_add_imm(X9, X9, 1))
+        ee = _emit_word(ee, enc_subs_imm(X10, X10, 1))
+        ee = _emit_word(ee, enc_b_cond(COND_NE, -7))    // continue inner
+        // All bytes matched → found
+        ee = _emit_words(ee, enc_load_imm64(X0, 1))
+        ee = _emit_word(ee, enc_b(3))                    // jump to end
+        // next_i:
+        ee = _emit_word(ee, enc_add_imm(X7, X7, 1))
+        ee = _emit_word(ee, enc_b(-19))                  // back to outer_loop
+        // not_found:
+        ee = _emit_words(ee, enc_load_imm64(X0, 0))
+        // end:
         ee = _store_temp(ee, X0, inst.dest)
         return ee
     }
     if op == "StrSubstring" {
-        // Simplified: return original string for now
-        mut ee := _load_temp(e, X0, inst.arg1)
+        // inst.arg1 = string temp, inst.arg2 = start temp
+        // inst.type_id = end temp (passed from lowerer)
+        // Returns view: new_ptr = ptr + start, new_len = end - start
+        mut ee := _load_temp(e, X0, inst.arg1)           // ptr
+        ee = _load_temp(ee, X1, inst.arg2)                // start
+        ee = _emit_word(ee, enc_add_reg(X0, X0, X1))     // new_ptr = ptr + start
         ee = _store_temp(ee, X0, inst.dest)
-        ee = _load_temp(ee, X0, inst.arg1 + 1)
+        // Compute len = end - start
+        if inst.type_id > 0 {
+            ee = _load_temp(ee, X2, inst.type_id)         // end
+            ee = _emit_word(ee, enc_sub_reg(X0, X2, X1))  // len = end - start
+        } else {
+            // Fallback: use original len - start
+            ee = _load_temp(ee, X2, inst.arg1 + 1)
+            ee = _emit_word(ee, enc_sub_reg(X0, X2, X1))
+        }
         ee = _store_temp(ee, X0, inst.dest + 1)
         return ee
     }
     if op == "IntToStr" {
-        // Simplified stub
-        mut ee := _emit_words(e, enc_load_imm64(X0, 0))
+        // Call _aria_int_to_str(val) → returns (ptr, len) in x0, x1
+        mut ee := _load_temp(e, X0, inst.arg1)
+        pc := PendingCall{code_index: _code_pos(ee), target_name: "_aria_int_to_str"}
+        ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
+                     pending_branches: ee.pending_branches,
+                     pending_calls: ee.pending_calls.append(pc), pending_strings: ee.pending_strings,
+                     frame_size: ee.frame_size, temp_count: ee.temp_count}
+        ee = _emit_word(ee, enc_bl(0))
         ee = _store_temp(ee, X0, inst.dest)
-        ee = _emit_words(ee, enc_load_imm64(X0, 0))
-        ee = _store_temp(ee, X0, inst.dest + 1)
+        ee = _store_temp(ee, X1, inst.dest + 1)
         return ee
     }
 
@@ -461,27 +554,75 @@ fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
     if op == "ArrayAppend" {
         // inst.arg1 = array temp (source), inst.arg2 = element temp
         // Returns array pointer in inst.dest
-        // Inline: store element at data_ptr[length], increment length
+        // Uses label-based branching for capacity growth.
         mut ee := _load_temp(e, X0, inst.arg1)      // X0 = array ptr
-        ee = _load_temp(ee, X1, inst.arg2)            // X1 = element value
-
-        // Load header fields while we have the ptr in X0
         ee = _emit_word(ee, enc_ldr_imm(X2, X0, 0))  // X2 = length
-        ee = _emit_word(ee, enc_ldr_imm(X3, X0, 2))  // X3 = data_ptr
+        ee = _emit_word(ee, enc_ldr_imm(X3, X0, 1))  // X3 = capacity
+        // Compare length vs capacity
+        ee = _emit_word(ee, enc_cmp_reg(X2, X3))
+        // Use pending branch to skip growth if length < capacity
+        grow_end_label := e.label_offsets.len()  // use array length as next label id
+        ee = _add_pending(ee, grow_end_label, true, COND_LT, 0, false)
+        ee = _emit_word(ee, enc_nop())  // placeholder for B.LT
 
-        // Compute element address: data_ptr + length * 8
-        ee = _emit_words(ee, enc_load_imm64(X4, 3))   // shift = 3
-        ee = _emit_word(ee, enc_lsl_reg(X5, X2, X4))  // length * 8
-        ee = _emit_word(ee, enc_add_reg(X3, X3, X5))  // data_ptr + length*8
+        // --- Growth path ---
+        // new_cap = cap * 2, alloc new_cap*8, memcpy, update header
+        ee = _load_temp(ee, X0, inst.arg1)             // reload array ptr
+        ee = _emit_word(ee, enc_ldr_imm(X3, X0, 1))   // cap
+        ee = _emit_word(ee, enc_add_reg(X4, X3, X3))   // new_cap = cap * 2
+        // Save new_cap to dest temp slot as scratch
+        ee = _store_temp(ee, X4, inst.dest)
+        // Alloc new_cap * 8
+        ee = _emit_words(ee, enc_load_imm64(X5, 3))
+        ee = _emit_word(ee, enc_lsl_reg(X0, X4, X5))   // X0 = new_cap * 8
+        pc_grow := PendingCall{code_index: _code_pos(ee), target_name: "_aria_alloc"}
+        ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
+                     pending_branches: ee.pending_branches,
+                     pending_calls: ee.pending_calls.append(pc_grow), pending_strings: ee.pending_strings,
+                     frame_size: ee.frame_size, temp_count: ee.temp_count}
+        ee = _emit_word(ee, enc_bl(0))
+        // X0 = new_data_ptr. Save it immediately.
+        ee = _store_temp(ee, X0, inst.dest + 1)  // use dest+1 as scratch for new_data
 
-        // Store element value
-        ee = _emit_word(ee, enc_str_imm(X1, X3, 0))   // [data_ptr + length*8] = element
+        // memcpy(new_data, old_data, length * 8)
+        // X0 = dst (already new_data)
+        ee = _load_temp(ee, X5, inst.arg1)
+        ee = _emit_word(ee, enc_ldr_imm(X1, X5, 2))   // X1 = src = old data_ptr
+        ee = _emit_word(ee, enc_ldr_imm(X2, X5, 0))   // X2 = length
+        ee = _emit_words(ee, enc_load_imm64(X6, 3))
+        ee = _emit_word(ee, enc_lsl_reg(X2, X2, X6))   // X2 = length * 8
+        pc_cpy := PendingCall{code_index: _code_pos(ee), target_name: "_aria_memcpy"}
+        ee = Emitter{code: ee.code, label_offsets: ee.label_offsets,
+                     pending_branches: ee.pending_branches,
+                     pending_calls: ee.pending_calls.append(pc_cpy), pending_strings: ee.pending_strings,
+                     frame_size: ee.frame_size, temp_count: ee.temp_count}
+        ee = _emit_word(ee, enc_bl(0))
 
-        // Increment length: reload array ptr in case X0 was clobbered
+        // Update array header with new capacity and data ptr
+        ee = _load_temp(ee, X0, inst.arg1)             // array header
+        ee = _load_temp(ee, X4, inst.dest)             // new_cap
+        ee = _emit_word(ee, enc_str_imm(X4, X0, 1))   // [arr+8] = new_cap
+        ee = _load_temp(ee, X5, inst.dest + 1)         // new_data
+        ee = _emit_word(ee, enc_str_imm(X5, X0, 2))   // [arr+16] = new_data
+
+        // --- grow_end label: after growth or skip ---
+        ee = _set_label(ee, grow_end_label)
+
+        // Store element at data_ptr[length]
+        ee = _load_temp(ee, X0, inst.arg1)             // array ptr
+        ee = _emit_word(ee, enc_ldr_imm(X2, X0, 0))   // length
+        ee = _emit_word(ee, enc_ldr_imm(X3, X0, 2))   // data_ptr
+        ee = _emit_words(ee, enc_load_imm64(X4, 3))
+        ee = _emit_word(ee, enc_lsl_reg(X5, X2, X4))   // length * 8
+        ee = _emit_word(ee, enc_add_reg(X3, X3, X5))   // data_ptr + length*8
+        ee = _load_temp(ee, X1, inst.arg2)              // element value
+        ee = _emit_word(ee, enc_str_imm(X1, X3, 0))    // store element
+
+        // Increment length
         ee = _load_temp(ee, X0, inst.arg1)
-        ee = _emit_word(ee, enc_ldr_imm(X2, X0, 0))   // re-read length
-        ee = _emit_word(ee, enc_add_imm(X2, X2, 1))   // length++
-        ee = _emit_word(ee, enc_str_imm(X2, X0, 0))   // store new length
+        ee = _emit_word(ee, enc_ldr_imm(X2, X0, 0))
+        ee = _emit_word(ee, enc_add_imm(X2, X2, 1))
+        ee = _emit_word(ee, enc_str_imm(X2, X0, 0))
 
         // Result = same array pointer
         ee = _store_temp(ee, X0, inst.dest)
@@ -554,6 +695,10 @@ fn _emit_call(e: Emitter, inst: IrInst) -> Emitter {
     // Store return value
     if inst.dest > 0 {
         ee = _store_temp(ee, X0, inst.dest)
+        // If type_id == 12, this returns a string (fat pointer: X0=ptr, X1=len)
+        if inst.type_id == 12 {
+            ee = _store_temp(ee, X1, inst.dest + 1)
+        }
     }
     ee
 }
@@ -577,6 +722,8 @@ fn _resolve_branches(e: Emitter) -> Emitter {
             mut new_inst := 0
             if pb.is_cbz {
                 new_inst = enc_cbz(pb.reg, offset)
+            } else if pb.is_cond {
+                new_inst = enc_b_cond(pb.cond, offset)
             } else if pb.reg > 0 {
                 new_inst = enc_cbnz(pb.reg, offset)
             } else {
