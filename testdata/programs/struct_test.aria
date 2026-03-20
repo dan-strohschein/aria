@@ -1,0 +1,12 @@
+struct Point {
+    x: i64
+    y: i64
+}
+
+fn sum(p: Point) -> i64 = p.x + p.y
+
+entry {
+    p := Point{x: 20, y: 22}
+    s := sum(p)
+    assert s == 42
+}

@@ -1,0 +1,60 @@
+struct Node {
+    value: i64
+    next: i64
+}
+
+fn make_node(v: i64) -> Node = Node{value: v, next: 0}
+
+fn sum_array(arr: [i64]) -> i64 {
+    mut total := 0
+    mut i := 1
+    while i < arr.len() {
+        elem := arr[i]
+        total = total + elem
+        i = i + 1
+    }
+    total
+}
+
+fn factorial(n: i64) -> i64 {
+    if n <= 1 {
+        return 1
+    }
+    n * factorial(n - 1)
+}
+
+entry {
+    // Test struct
+    n := make_node(42)
+    assert n.value == 42
+
+    // Test array
+    mut arr := [0]
+    arr = arr.append(10)
+    arr = arr.append(20)
+    arr = arr.append(12)
+    s := sum_array(arr)
+    assert s == 42
+
+    // Test while + break
+    mut count := 0
+    mut j := 0
+    while j < 100 {
+        if j == 5 {
+            break
+        }
+        count = count + 1
+        j = j + 1
+    }
+    assert count == 5
+
+    // Test recursion
+    f := factorial(5)
+    assert f == 120
+
+    // Test match
+    x := match count {
+        _ => count + 37
+    }
+    assert x == 42
+}

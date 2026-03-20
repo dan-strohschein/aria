@@ -1,0 +1,10 @@
+entry {
+    mut arr := [0]
+    arr = arr.append(10)
+    arr = arr.append(20)
+    arr = arr.append(30)
+    assert arr.len() == 4
+    assert arr[1] == 10
+    assert arr[2] == 20
+    assert arr[3] == 30
+}

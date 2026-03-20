@@ -54,12 +54,40 @@ fn generate_from_source(source: str, file: str, output_path: str) -> DiagnosticB
 // ============================================================
 
 fn generate_from_module(m: IrModule) -> CodegenResult {
-    // Emit each function to machine code
     mut all_code := [0]
     mut func_offsets_names := [""]
     mut func_offsets_vals := [0]
     mut entry_offset := 0
 
+    // Parallel arrays for BL patching: absolute offset + target name
+    mut call_offsets := [0]
+    mut call_targets := [""]
+
+    // Parallel arrays for string address fixup: absolute code offset + string id
+    mut str_fixup_offsets := [0]
+    mut str_fixup_ids := [0]
+
+    // --- Phase A: Emit runtime functions (raw machine code) ---
+    rt_funcs := build_runtime_funcs()
+    mut ri := 1
+    while ri < rt_funcs.len() {
+        rf := rt_funcs[ri]
+        if rf.name != "" {
+            cur_offset := all_code.len() - 1
+            func_offsets_names = func_offsets_names.append(rf.name)
+            func_offsets_vals = func_offsets_vals.append(cur_offset)
+
+            // Append raw code
+            mut rci := 1
+            while rci < rf.code.len() {
+                all_code = all_code.append(rf.code[rci])
+                rci = rci + 1
+            }
+        }
+        ri = ri + 1
+    }
+
+    // --- Phase B: Emit user functions from IR ---
     mut fi := 1
     while fi < m.funcs.len() {
         f := m.funcs[fi]
@@ -81,6 +109,26 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
         em := emit_function(f)
         code := emitter_code(em)
 
+        // Record pending calls with absolute offsets
+        pc_offsets := emitter_call_offsets(em)
+        pc_targets := emitter_call_targets(em)
+        mut pci := 1
+        while pci < pc_offsets.len() {
+            call_offsets = call_offsets.append(cur_offset + pc_offsets[pci])
+            call_targets = call_targets.append(pc_targets[pci])
+            pci = pci + 1
+        }
+
+        // Record pending string fixups with absolute offsets
+        ps_offsets := emitter_string_code_indices(em)
+        ps_ids := emitter_string_ids(em)
+        mut psi := 1
+        while psi < ps_offsets.len() {
+            str_fixup_offsets = str_fixup_offsets.append(cur_offset + ps_offsets[psi])
+            str_fixup_ids = str_fixup_ids.append(ps_ids[psi])
+            psi = psi + 1
+        }
+
         // Append emitted code
         mut ci := 1
         while ci < code.len() {
@@ -91,12 +139,48 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
         fi = fi + 1
     }
 
-    // If no entry function was found but we have _main, use syscall approach
+    // If no entry function was found, use direct syscall exit(0)
     if m.entry_func == "" {
-        // No entry point — just exit(0)
         all_code = all_code.append(enc_movz(X0, 0, 0))
         all_code = all_code.append(enc_movz(X16, 1, 0))
         all_code = all_code.append(enc_svc(0x80))
+    }
+
+    // --- Phase C: Patch BL instructions ---
+    mut pi := 1
+    while pi < call_offsets.len() {
+        call_abs := call_offsets[pi]
+        target_name := call_targets[pi]
+
+        // Look up target function offset
+        mut target_offset := -1
+        mut ti := 1
+        while ti < func_offsets_names.len() {
+            if func_offsets_names[ti] == target_name {
+                target_offset = func_offsets_vals[ti]
+            }
+            ti = ti + 1
+        }
+
+        if target_offset >= 0 {
+            // BL offset = target - call_site (in instructions)
+            bl_offset := target_offset - call_abs
+            // Patch all_code at call_abs + 1 (sentinel offset)
+            code_idx := call_abs + 1
+            mut new_code := [0]
+            mut ci := 1
+            while ci < all_code.len() {
+                if ci == code_idx {
+                    new_code = new_code.append(enc_bl(bl_offset))
+                } else {
+                    new_code = new_code.append(all_code[ci])
+                }
+                ci = ci + 1
+            }
+            all_code = new_code
+        }
+
+        pi = pi + 1
     }
 
     // Build string constant data
@@ -111,6 +195,62 @@ fn generate_from_module(m: IrModule) -> CodegenResult {
         }
         cstring_data = cstring_data.append(0)  // null terminator
         si = si + 1
+    }
+
+    // --- Phase D: Patch string constant addresses ---
+    // Compute absolute address of each string constant in the cstring section
+    // text_vmaddr = 0x100000000
+    // code_offset computed from header size (same as macho.aria)
+    // String data starts at: code_offset + code_size
+    text_vmaddr := 0x100000000
+    code_size := (all_code.len() - 1) * 4
+
+    // Compute code_offset same as in build_macho
+    header_and_lc := 32 + 72 + (72 + 80) + 72 + 16 + 16 + 24 + 80 + 32 + 24 + 24 + 24 + 56 + 16
+    mut code_off := header_and_lc
+    if code_off % 4 != 0 { code_off = code_off + (4 - code_off % 4) }
+
+    cstring_base := text_vmaddr + code_off + code_size
+
+    // Compute per-string offsets within cstring data
+    mut string_addrs := [0]  // sentinel
+    mut str_off := 0
+    mut ssi := 1
+    while ssi < m.string_constants.len() {
+        string_addrs = string_addrs.append(cstring_base + str_off)
+        s := m.string_constants[ssi]
+        str_off = str_off + s.len() + 1  // +1 for null terminator
+        ssi = ssi + 1
+    }
+
+    // Patch string load instructions
+    mut sfi := 1
+    while sfi < str_fixup_offsets.len() {
+        fix_abs := str_fixup_offsets[sfi]
+        str_id := str_fixup_ids[sfi]
+        if str_id > 0 && str_id < string_addrs.len() {
+            addr := string_addrs[str_id]
+            // Generate MOVZ/MOVK sequence for 64-bit address
+            addr_insts := enc_load_imm64(X0, addr)
+            // Patch 4 slots (NOPs) starting at fix_abs
+            mut ai := 1
+            while ai < addr_insts.len() && ai <= 4 {
+                code_idx := fix_abs + ai  // +0 sentinel offset already included
+                mut new_code := [0]
+                mut ci := 1
+                while ci < all_code.len() {
+                    if ci == code_idx {
+                        new_code = new_code.append(addr_insts[ai])
+                    } else {
+                        new_code = new_code.append(all_code[ci])
+                    }
+                    ci = ci + 1
+                }
+                all_code = new_code
+                ai = ai + 1
+            }
+        }
+        sfi = sfi + 1
     }
 
     // Build Mach-O

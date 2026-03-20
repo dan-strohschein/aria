@@ -1,92 +1,120 @@
 mod codegen
 
 // ============================================================
-// Runtime Stubs
-// Built-in functions emitted as IR that get compiled into
-// every executable. Uses libSystem calls via dynamic linking.
+// Runtime Stubs — Raw ARM64 Machine Code
+// Direct macOS ARM64 syscalls, no libSystem dependency.
 //
-// macOS ARM64 syscall convention (via libSystem wrappers):
-//   _write(fd, buf, len) — x0=fd, x1=buf, x2=len
-//   _exit(code)          — x0=code
-//   _malloc(size)         — x0=size, returns x0=ptr
-//   _free(ptr)           — x0=ptr
+// macOS ARM64 syscall convention:
+//   x16 = syscall number, x0-x5 = args, svc 0x80
+//   exit=1, write=4, mmap=197
 // ============================================================
 
-// --- Build runtime IR functions ---
+// --- RuntimeFunc: pre-built machine code for a runtime function ---
 
-// _aria_exit(code: i64)
-// Calls _exit from libSystem
-fn build_exit_func() -> IrFunc {
-    mut f := new_ir_func("_aria_exit", 1, 0)
-    // arg 0 = exit code, already in slot 0
-    // OpCall to _exit with 1 arg starting at temp 0
-    f = func_add_inst(f, new_inst(OpCall, 0, 0, 1, "_exit", 0))
-    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
-    f = func_set_locals(f, 1)
-    f
+struct RuntimeFunc {
+    name: str
+    code: [i64]
 }
 
-// _aria_write(fd: i64, ptr: i64, len: i64)
-// Calls _write from libSystem
-fn build_write_func() -> IrFunc {
-    mut f := new_ir_func("_aria_write", 3, 0)
-    // args: slot 0=fd, slot 1=ptr, slot 2=len
-    f = func_add_inst(f, new_inst(OpCall, 0, 0, 3, "_write", 0))
-    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
-    f = func_set_locals(f, 3)
-    f
+fn _sentinel_runtime_func() -> RuntimeFunc =
+    RuntimeFunc{name: "", code: [0]}
+
+// --- _aria_exit(code: i64) ---
+// x0 = exit code (passed by caller). Never returns.
+
+fn build_exit_runtime() -> RuntimeFunc {
+    mut code := [0]
+    code = code.append(enc_movz(X16, 1, 0))    // mov x16, #1 (exit syscall)
+    code = code.append(enc_svc(0x80))           // svc 0x80
+    RuntimeFunc{name: "_aria_exit", code: code}
 }
 
-// _aria_println_str(ptr: i64, len: i64)
-// Writes string to stdout followed by newline
-fn build_println_str_func() -> IrFunc {
-    mut f := new_ir_func("_aria_println_str", 2, 0)
-    // Write the string: _write(1, ptr, len)
-    // We need to set up: x0=1 (stdout), x1=ptr, x2=len
-    // args are in slots 0=ptr, 1=len
-    // Move ptr to temp 3, len to temp 4
-    // Set temp 2 = 1 (stdout fd)
-    f = func_add_inst(f, new_inst(OpConst, 2, 1, 0, "", 0))       // temp2 = 1 (stdout)
-    f = func_add_inst(f, new_inst(OpLoad, 3, 0, 0, "", 0))        // temp3 = arg0 (ptr)
-    f = func_add_inst(f, new_inst(OpLoad, 4, 1, 0, "", 0))        // temp4 = arg1 (len)
-    f = func_add_inst(f, new_inst(OpCall, 0, 2, 3, "_write", 0))  // _write(fd, ptr, len) — 3 args starting at temp 2
-    // Write newline
-    // For newline, we'll use a stack slot with '\n' (0x0A)
-    f = func_add_inst(f, new_inst(OpConst, 5, 10, 0, "", 0))      // temp5 = 10 (newline char)
-    // We need address of temp5 on stack — this requires knowing the stack layout
-    // For simplicity, this will be handled in emit as a special case
-    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
-    f = func_set_locals(f, 6)
-    f
+// --- _aria_write(fd: i64, ptr: i64, len: i64) ---
+// x0=fd, x1=buf, x2=len (passed by caller)
+
+fn build_write_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Leaf function — no prologue needed (doesn't call other functions)
+    code = code.append(enc_movz(X16, 4, 0))    // mov x16, #4 (write syscall)
+    code = code.append(enc_svc(0x80))           // svc 0x80
+    code = code.append(enc_ret())               // ret
+    RuntimeFunc{name: "_aria_write", code: code}
 }
 
-// _aria_malloc(size: i64) -> ptr
-fn build_malloc_func() -> IrFunc {
-    mut f := new_ir_func("_aria_malloc", 1, 0)
-    f = func_add_inst(f, new_inst(OpCall, 0, 0, 1, "_malloc", 0))
-    f = func_add_inst(f, new_inst(OpRet, 0, 0, 0, "", 0))
-    f = func_set_locals(f, 1)
-    f
+// --- _aria_println_str(ptr: i64, len: i64) ---
+// Writes string to stdout followed by newline.
+// x0=ptr, x1=len
+
+fn build_println_str_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue — save x29, x30 + allocate 32 bytes for locals
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))   // stp x29, x30, [sp, #-16]!
+    code = code.append(enc_mov_reg(X29, SP))             // mov x29, sp
+    code = code.append(enc_sub_imm(SP, SP, 32))          // sub sp, sp, #32
+
+    // Save args to stack
+    code = code.append(enc_str_imm(X0, SP, 0))           // [sp+0] = ptr
+    code = code.append(enc_str_imm(X1, SP, 1))           // [sp+8] = len
+
+    // write(1, ptr, len) — the main string
+    code = code.append(enc_movz(X0, 1, 0))               // fd = 1 (stdout)
+    code = code.append(enc_ldr_imm(X1, SP, 0))           // buf = ptr
+    code = code.append(enc_ldr_imm(X2, SP, 1))           // count = len
+    code = code.append(enc_movz(X16, 4, 0))              // write syscall
+    code = code.append(enc_svc(0x80))
+
+    // Store newline byte to stack slot 2
+    code = code.append(enc_movz(X0, 10, 0))              // '\n'
+    code = code.append(enc_str_imm(X0, SP, 2))           // [sp+16] = newline
+
+    // write(1, &newline, 1)
+    code = code.append(enc_movz(X0, 1, 0))               // fd = 1
+    code = code.append(enc_add_imm(X1, SP, 16))          // buf = sp+16
+    code = code.append(enc_movz(X2, 1, 0))               // count = 1
+    code = code.append(enc_movz(X16, 4, 0))              // write syscall
+    code = code.append(enc_svc(0x80))
+
+    // Epilogue
+    code = code.append(enc_add_imm(SP, SP, 32))
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))    // ldp x29, x30, [sp], #16
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_println_str", code: code}
+}
+
+// --- _aria_alloc(size: i64) -> ptr ---
+// Uses mmap syscall for each allocation (simple but correct).
+// x0 = size in bytes. Returns pointer in x0.
+
+fn build_alloc_runtime() -> RuntimeFunc {
+    mut code := [0]
+    // Prologue
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))
+    code = code.append(enc_mov_reg(X29, SP))
+
+    // mmap(0, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0)
+    code = code.append(enc_mov_reg(X1, X0))       // x1 = size (move from arg)
+    code = code.append(enc_movz(X0, 0, 0))        // x0 = addr (0 = kernel chooses)
+    code = code.append(enc_movz(X2, 3, 0))        // x2 = PROT_READ|PROT_WRITE
+    // MAP_PRIVATE=0x2, MAP_ANON=0x1000 → 0x1002
+    code = code.append(enc_movz(X3, 0x1002, 0))   // x3 = MAP_PRIVATE|MAP_ANON
+    code = code.append(enc_movn(X4, 0, 0))         // x4 = -1 (fd)
+    code = code.append(enc_movz(X5, 0, 0))         // x5 = 0 (offset)
+    code = code.append(enc_movz(X16, 197, 0))      // syscall 197 (mmap)
+    code = code.append(enc_svc(0x80))
+
+    // Epilogue — result already in x0
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))
+    code = code.append(enc_ret())
+    RuntimeFunc{name: "_aria_alloc", code: code}
 }
 
 // --- Collect all runtime functions ---
 
-fn build_runtime_module() -> IrModule {
-    mut m := new_ir_module()
-    m = mod_add_func(m, build_exit_func())
-    m = mod_add_func(m, build_write_func())
-    m = mod_add_func(m, build_println_str_func())
-    m = mod_add_func(m, build_malloc_func())
-    m
-}
-
-// --- External symbols needed from libSystem ---
-
-fn runtime_externals() -> [str] {
-    mut syms := [""]
-    syms = syms.append("_exit")
-    syms = syms.append("_write")
-    syms = syms.append("_malloc")
-    syms = syms.append("_free")
-    syms
+fn build_runtime_funcs() -> [RuntimeFunc] {
+    mut funcs := [_sentinel_runtime_func()]
+    funcs = funcs.append(build_exit_runtime())
+    funcs = funcs.append(build_write_runtime())
+    funcs = funcs.append(build_println_str_runtime())
+    funcs = funcs.append(build_alloc_runtime())
+    funcs
 }

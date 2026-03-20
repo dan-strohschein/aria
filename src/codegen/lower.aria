@@ -28,6 +28,8 @@ struct Lowerer {
     label_counter: i64
     env_names: [str]
     env_slots: [i64]
+    loop_start: i64
+    loop_end: i64
 }
 
 // --- Lowerer + temp result (like CE) ---
@@ -46,7 +48,8 @@ fn _new_lowerer(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: Sym
         module: new_ir_module(),
         current_func: _sentinel_func(),
         temp_counter: 0, label_counter: 0,
-        env_names: [""], env_slots: [0]
+        env_names: [""], env_slots: [0],
+        loop_start: -1, loop_end: -1
     }
 
 // --- Helpers ---
@@ -65,14 +68,16 @@ fn _ladv(l: Lowerer) -> Lowerer =
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names, env_slots: l.env_slots}
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
 
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
     Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names, env_slots: l.env_slots}
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
 
 fn _lskip_nl(l: Lowerer) -> Lowerer {
     mut ll := l
@@ -86,7 +91,8 @@ fn _lnew_temp(l: Lowerer) -> LT {
                   table: l.table, file: l.file, module: l.module,
                   current_func: l.current_func,
                   temp_counter: l.temp_counter + 1, label_counter: l.label_counter,
-                  env_names: l.env_names, env_slots: l.env_slots}
+                  env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
     LT{l: ll, temp: temp}
 }
 
@@ -96,7 +102,8 @@ fn _lnew_label(l: Lowerer) -> LT {
                   table: l.table, file: l.file, module: l.module,
                   current_func: l.current_func,
                   temp_counter: l.temp_counter, label_counter: l.label_counter + 1,
-                  env_names: l.env_names, env_slots: l.env_slots}
+                  env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
     LT{l: ll, temp: lbl}
 }
 
@@ -106,7 +113,8 @@ fn _lemit(l: Lowerer, inst: IrInst) -> Lowerer {
             table: l.table, file: l.file, module: l.module,
             current_func: new_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names, env_slots: l.env_slots}
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
 }
 
 fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
@@ -114,7 +122,8 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
             table: l.table, file: l.file, module: l.module,
             current_func: f,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names, env_slots: l.env_slots}
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end}
 
 fn _lfinish_func(l: Lowerer) -> Lowerer {
     f := func_set_locals(l.current_func, l.temp_counter)
@@ -123,7 +132,8 @@ fn _lfinish_func(l: Lowerer) -> Lowerer {
             table: l.table, file: l.file, module: new_mod,
             current_func: _sentinel_func(),
             temp_counter: 0, label_counter: l.label_counter,
-            env_names: [""], env_slots: [0]}
+            env_names: [""], env_slots: [0],
+            loop_start: -1, loop_end: -1}
 }
 
 fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
@@ -131,7 +141,8 @@ fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names.append(name), env_slots: l.env_slots.append(slot)}
+            env_names: l.env_names.append(name), env_slots: l.env_slots.append(slot),
+            loop_start: l.loop_start, loop_end: l.loop_end}
 
 fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     mut i := l.env_names.len() - 1
@@ -223,6 +234,8 @@ fn _lower_bodies(l: Lowerer) -> Lowerer {
             ll = _skip_to_next_l(ll)
         } else if k == "impl" {
             ll = _lower_impl(ll)
+        } else if k == "const" {
+            ll = _skip_to_next_l(ll)
         } else {
             ll = _skip_to_next_l(ll)
         }
@@ -332,7 +345,8 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots}
+            env_names: ll.env_names, env_slots: ll.env_slots,
+            loop_start: ll.loop_start, loop_end: ll.loop_end}
 }
 
 // --- Lower impl block ---
@@ -385,8 +399,20 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
 
     if k == "mut" { return _lower_mut_binding(l) }
     if k == "return" { return _lower_return(l) }
-    if k == "break" { return _ladv(l) }
-    if k == "continue" { return _ladv(l) }
+    if k == "break" {
+        mut ll := _ladv(l)
+        if l.loop_end >= 0 {
+            ll = _lemit(ll, new_inst(OpJump, 0, l.loop_end, 0, "", 0))
+        }
+        return ll
+    }
+    if k == "continue" {
+        mut ll := _ladv(l)
+        if l.loop_start >= 0 {
+            ll = _lemit(ll, new_inst(OpJump, 0, l.loop_start, 0, "", 0))
+        }
+        return ll
+    }
     if k == "for" { return _lower_for(l) }
     if k == "while" { return _lower_while(l) }
     if k == "loop" { return _lower_loop(l) }
@@ -532,9 +558,10 @@ fn _lower_expr(l: Lowerer) -> LT {
                     left = mr.temp
                 } else {
                     // Field access
+                    fidx := _field_index_any(ll.registry, field)
                     nt := _lnew_temp(ll)
                     ll = nt.l
-                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, 0, field, 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field, 0))
                     left = nt.temp
                 }
             } else {
@@ -620,7 +647,8 @@ fn _lower_primary(l: Lowerer) -> LT {
                          table: ll.table, file: ll.file, module: new_mod,
                          current_func: ll.current_func,
                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots}
+                         env_names: ll.env_names, env_slots: ll.env_slots,
+                         loop_start: ll.loop_start, loop_end: ll.loop_end}
         }
         nt := _lnew_temp(ll)
         ll = _lemit(nt.l, new_inst(OpConstStr, nt.temp, str_idx, val.len(), "", 0))
@@ -716,6 +744,15 @@ fn _lower_primary(l: Lowerer) -> LT {
             return LT{l: ll, temp: nt.temp}
         }
 
+        // Sum type variant — emit tag constant
+        tag := _variant_tag(ll.registry, name)
+        if tag > 0 {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpConst, nt.temp, tag, 0, "", 0))
+            return LT{l: ll, temp: nt.temp}
+        }
+
         // Unknown identifier — return 0
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -769,7 +806,9 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
-        ll = _lemit(ll, new_inst(OpStrLen, nt.temp, obj, 0, "", 0))
+        // Use OpArrayLen — works for arrays (length at [ptr+0])
+        // For strings, OpStrLen is used instead (length at slot+1)
+        ll = _lemit(ll, new_inst(OpArrayLen, nt.temp, obj, 0, "", 0))
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -803,6 +842,29 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    if method == "startsWith" {
+        arg := _lower_expr(ll)
+        ll = arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrContains, nt.temp, obj, arg.temp, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "substring" {
+        start := _lower_expr(ll)
+        ll = start.l
+        if _lk(ll) == "," { ll = _ladv(ll) }
+        end := _lower_expr(ll)
+        ll = end.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSubstring, nt.temp, obj, start.temp, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
     // Unknown method — skip args, return 0
     while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
     if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -828,6 +890,46 @@ fn _lower_call_args(l: Lowerer, callee: i64) -> LT {
     LT{l: ll, temp: callee}
 }
 
+// --- Field index lookup ---
+
+fn _field_index(reg: TypeRegistry, struct_name: str, field_name: str) -> i64 {
+    def := reg_find_struct(reg, struct_name)
+    if def.name == "" { return 0 }
+    mut i := 1
+    while i < def.fields.len() {
+        if def.fields[i].name == field_name {
+            return i - 1  // 0-based field index
+        }
+        i = i + 1
+    }
+    0
+}
+
+// Search all struct defs for a field name and return its 0-based index
+fn _field_index_any(reg: TypeRegistry, field_name: str) -> i64 {
+    mut si := 1
+    while si < reg.struct_defs.len() {
+        def := reg.struct_defs[si]
+        if def.name != "" && def.is_sum == false {
+            mut fi := 1
+            while fi < def.fields.len() {
+                if def.fields[fi].name == field_name {
+                    return fi - 1
+                }
+                fi = fi + 1
+            }
+        }
+        si = si + 1
+    }
+    0
+}
+
+fn _struct_field_count(reg: TypeRegistry, struct_name: str) -> i64 {
+    def := reg_find_struct(reg, struct_name)
+    if def.name == "" { return 0 }
+    def.fields.len() - 1  // minus sentinel
+}
+
 // --- Lower struct literal ---
 
 fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
@@ -836,9 +938,10 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
     mut ll := _ladv(l)  // skip {
     ll = _lskip_nl(ll)
 
+    field_count := _struct_field_count(ll.registry, name)
     nt := _lnew_temp(ll)
     ll = nt.l
-    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 0, 0, name, 0))
+    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, field_count, 0, name, 0))
 
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         if _lk(ll) == "IDENT" {
@@ -848,7 +951,8 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
                 ll = _ladv(ll)
                 val := _lower_expr(ll)
                 ll = val.l
-                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 0, fname, 0))
+                fidx := _field_index(ll.registry, name, fname)
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, fidx, fname, 0))
             }
         } else {
             ll = _ladv(ll)
@@ -863,36 +967,120 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
     LT{l: ll, temp: nt.temp}
 }
 
+// --- Lower condition expression (stops before {) ---
+// Uses _lower_cond_atom which is like _lower_expr but won't
+// consume { as a struct literal.
+
+fn _lower_cond_atom(l: Lowerer) -> LT {
+    lb := "\{"
+    result := _lower_primary(l)
+    mut ll := result.l
+    mut left := result.temp
+
+    // Handle postfix: .field, .method(), [index]
+    mut running := true
+    while running {
+        k := _lk(ll)
+        if k == "." {
+            ll = _ladv(ll)
+            if _lk(ll) == "IDENT" {
+                field := _lcur(ll).text
+                ll = _ladv(ll)
+                if _lk(ll) == "(" {
+                    mr := _lower_method_call(ll, left, field)
+                    ll = mr.l
+                    left = mr.temp
+                } else {
+                    fidx := _field_index_any(ll.registry, field)
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field, 0))
+                    left = nt.temp
+                }
+            } else {
+                running = false
+            }
+        } else if k == "[" {
+            ll = _ladv(ll)
+            idx := _lower_expr(ll)
+            ll = idx.l
+            if _lk(ll) == "]" { ll = _ladv(ll) }
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
+            left = nt.temp
+        } else if k == "(" {
+            cr := _lower_call_args(ll, left)
+            ll = cr.l
+            left = cr.temp
+        } else {
+            running = false
+        }
+    }
+    LT{l: ll, temp: left}
+}
+
+fn _lower_if_cond(l: Lowerer) -> LT {
+    lb := "\{"
+    result := _lower_cond_atom(l)
+    mut ll := result.l
+    mut left := result.temp
+
+    mut running := true
+    while running {
+        k := _lk(ll)
+        if k == lb || k == "EOF" || k == "NEWLINE" {
+            running = false
+        } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
+            ll = _ladv(ll)
+            right := _lower_cond_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
+            left = nt.temp
+        } else if k == "&&" {
+            ll = _ladv(ll)
+            right := _lower_cond_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpAnd, nt.temp, left, right.temp, "", 0))
+            left = nt.temp
+        } else if k == "||" {
+            ll = _ladv(ll)
+            right := _lower_cond_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpOr, nt.temp, left, right.temp, "", 0))
+            left = nt.temp
+        } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
+            ll = _ladv(ll)
+            right := _lower_cond_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            left = nt.temp
+        } else {
+            running = false
+        }
+    }
+    // Skip remaining tokens until {
+    while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+    LT{l: ll, temp: left}
+}
+
 // --- Lower if expression ---
 
 fn _lower_if(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip if
     lb := "\{"
 
-    // Lower condition
-    mut cond := _lower_primary(ll)
+    // Lower condition using full expression parser
+    cond := _lower_if_cond(ll)
     ll = cond.l
-    // Handle comparison operators in condition
-    k := _lk(ll)
-    if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
-       k == "&&" || k == "||" {
-        ll = _ladv(ll)
-        right := _lower_primary(ll)
-        ll = right.l
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(_cmp_or_logic_op(k), nt.temp, cond.temp, right.temp, "", 0))
-        cond = LT{l: ll, temp: nt.temp}
-        ll = cond.l
-    }
-    // Skip remaining condition tokens until {
-    while _lk(ll) != lb && _lk(ll) != "EOF" {
-        if _lk(ll) == "IDENT" || _lk(ll) == "INT" || _lk(ll) == "STRING" || _lk(ll) == "true" || _lk(ll) == "false" {
-            ll = _ladv(ll)
-        } else {
-            ll = _ladv(ll)
-        }
-    }
 
     else_lbl := _lnew_label(ll)
     ll = else_lbl.l
@@ -943,29 +1131,33 @@ fn _lower_while(l: Lowerer) -> Lowerer {
     // Loop start
     ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
 
-    // Lower condition
-    mut cond := _lower_primary(ll)
+    // Lower condition using full expression parser (stops at {)
+    cond := _lower_if_cond(ll)
     ll = cond.l
-    k := _lk(ll)
-    if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
-       k == "&&" || k == "||" {
-        ll = _ladv(ll)
-        right := _lower_primary(ll)
-        ll = right.l
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(_cmp_or_logic_op(k), nt.temp, cond.temp, right.temp, "", 0))
-        cond = LT{l: ll, temp: nt.temp}
-        ll = cond.l
-    }
-    // Skip to {
-    while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
 
     // Branch to end if false
     ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond.temp, end_lbl.temp, "", 0))
 
+    // Set loop labels for break/continue
+    prev_start := ll.loop_start
+    prev_end := ll.loop_end
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp}
+
     // Body
     ll = _lower_block(ll)
+
+    // Restore loop labels
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: prev_start, loop_end: prev_end}
 
     // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -1028,6 +1220,124 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll
 }
 
+// --- Variant tag lookup ---
+
+fn _variant_tag(reg: TypeRegistry, name: str) -> i64 {
+    // Search all sum types for a variant with this name
+    mut si := 1
+    while si < reg.struct_defs.len() {
+        def := reg.struct_defs[si]
+        if def.is_sum {
+            mut vi := 1
+            while vi < def.variant_names.len() {
+                if def.variant_names[vi] == name {
+                    return vi  // 1-based tag
+                }
+                vi = vi + 1
+            }
+        }
+        si = si + 1
+    }
+    0  // not found
+}
+
+// --- Lower match subject (avoid greedy { consumption) ---
+
+fn _lower_match_subject(l: Lowerer) -> LT {
+    k := _lk(l)
+
+    if k == "IDENT" {
+        name := _lcur(l).text
+        mut ll := _ladv(l)
+
+        // Check for function call
+        if _lk(ll) == "(" {
+            sig := reg_find_fn(ll.registry, name)
+            if sig.name != "" {
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                mut first_arg := -1
+                mut arg_count := 0
+                while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                    ll = _lskip_nl(ll)
+                    arg := _lower_expr(ll)
+                    ll = arg.l
+                    if arg_count == 0 { first_arg = arg.temp }
+                    arg_count = arg_count + 1
+                    ll = _lskip_nl(ll)
+                    if _lk(ll) == "," { ll = _ladv(ll) }
+                }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut fa := 0
+                if first_arg >= 0 { fa = first_arg }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fa, arg_count, name, 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+        }
+
+        // Field access: obj.field (without consuming {)
+        if _lk(ll) == "." {
+            slot := _lenv_lookup(ll, name)
+            if slot >= 0 {
+                nt_base := _lnew_temp(ll)
+                ll = nt_base.l
+                ll = _lemit(ll, new_inst(OpLoad, nt_base.temp, slot, 0, "", 0))
+                mut cur := nt_base.temp
+                while _lk(ll) == "." {
+                    ll = _ladv(ll)
+                    if _lk(ll) == "IDENT" {
+                        field := _lcur(ll).text
+                        ll = _ladv(ll)
+                        nt := _lnew_temp(ll)
+                        ll = nt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, cur, 0, field, 0))
+                        cur = nt.temp
+                    }
+                }
+                return LT{l: ll, temp: cur}
+            }
+        }
+
+        // Variable reference (do NOT try struct literal — the { is the match body)
+        slot := _lenv_lookup(ll, name)
+        if slot >= 0 {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpLoad, nt.temp, slot, 0, "", 0))
+            return LT{l: ll, temp: nt.temp}
+        }
+
+        // Variant tag
+        tag := _variant_tag(ll.registry, name)
+        if tag > 0 {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpConst, nt.temp, tag, 0, "", 0))
+            return LT{l: ll, temp: nt.temp}
+        }
+
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if k == "INT" {
+        return _lower_primary(l)
+    }
+
+    if k == "(" {
+        return _lower_primary(l)
+    }
+
+    // Fallback
+    nt := _lnew_temp(l)
+    ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 0, 0, "", 0))
+    LT{l: ll, temp: nt.temp}
+}
+
 // --- Lower match expression ---
 
 fn _lower_match(l: Lowerer) -> LT {
@@ -1035,8 +1345,8 @@ fn _lower_match(l: Lowerer) -> LT {
     lb := "\{"
     rb := "\}"
 
-    // Lower subject
-    subj := _lower_primary(ll)
+    // Lower subject — use _lower_match_subject to avoid greedy struct literal parsing
+    subj := _lower_match_subject(ll)
     ll = subj.l
     while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
 
@@ -1048,25 +1358,98 @@ fn _lower_match(l: Lowerer) -> LT {
     ll = _ladv(ll)  // skip {
     ll = _lskip_nl(ll)
 
-    // Skip all arms (simplified — emit 0 for now)
+    // Allocate result temp and end label
+    result_nt := _lnew_temp(ll)
+    ll = result_nt.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+
+    // Process each arm
     while _lk(ll) != rb && _lk(ll) != "EOF" {
-        while _lk(ll) != "=>" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        ll = _lskip_nl(ll)
+        if _lk(ll) == rb || _lk(ll) == "EOF" { return LT{l: ll, temp: result_nt.temp} }
+
+        // Read pattern
+        pattern := _lcur(ll).text
+        is_wildcard := pattern == "_"
+
+        if is_wildcard {
+            ll = _ladv(ll)  // skip _
+        } else {
+            ll = _ladv(ll)  // skip variant name
+        }
+
+        // Skip optional pattern args (e.g., Red(x) or Point{x, y})
+        if _lk(ll) == "(" {
+            mut depth := 1
+            ll = _ladv(ll)
+            while depth > 0 && _lk(ll) != "EOF" {
+                if _lk(ll) == "(" { depth = depth + 1 }
+                if _lk(ll) == ")" { depth = depth - 1 }
+                if depth > 0 { ll = _ladv(ll) }
+            }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+        }
+
+        // Skip =>
         if _lk(ll) == "=>" { ll = _ladv(ll) }
         ll = _lskip_nl(ll)
-        if _lk(ll) == lb {
-            ll = _skip_braces_l(ll)
+
+        if is_wildcard {
+            // Wildcard: no comparison, just lower body
+            if _lk(ll) == lb {
+                ll = _lower_block(ll)
+                // Block doesn't produce a value, store 0
+                ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+            } else {
+                arm_result := _lower_expr(ll)
+                ll = arm_result.l
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+            }
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         } else {
-            // Skip expression
-            while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" && _lk(ll) != rb { ll = _ladv(ll) }
+            // Variant pattern: compare subject tag with variant tag
+            tag := _variant_tag(ll.registry, pattern)
+            next_lbl := _lnew_label(ll)
+            ll = next_lbl.l
+
+            // Load tag constant
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, tag, 0, "", 0))
+
+            // Compare subject == tag
+            cmp_nt := _lnew_temp(ll)
+            ll = cmp_nt.l
+            ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, tag_nt.temp, "", 0))
+
+            // Branch to next arm if not equal
+            ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+
+            // Lower arm body
+            if _lk(ll) == lb {
+                ll = _lower_block(ll)
+                ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+            } else {
+                arm_result := _lower_expr(ll)
+                ll = arm_result.l
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+            }
+
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+
+            // Next arm label
+            ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
         }
+
         ll = _lskip_nl(ll)
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
 
-    nt := _lnew_temp(ll)
-    ll = nt.l
-    ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
-    LT{l: ll, temp: nt.temp}
+    // End label
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+
+    LT{l: ll, temp: result_nt.temp}
 }
 
 fn _skip_braces_l(l: Lowerer) -> Lowerer {

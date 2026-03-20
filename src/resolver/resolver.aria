@@ -595,6 +595,111 @@ fn _resolve_block(r: Resolver) -> Resolver {
     _pop_scope(rr, parent_scope)
 }
 
+// --- Resolve struct literal { field: expr, ... } ---
+
+fn _resolve_struct_lit(r: Resolver) -> Resolver {
+    lb := "\{"
+    rb := "\}"
+    if _rk(r) != lb { return r }
+    mut rr := _radv(r)  // skip {
+    rr = _rskip_nl(rr)
+
+    while _rk(rr) != rb && _rk(rr) != "EOF" {
+        // Field name — skip without resolving
+        if _rk(rr) == "IDENT" {
+            rr = _radv(rr)  // skip field name
+            if _rk(rr) == ":" {
+                rr = _radv(rr)  // skip :
+                // Resolve the value expression — stop at , or }
+                rr = _resolve_struct_field_value(rr)
+            }
+        } else {
+            rr = _radv(rr)
+        }
+        rr = _rskip_nl(rr)
+        if _rk(rr) == "," {
+            rr = _radv(rr)
+            rr = _rskip_nl(rr)
+        }
+    }
+    if _rk(rr) == rb { rr = _radv(rr) }
+    rr
+}
+
+fn _resolve_struct_field_value(r: Resolver) -> Resolver {
+    mut rr := r
+    rb := "\}"
+    lb := "\{"
+    while _rk(rr) != "," && _rk(rr) != rb && _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
+        k := _rk(rr)
+        if k == "IDENT" {
+            if rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "." {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+        } else if k == lb {
+            // Nested struct literal or block
+            if rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "IDENT" {
+                rr = _resolve_struct_lit(rr)
+            } else {
+                rr = _resolve_block(rr)
+            }
+        } else if k == "(" {
+            rr = _radv(rr)
+            rr = _resolve_paren_contents(rr)
+        } else if k == "[" {
+            rr = _radv(rr)
+            rr = _resolve_bracket_contents(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    rr
+}
+
+fn _resolve_paren_contents(r: Resolver) -> Resolver {
+    mut rr := r
+    while _rk(rr) != ")" && _rk(rr) != "EOF" {
+        k := _rk(rr)
+        if k == "IDENT" {
+            if rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "." {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+        } else if k == "(" {
+            rr = _radv(rr)
+            rr = _resolve_paren_contents(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    if _rk(rr) == ")" { rr = _radv(rr) }
+    rr
+}
+
+fn _resolve_bracket_contents(r: Resolver) -> Resolver {
+    mut rr := r
+    while _rk(rr) != "]" && _rk(rr) != "EOF" {
+        k := _rk(rr)
+        if k == "IDENT" {
+            if rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "." {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+        } else if k == "[" {
+            rr = _radv(rr)
+            rr = _resolve_bracket_contents(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    if _rk(rr) == "]" { rr = _radv(rr) }
+    rr
+}
+
 // --- Resolve statement ---
 
 fn _resolve_stmt(r: Resolver) -> Resolver {
@@ -708,6 +813,7 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
     mut rr := r
     rb := "\}"
     mut consumed_value := false
+    mut after_dot := false
     while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" && _rk(rr) != rb {
         k := _rk(rr)
         lb := "\{"
@@ -726,7 +832,13 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
         }
 
         if k == "IDENT" {
-            rr = _resolve_ident(rr)
+            // After "." — field/method name, don't resolve as variable
+            if after_dot {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+            after_dot = false
             consumed_value = true
         } else if k == "if" {
             rr = _resolve_if(rr)
@@ -735,7 +847,12 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             rr = _resolve_match(rr)
             return rr
         } else if k == lb {
-            rr = _resolve_block(rr)
+            // Check if this is a struct literal (preceded by a type name IDENT)
+            if consumed_value && rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "IDENT" {
+                rr = _resolve_struct_lit(rr)
+            } else {
+                rr = _resolve_block(rr)
+            }
             consumed_value = true
         } else if k == "fn" {
             rr = _resolve_closure(rr)
@@ -749,6 +866,7 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             consumed_value = true
         } else {
             // Operators, opening delimiters, etc.
+            if k == "." { after_dot = true } else { after_dot = false }
             rr = _radv(rr)
             if k == "(" || k == "[" || k == "," || k == "." ||
                k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
@@ -781,12 +899,19 @@ fn _resolve_ident(r: Resolver) -> Resolver {
 
 fn _resolve_if(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "if"
-    // Condition
+    // Condition — skip identifiers after "."
     lb := "\{"
+    mut adot := false
     while _rk(rr) != lb && _rk(rr) != "EOF" {
         if _rk(rr) == "IDENT" {
-            rr = _resolve_ident(rr)
+            if adot {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+            adot = false
         } else {
+            if _rk(rr) == "." { adot = true } else { adot = false }
             rr = _radv(rr)
         }
     }
@@ -810,11 +935,14 @@ fn _resolve_match(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "match"
     lb := "\{"
     rb := "\}"
-    // Subject expression
+    // Subject expression — skip identifiers after "."
+    mut adot := false
     while _rk(rr) != lb && _rk(rr) != "EOF" {
         if _rk(rr) == "IDENT" {
-            rr = _resolve_ident(rr)
+            if adot { rr = _radv(rr) } else { rr = _resolve_ident(rr) }
+            adot = false
         } else {
+            if _rk(rr) == "." { adot = true } else { adot = false }
             rr = _radv(rr)
         }
     }
@@ -879,11 +1007,18 @@ fn _resolve_for(r: Resolver) -> Resolver {
 fn _resolve_while(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "while"
     lb := "\{"
-    // Condition
+    // Condition — skip identifiers after "."
+    mut adot := false
     while _rk(rr) != lb && _rk(rr) != "EOF" {
         if _rk(rr) == "IDENT" {
-            rr = _resolve_ident(rr)
+            if adot {
+                rr = _radv(rr)
+            } else {
+                rr = _resolve_ident(rr)
+            }
+            adot = false
         } else {
+            if _rk(rr) == "." { adot = true } else { adot = false }
             rr = _radv(rr)
         }
     }

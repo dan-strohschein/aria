@@ -1,0 +1,14 @@
+fn tag(c: i64) -> i64 = match c {
+    _ => c * 10
+}
+
+fn pick(x: i64) -> i64 = match x {
+    _ => 42
+}
+
+entry {
+    r := pick(1)
+    assert r == 42
+    t := tag(3)
+    assert t == 30
+}

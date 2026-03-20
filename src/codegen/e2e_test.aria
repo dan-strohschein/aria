@@ -1,26 +1,60 @@
 mod codegen
 
 entry {
-    // Test exit(42)
+    // Test 1: Exit-only binary (raw machine code)
     mut code42 := [0]
     code42 = code42.append(enc_movz(X0, 42, 0))
     code42 = code42.append(enc_movz(X16, 1, 0))
     code42 = code42.append(enc_svc(0x80))
     _ariaWriteBinaryFile("/tmp/aria_exit42", build_macho(code42, [0], 0))
 
-    // Test exit(7)
-    mut code7 := [0]
-    code7 = code7.append(enc_movz(X0, 7, 0))
-    code7 = code7.append(enc_movz(X16, 1, 0))
-    code7 = code7.append(enc_svc(0x80))
-    _ariaWriteBinaryFile("/tmp/aria_exit7", build_macho(code7, [0], 0))
+    // Test 2: Full pipeline — function call test
+    src := _ariaReadFile("testdata/programs/call_test.aria")
+    generate_from_source(src, "call_test.aria", "/tmp/aria_call_test")
 
-    // Test exit(0)
-    mut code0 := [0]
-    code0 = code0.append(enc_movz(X0, 0, 0))
-    code0 = code0.append(enc_movz(X16, 1, 0))
-    code0 = code0.append(enc_svc(0x80))
-    _ariaWriteBinaryFile("/tmp/aria_exit0", build_macho(code0, [0], 0))
+    // Test 3: Entry-only test
+    src2 := _ariaReadFile("testdata/programs/entry_test.aria")
+    generate_from_source(src2, "entry_test.aria", "/tmp/aria_entry_test")
 
-    println("wrote 3 test binaries")
+    // Test 4: Match expression with sum types
+    src3 := _ariaReadFile("testdata/programs/match_test.aria")
+    diags3 := generate_from_source(src3, "match_test.aria", "/tmp/aria_match_test")
+    if bag_has_errors(diags3) {
+        println("match_test had errors:")
+        println(render_json_bag(diags3))
+    } else {
+        println("match_test OK")
+    }
+
+    // Test 5: Struct allocation + field access
+    src5 := _ariaReadFile("testdata/programs/struct_test.aria")
+    diags5 := generate_from_source(src5, "struct_test.aria", "/tmp/aria_struct_test")
+    if bag_has_errors(diags5) {
+        println("struct_test had errors:")
+        println(render_json_bag(diags5))
+    } else {
+        println("struct_test OK")
+    }
+
+    // Test 6: Array operations
+    src6 := _ariaReadFile("testdata/programs/array_test.aria")
+    diags6 := generate_from_source(src6, "array_test.aria", "/tmp/aria_array_test")
+    if bag_has_errors(diags6) {
+        println("array_test had errors:")
+        println(render_json_bag(diags6))
+    } else {
+        println("array_test OK")
+    }
+
+    // Test 7: Integration test
+    src7 := _ariaReadFile("testdata/programs/integration_test.aria")
+    diags7 := generate_from_source(src7, "integration_test.aria", "/tmp/aria_integration_test")
+    if bag_has_errors(diags7) {
+        println("integration_test had errors:")
+        println(render_json_bag(diags7))
+    } else {
+        println("integration_test OK")
+    }
+
+    println("wrote test binaries")
 }
