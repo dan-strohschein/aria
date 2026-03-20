@@ -3,9 +3,13 @@ mod codegen
 // ============================================================
 // Code Generation Public API
 // Wires: lower → emit → macho → binary
+// Full pipeline: source → IR → ARM64 → Mach-O executable
 // ============================================================
 
 use diagnostic
+use lexer
+use resolver
+use checker
 
 // --- CodegenResult ---
 
@@ -14,130 +18,227 @@ struct CodegenResult {
     diagnostics: DiagnosticBag
 }
 
-// --- Generate a minimal exit-only binary (for testing) ---
-// This creates a Mach-O that just calls exit(code)
+// ============================================================
+// Full pipeline: generate executable from source
+// ============================================================
+
+fn generate_from_source(source: str, file: str, output_path: str) -> DiagnosticBag {
+    // 1. Lex
+    lex := tokenize(source, file)
+    toks := get_tokens(lex)
+    lex_diags := get_diagnostics(lex)
+    if bag_has_errors(lex_diags) { return lex_diags }
+
+    // 2. Resolve
+    rr := resolve(toks, file)
+    if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
+
+    // 3. Type check
+    cr := check(toks, rr.table, file)
+    if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
+
+    // 4. Lower to IR
+    m := lower(toks, cr.store, cr.registry, rr.table, file)
+
+    // 5. Emit machine code for each function
+    result := generate_from_module(m)
+
+    // 6. Write binary
+    _ariaWriteBinaryFile(output_path, result.binary)
+
+    result.diagnostics
+}
+
+// ============================================================
+// Generate binary from IR module
+// ============================================================
+
+fn generate_from_module(m: IrModule) -> CodegenResult {
+    // Emit each function to machine code
+    mut all_code := [0]
+    mut func_offsets_names := [""]
+    mut func_offsets_vals := [0]
+    mut entry_offset := 0
+
+    mut fi := 1
+    while fi < m.funcs.len() {
+        f := m.funcs[fi]
+        if f.name == "" {
+            fi = fi + 1
+            continue
+        }
+
+        // Record function offset (in instruction count)
+        cur_offset := all_code.len() - 1
+        func_offsets_names = func_offsets_names.append(f.name)
+        func_offsets_vals = func_offsets_vals.append(cur_offset)
+
+        if f.name == m.entry_func {
+            entry_offset = cur_offset
+        }
+
+        // Emit function
+        em := emit_function(f)
+        code := emitter_code(em)
+
+        // Append emitted code
+        mut ci := 1
+        while ci < code.len() {
+            all_code = all_code.append(code[ci])
+            ci = ci + 1
+        }
+
+        fi = fi + 1
+    }
+
+    // If no entry function was found but we have _main, use syscall approach
+    if m.entry_func == "" {
+        // No entry point — just exit(0)
+        all_code = all_code.append(enc_movz(X0, 0, 0))
+        all_code = all_code.append(enc_movz(X16, 1, 0))
+        all_code = all_code.append(enc_svc(0x80))
+    }
+
+    // Build string constant data
+    mut cstring_data := [0]
+    mut si := 1
+    while si < m.string_constants.len() {
+        s := m.string_constants[si]
+        mut chi := 0
+        while chi < s.len() {
+            cstring_data = cstring_data.append(_char_to_byte(s.charAt(chi)))
+            chi = chi + 1
+        }
+        cstring_data = cstring_data.append(0)  // null terminator
+        si = si + 1
+    }
+
+    // Build Mach-O
+    binary := build_macho(all_code, cstring_data, entry_offset)
+
+    CodegenResult{binary: binary, diagnostics: new_bag()}
+}
+
+// --- Helper: char to ASCII byte ---
+
+fn _char_to_byte(ch: str) -> i64 {
+    if ch == " " { return 32 }
+    if ch == "!" { return 33 }
+    if ch == "\"" { return 34 }
+    if ch == "#" { return 35 }
+    if ch == "%" { return 37 }
+    if ch == "&" { return 38 }
+    if ch == "'" { return 39 }
+    if ch == "(" { return 40 }
+    if ch == ")" { return 41 }
+    if ch == "*" { return 42 }
+    if ch == "+" { return 43 }
+    if ch == "," { return 44 }
+    if ch == "-" { return 45 }
+    if ch == "." { return 46 }
+    if ch == "/" { return 47 }
+    if ch == "0" { return 48 }
+    if ch == "1" { return 49 }
+    if ch == "2" { return 50 }
+    if ch == "3" { return 51 }
+    if ch == "4" { return 52 }
+    if ch == "5" { return 53 }
+    if ch == "6" { return 54 }
+    if ch == "7" { return 55 }
+    if ch == "8" { return 56 }
+    if ch == "9" { return 57 }
+    if ch == ":" { return 58 }
+    if ch == ";" { return 59 }
+    if ch == "<" { return 60 }
+    if ch == "=" { return 61 }
+    if ch == ">" { return 62 }
+    if ch == "?" { return 63 }
+    if ch == "@" { return 64 }
+    if ch == "A" { return 65 }
+    if ch == "B" { return 66 }
+    if ch == "C" { return 67 }
+    if ch == "D" { return 68 }
+    if ch == "E" { return 69 }
+    if ch == "F" { return 70 }
+    if ch == "G" { return 71 }
+    if ch == "H" { return 72 }
+    if ch == "I" { return 73 }
+    if ch == "J" { return 74 }
+    if ch == "K" { return 75 }
+    if ch == "L" { return 76 }
+    if ch == "M" { return 77 }
+    if ch == "N" { return 78 }
+    if ch == "O" { return 79 }
+    if ch == "P" { return 80 }
+    if ch == "Q" { return 81 }
+    if ch == "R" { return 82 }
+    if ch == "S" { return 83 }
+    if ch == "T" { return 84 }
+    if ch == "U" { return 85 }
+    if ch == "V" { return 86 }
+    if ch == "W" { return 87 }
+    if ch == "X" { return 88 }
+    if ch == "Y" { return 89 }
+    if ch == "Z" { return 90 }
+    if ch == "[" { return 91 }
+    if ch == "\\" { return 92 }
+    if ch == "]" { return 93 }
+    if ch == "^" { return 94 }
+    if ch == "_" { return 95 }
+    if ch == "a" { return 97 }
+    if ch == "b" { return 98 }
+    if ch == "c" { return 99 }
+    if ch == "d" { return 100 }
+    if ch == "e" { return 101 }
+    if ch == "f" { return 102 }
+    if ch == "g" { return 103 }
+    if ch == "h" { return 104 }
+    if ch == "i" { return 105 }
+    if ch == "j" { return 106 }
+    if ch == "k" { return 107 }
+    if ch == "l" { return 108 }
+    if ch == "m" { return 109 }
+    if ch == "n" { return 110 }
+    if ch == "o" { return 111 }
+    if ch == "p" { return 112 }
+    if ch == "q" { return 113 }
+    if ch == "r" { return 114 }
+    if ch == "s" { return 115 }
+    if ch == "t" { return 116 }
+    if ch == "u" { return 117 }
+    if ch == "v" { return 118 }
+    if ch == "w" { return 119 }
+    if ch == "x" { return 120 }
+    if ch == "y" { return 121 }
+    if ch == "z" { return 122 }
+    if ch == "\n" { return 10 }
+    if ch == "\t" { return 9 }
+    if ch == "\r" { return 13 }
+    63  // ?
+}
+
+// ============================================================
+// Convenience: generate exit-only binary (for testing)
+// ============================================================
 
 fn generate_exit_binary(exit_code: i64) -> [i64] {
-    // Build a minimal main function:
-    //   mov x0, #exit_code
-    //   mov x16, #1         ; syscall number for exit
-    //   svc #0x80           ; make syscall
     mut code := [0]
-    // Load exit code into x0
     mut imm_insts := enc_load_imm64(X0, exit_code)
     mut ii := 1
     while ii < imm_insts.len() {
         code = code.append(imm_insts[ii])
         ii = ii + 1
     }
-    // mov x16, #1 (exit syscall)
     code = code.append(enc_movz(X16, 1, 0))
-    // svc #0x80
     code = code.append(enc_svc(0x80))
-
-    // No string constants
-    cstrings := [0]
-
-    // Build Mach-O with entry at offset 0
-    build_macho(code, cstrings, 0)
+    build_macho(code, [0], 0)
 }
 
-// --- Generate a hello-world binary (for testing) ---
+// ============================================================
+// Write binary to file
+// ============================================================
 
-fn generate_hello_binary() -> [i64] {
-    // Build main that writes "hello, world!\n" to stdout then exits
-    //
-    // ARM64 macOS syscall:
-    //   x16 = syscall number (4 = write, 1 = exit)
-    //   x0 = fd (1 = stdout)
-    //   x1 = buffer pointer (pc-relative)
-    //   x2 = length
-    //   svc #0x80
-    //
-    // Note: on macOS, direct syscalls work for simple cases
-    // but production code should use libSystem
-
-    hello_str := "hello, world!\n"
-    str_len := 14
-
-    mut code := [0]
-
-    // Write syscall:
-    // mov x0, #1 (stdout)
-    code = code.append(enc_movz(X0, 1, 0))
-    // adr x1, string_data (PC-relative to cstring section)
-    // We'll compute this offset: code has N instructions,
-    // cstrings start right after code
-    // For now, use a placeholder that we'll fix up
-    code = code.append(enc_nop())  // placeholder for ADR x1
-
-    // mov x2, #str_len
-    code = code.append(enc_movz(X2, str_len, 0))
-    // mov x16, #4 (write syscall)
-    code = code.append(enc_movz(X16, 4, 0))
-    // svc #0x80
-    code = code.append(enc_svc(0x80))
-
-    // Exit syscall:
-    // mov x0, #0 (exit code)
-    code = code.append(enc_movz(X0, 0, 0))
-    // mov x16, #1 (exit syscall)
-    code = code.append(enc_movz(X16, 1, 0))
-    // svc #0x80
-    code = code.append(enc_svc(0x80))
-
-    // Now fix up the ADR instruction
-    // ADR x1 needs the offset from instruction position to string data
-    // code has (code.len()-1) instructions = N words
-    // String data starts at code_offset + N*4 in the file
-    // ADR offset is in bytes from the ADR instruction: (N-1)*4
-    // where N-1 = remaining instructions after ADR
-    code_count := code.len() - 1  // 8 instructions
-    adr_pos := 1  // second instruction (index 1 in code, 0-based in instruction stream)
-    remaining := code_count - adr_pos
-    byte_offset := remaining * 4
-    // Replace NOP with ADR x1, #byte_offset
-    mut fixed_code := [0]
-    mut ci := 1
-    while ci < code.len() {
-        if ci == adr_pos + 1 {  // +1 for sentinel
-            fixed_code = fixed_code.append(enc_adr(X1, byte_offset))
-        } else {
-            fixed_code = fixed_code.append(code[ci])
-        }
-        ci = ci + 1
-    }
-
-    // String data as bytes
-    mut cstrings := [0]
-    // "hello, world!\n"
-    cstrings = cstrings.append(104)  // h
-    cstrings = cstrings.append(101)  // e
-    cstrings = cstrings.append(108)  // l
-    cstrings = cstrings.append(108)  // l
-    cstrings = cstrings.append(111)  // o
-    cstrings = cstrings.append(44)   // ,
-    cstrings = cstrings.append(32)   // space
-    cstrings = cstrings.append(119)  // w
-    cstrings = cstrings.append(111)  // o
-    cstrings = cstrings.append(114)  // r
-    cstrings = cstrings.append(108)  // l
-    cstrings = cstrings.append(100)  // d
-    cstrings = cstrings.append(33)   // !
-    cstrings = cstrings.append(10)   // \n
-    cstrings = cstrings.append(0)    // null terminator
-
-    build_macho(fixed_code, cstrings, 0)
-}
-
-// --- Write binary bytes to file ---
-// Uses the bootstrap's _ariaWriteFile if available,
-// otherwise this is a stub that needs to be wired up
-
-fn write_binary_file(path: str, bytes: [i64]) -> bool {
-    // Convert byte array to string for file writing
-    // This is a workaround since we can't write raw bytes easily
-    // through the bootstrap's string-based file API
-    // For now, return false — actual file writing needs native I/O
-    false
+fn write_binary(path: str, binary: [i64]) -> bool {
+    _ariaWriteBinaryFile(path, binary)
+    true
 }

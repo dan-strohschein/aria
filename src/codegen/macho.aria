@@ -2,20 +2,21 @@ mod codegen
 
 // ============================================================
 // Mach-O 64-bit Executable Builder (ARM64 macOS)
-// Produces a minimal Mach-O binary that dynamically links
-// libSystem.B.dylib for _write, _exit, _malloc, _free.
+// Produces a Mach-O binary with embedded ad-hoc code signature.
+// No external tools (codesign, ld) required.
 // ============================================================
 
 // --- Mach-O constants ---
 
 const MH_MAGIC_64: i64 = 0xFEEDFACF
 const MH_EXECUTE: i64 = 2
+const MH_NOUNDEFS: i64 = 0x1
+const MH_DYLDLINK: i64 = 0x4
+const MH_TWOLEVEL: i64 = 0x80
 const MH_PIE: i64 = 0x200000
-
 const CPU_TYPE_ARM64: i64 = 0x0100000C
 const CPU_SUBTYPE_ALL: i64 = 0
 
-// Load command types
 const LC_SEGMENT_64: i64 = 0x19
 const LC_SYMTAB: i64 = 0x02
 const LC_DYSYMTAB: i64 = 0x0B
@@ -23,23 +24,29 @@ const LC_LOAD_DYLINKER: i64 = 0x0E
 const LC_LOAD_DYLIB: i64 = 0x0C
 const LC_MAIN: i64 = 0x80000028
 const LC_BUILD_VERSION: i64 = 0x32
-const LC_DYLD_INFO_ONLY: i64 = 0x80000022
+const LC_UUID: i64 = 0x1B
+const LC_DYLD_CHAINED_FIXUPS: i64 = 0x80000034
+const LC_DYLD_EXPORTS_TRIE: i64 = 0x80000033
+const LC_CODE_SIGNATURE: i64 = 0x1D
 
-// Section types
-const S_REGULAR: i64 = 0
-const S_CSTRING_LITERALS: i64 = 2
-const S_SYMBOL_STUBS: i64 = 8
-const S_NON_LAZY_SYMBOL_POINTERS: i64 = 6
-const S_LAZY_SYMBOL_POINTERS: i64 = 7
-
-// Protection flags
 const VM_PROT_NONE: i64 = 0
 const VM_PROT_READ: i64 = 1
 const VM_PROT_WRITE: i64 = 2
 const VM_PROT_EXECUTE: i64 = 4
 
-// ARM64 macOS page size
 const PAGE_SIZE: i64 = 16384
+
+// --- Code signature constants ---
+
+const CS_MAGIC_EMBEDDED_SIGNATURE: i64 = 0xFADE0CC0
+const CS_MAGIC_CODEDIRECTORY: i64 = 0xFADE0C02
+const CS_ADHOC: i64 = 0x2
+const CS_LINKER_SIGNED: i64 = 0x20000
+const CS_EXECSEG_MAIN_BINARY: i64 = 0x1
+const CS_HASHTYPE_SHA256: i64 = 2
+const CS_HASH_SIZE: i64 = 32
+const CS_PAGE_SIZE: i64 = 4096
+const CS_PAGE_SIZE_LOG2: i64 = 12
 
 // --- Byte buffer operations ---
 
@@ -82,6 +89,28 @@ fn _write_inst(buf: [i64], inst: i64) -> [i64] {
     _write_u32_le(buf, inst)
 }
 
+fn _write_u32_be(buf: [i64], val: i64) -> [i64] {
+    mut b := buf
+    b = b.append((val >> 24) & 0xFF)
+    b = b.append((val >> 16) & 0xFF)
+    b = b.append((val >> 8) & 0xFF)
+    b = b.append(val & 0xFF)
+    b
+}
+
+fn _write_u64_be(buf: [i64], val: i64) -> [i64] {
+    mut b := buf
+    b = b.append((val >> 56) & 0xFF)
+    b = b.append((val >> 48) & 0xFF)
+    b = b.append((val >> 40) & 0xFF)
+    b = b.append((val >> 32) & 0xFF)
+    b = b.append((val >> 24) & 0xFF)
+    b = b.append((val >> 16) & 0xFF)
+    b = b.append((val >> 8) & 0xFF)
+    b = b.append(val & 0xFF)
+    b
+}
+
 fn _write_zeros(buf: [i64], count: i64) -> [i64] {
     mut b := buf
     mut i := 0
@@ -96,29 +125,78 @@ fn _write_str(buf: [i64], s: str) -> [i64] {
     mut b := buf
     mut i := 0
     while i < s.len() {
-        ch := s.charAt(i)
-        // Get ASCII value of single char
-        mut val := 0
-        if ch == " " { val = 32 } else if ch == "!" { val = 33 } else if ch == "\"" { val = 34 } else if ch == "/" { val = 47 } else if ch == "." { val = 46 } else if ch == "-" { val = 45 } else if ch == "_" { val = 95 } else if ch == "0" { val = 48 } else if ch == "1" { val = 49 } else if ch == "2" { val = 50 } else if ch == "3" { val = 51 } else if ch == "4" { val = 52 } else if ch == "5" { val = 53 } else if ch == "6" { val = 54 } else if ch == "7" { val = 55 } else if ch == "8" { val = 56 } else if ch == "9" { val = 57 } else if ch == "A" { val = 65 } else if ch == "B" { val = 66 } else if ch == "C" { val = 67 } else if ch == "D" { val = 68 } else if ch == "E" { val = 69 } else if ch == "F" { val = 70 } else if ch == "G" { val = 71 } else if ch == "H" { val = 72 } else if ch == "I" { val = 73 } else if ch == "J" { val = 74 } else if ch == "K" { val = 75 } else if ch == "L" { val = 76 } else if ch == "M" { val = 77 } else if ch == "N" { val = 78 } else if ch == "O" { val = 79 } else if ch == "P" { val = 80 } else if ch == "Q" { val = 81 } else if ch == "R" { val = 82 } else if ch == "S" { val = 83 } else if ch == "T" { val = 84 } else if ch == "U" { val = 85 } else if ch == "V" { val = 86 } else if ch == "W" { val = 87 } else if ch == "X" { val = 88 } else if ch == "Y" { val = 89 } else if ch == "Z" { val = 90 } else if ch == "a" { val = 97 } else if ch == "b" { val = 98 } else if ch == "c" { val = 99 } else if ch == "d" { val = 100 } else if ch == "e" { val = 101 } else if ch == "f" { val = 102 } else if ch == "g" { val = 103 } else if ch == "h" { val = 104 } else if ch == "i" { val = 105 } else if ch == "j" { val = 106 } else if ch == "k" { val = 107 } else if ch == "l" { val = 108 } else if ch == "m" { val = 109 } else if ch == "n" { val = 110 } else if ch == "o" { val = 111 } else if ch == "p" { val = 112 } else if ch == "q" { val = 113 } else if ch == "r" { val = 114 } else if ch == "s" { val = 115 } else if ch == "t" { val = 116 } else if ch == "u" { val = 117 } else if ch == "v" { val = 118 } else if ch == "w" { val = 119 } else if ch == "x" { val = 120 } else if ch == "y" { val = 121 } else if ch == "z" { val = 122 } else if ch == "\n" { val = 10 } else if ch == "\t" { val = 9 } else { val = 63 }
-        b = b.append(val)
+        b = b.append(_char_to_byte_m(s.charAt(i)))
         i = i + 1
     }
     b
 }
 
-// Pad buffer to alignment boundary
-fn _pad_to(buf: [i64], align: i64) -> [i64] {
-    // buf length relative to start of file (buf[0] is sentinel)
-    size := buf.len() - 1  // subtract sentinel
-    remainder := size % align
-    if remainder == 0 { return buf }
-    _write_zeros(buf, align - remainder)
+fn _char_to_byte_m(ch: str) -> i64 {
+    if ch == "/" { return 47 }
+    if ch == "." { return 46 }
+    if ch == "_" { return 95 }
+    if ch == "-" { return 45 }
+    if ch >= "A" && ch <= "Z" {
+        if ch == "A" { return 65 }
+        if ch == "B" { return 66 }
+        if ch == "C" { return 67 }
+        if ch == "D" { return 68 }
+        if ch == "E" { return 69 }
+        if ch == "F" { return 70 }
+        if ch == "G" { return 71 }
+        if ch == "H" { return 72 }
+        if ch == "I" { return 73 }
+        if ch == "J" { return 74 }
+        if ch == "K" { return 75 }
+        if ch == "L" { return 76 }
+        if ch == "M" { return 77 }
+        if ch == "N" { return 78 }
+        if ch == "O" { return 79 }
+        if ch == "P" { return 80 }
+        if ch == "Q" { return 81 }
+        if ch == "R" { return 82 }
+        if ch == "S" { return 83 }
+        if ch == "T" { return 84 }
+        if ch == "U" { return 85 }
+        if ch == "V" { return 86 }
+        if ch == "W" { return 87 }
+        if ch == "X" { return 88 }
+        if ch == "Y" { return 89 }
+        if ch == "Z" { return 90 }
+    }
+    if ch >= "a" && ch <= "z" {
+        if ch == "a" { return 97 }
+        if ch == "b" { return 98 }
+        if ch == "c" { return 99 }
+        if ch == "d" { return 100 }
+        if ch == "e" { return 101 }
+        if ch == "f" { return 102 }
+        if ch == "g" { return 103 }
+        if ch == "h" { return 104 }
+        if ch == "i" { return 105 }
+        if ch == "j" { return 106 }
+        if ch == "k" { return 107 }
+        if ch == "l" { return 108 }
+        if ch == "m" { return 109 }
+        if ch == "n" { return 110 }
+        if ch == "o" { return 111 }
+        if ch == "p" { return 112 }
+        if ch == "q" { return 113 }
+        if ch == "r" { return 114 }
+        if ch == "s" { return 115 }
+        if ch == "t" { return 116 }
+        if ch == "u" { return 117 }
+        if ch == "v" { return 118 }
+        if ch == "w" { return 119 }
+        if ch == "x" { return 120 }
+        if ch == "y" { return 121 }
+        if ch == "z" { return 122 }
+    }
+    0
 }
 
-// Write a segment name (16 bytes, null-padded)
 fn _write_segname(buf: [i64], name: str) -> [i64] {
     mut b := _write_str(buf, name)
-    // Pad to 16 bytes
     mut remaining := 16 - name.len()
     while remaining > 0 {
         b = b.append(0)
@@ -127,219 +205,544 @@ fn _write_segname(buf: [i64], name: str) -> [i64] {
     b
 }
 
-// Write a section name (16 bytes, null-padded)
 fn _write_sectname(buf: [i64], name: str) -> [i64] = _write_segname(buf, name)
 
 // ============================================================
-// Build a minimal Mach-O executable
-// Takes: code_bytes (array of ARM64 instruction words),
-//        string_data (null-terminated strings concatenated)
-// Returns: complete Mach-O file as byte array
+// SHA-256 Implementation (for ad-hoc code signing)
+// All intermediate values are positive i64 < 2^32, masked with
+// 0xFFFFFFFF after each arithmetic operation.
+// ============================================================
+
+fn _sha256_rotr(x: i64, n: i64) -> i64 =
+    ((x >> n) | (x << (32 - n))) & 0xFFFFFFFF
+
+fn _sha256_ch(x: i64, y: i64, z: i64) -> i64 =
+    ((x & y) ^ ((x ^ 0xFFFFFFFF) & z)) & 0xFFFFFFFF
+
+fn _sha256_maj(x: i64, y: i64, z: i64) -> i64 =
+    ((x & y) ^ (x & z) ^ (y & z)) & 0xFFFFFFFF
+
+fn _sha256_bsig0(x: i64) -> i64 =
+    (_sha256_rotr(x, 2) ^ _sha256_rotr(x, 13) ^ _sha256_rotr(x, 22)) & 0xFFFFFFFF
+
+fn _sha256_bsig1(x: i64) -> i64 =
+    (_sha256_rotr(x, 6) ^ _sha256_rotr(x, 11) ^ _sha256_rotr(x, 25)) & 0xFFFFFFFF
+
+fn _sha256_ssig0(x: i64) -> i64 =
+    (_sha256_rotr(x, 7) ^ _sha256_rotr(x, 18) ^ (x >> 3)) & 0xFFFFFFFF
+
+fn _sha256_ssig1(x: i64) -> i64 =
+    (_sha256_rotr(x, 17) ^ _sha256_rotr(x, 19) ^ (x >> 10)) & 0xFFFFFFFF
+
+fn _sha256_k() -> [i64] {
+    mut k := [0]
+    k = k.append(0x428a2f98)
+    k = k.append(0x71374491)
+    k = k.append(0xb5c0fbcf)
+    k = k.append(0xe9b5dba5)
+    k = k.append(0x3956c25b)
+    k = k.append(0x59f111f1)
+    k = k.append(0x923f82a4)
+    k = k.append(0xab1c5ed5)
+    k = k.append(0xd807aa98)
+    k = k.append(0x12835b01)
+    k = k.append(0x243185be)
+    k = k.append(0x550c7dc3)
+    k = k.append(0x72be5d74)
+    k = k.append(0x80deb1fe)
+    k = k.append(0x9bdc06a7)
+    k = k.append(0xc19bf174)
+    k = k.append(0xe49b69c1)
+    k = k.append(0xefbe4786)
+    k = k.append(0x0fc19dc6)
+    k = k.append(0x240ca1cc)
+    k = k.append(0x2de92c6f)
+    k = k.append(0x4a7484aa)
+    k = k.append(0x5cb0a9dc)
+    k = k.append(0x76f988da)
+    k = k.append(0x983e5152)
+    k = k.append(0xa831c66d)
+    k = k.append(0xb00327c8)
+    k = k.append(0xbf597fc7)
+    k = k.append(0xc6e00bf3)
+    k = k.append(0xd5a79147)
+    k = k.append(0x06ca6351)
+    k = k.append(0x14292967)
+    k = k.append(0x27b70a85)
+    k = k.append(0x2e1b2138)
+    k = k.append(0x4d2c6dfc)
+    k = k.append(0x53380d13)
+    k = k.append(0x650a7354)
+    k = k.append(0x766a0abb)
+    k = k.append(0x81c2c92e)
+    k = k.append(0x92722c85)
+    k = k.append(0xa2bfe8a1)
+    k = k.append(0xa81a664b)
+    k = k.append(0xc24b8b70)
+    k = k.append(0xc76c51a3)
+    k = k.append(0xd192e819)
+    k = k.append(0xd6990624)
+    k = k.append(0xf40e3585)
+    k = k.append(0x106aa070)
+    k = k.append(0x19a4c116)
+    k = k.append(0x1e376c08)
+    k = k.append(0x2748774c)
+    k = k.append(0x34b0bcb5)
+    k = k.append(0x391c0cb3)
+    k = k.append(0x4ed8aa4a)
+    k = k.append(0x5b9cca4f)
+    k = k.append(0x682e6ff3)
+    k = k.append(0x748f82ee)
+    k = k.append(0x78a5636f)
+    k = k.append(0x84c87814)
+    k = k.append(0x8cc70208)
+    k = k.append(0x90befffa)
+    k = k.append(0xa4506ceb)
+    k = k.append(0xbef9a3f7)
+    k = k.append(0xc67178f2)
+    k
+}
+
+fn _sha256_pad(data: [i64]) -> [i64] {
+    data_len := data.len() - 1
+    bit_len := data_len * 8
+
+    // Copy data
+    mut padded := [0]
+    mut i := 1
+    while i < data.len() {
+        padded = padded.append(data[i])
+        i = i + 1
+    }
+
+    // Append 0x80
+    padded = padded.append(0x80)
+
+    // Pad with zeros until length ≡ 56 (mod 64)
+    cur_len := padded.len() - 1
+    rem := cur_len % 64
+    pad_zeros := (56 - rem + 64) % 64
+    mut pi := 0
+    while pi < pad_zeros {
+        padded = padded.append(0)
+        pi = pi + 1
+    }
+
+    // Append bit length as 64-bit big-endian
+    padded = padded.append((bit_len >> 56) & 0xFF)
+    padded = padded.append((bit_len >> 48) & 0xFF)
+    padded = padded.append((bit_len >> 40) & 0xFF)
+    padded = padded.append((bit_len >> 32) & 0xFF)
+    padded = padded.append((bit_len >> 24) & 0xFF)
+    padded = padded.append((bit_len >> 16) & 0xFF)
+    padded = padded.append((bit_len >> 8) & 0xFF)
+    padded = padded.append(bit_len & 0xFF)
+
+    padded
+}
+
+fn _sha256_hash(data: [i64]) -> [i64] {
+    k := _sha256_k()
+    padded := _sha256_pad(data)
+    n_blocks := (padded.len() - 1) / 64
+
+    mut h0 := 0x6a09e667
+    mut h1 := 0xbb67ae85
+    mut h2 := 0x3c6ef372
+    mut h3 := 0xa54ff53a
+    mut h4 := 0x510e527f
+    mut h5 := 0x9b05688c
+    mut h6 := 0x1f83d9ab
+    mut h7 := 0x5be0cd19
+
+    mut bi := 0
+    while bi < n_blocks {
+        base := bi * 64 + 1
+
+        // Build message schedule: 16 words from block, then 48 derived
+        // w uses sentinel array: w[1]=W[0], w[2]=W[1], ..., w[64]=W[63]
+        mut w := [0]
+        mut wi := 0
+        while wi < 16 {
+            off := base + wi * 4
+            word := (padded[off] << 24) | (padded[off + 1] << 16) | (padded[off + 2] << 8) | padded[off + 3]
+            w = w.append(word)
+            wi = wi + 1
+        }
+        while wi < 64 {
+            // W[wi] = ssig1(W[wi-2]) + W[wi-7] + ssig0(W[wi-15]) + W[wi-16]
+            // In 1-indexed array: w[wi-1]=W[wi-2], w[wi-6]=W[wi-7],
+            //   w[wi-14]=W[wi-15], w[wi-15]=W[wi-16]
+            s0 := _sha256_ssig0(w[wi - 14])
+            s1 := _sha256_ssig1(w[wi - 1])
+            new_w := (w[wi - 15] + s0 + w[wi - 6] + s1) & 0xFFFFFFFF
+            w = w.append(new_w)
+            wi = wi + 1
+        }
+
+        // Initialize working variables
+        mut wa := h0
+        mut wb := h1
+        mut wc := h2
+        mut wd := h3
+        mut we := h4
+        mut wf := h5
+        mut wg := h6
+        mut wh := h7
+
+        // 64 compression rounds
+        mut ri := 0
+        while ri < 64 {
+            sig1 := _sha256_bsig1(we)
+            ch := _sha256_ch(we, wf, wg)
+            temp1 := (wh + sig1 + ch + k[ri + 1] + w[ri + 1]) & 0xFFFFFFFF
+            sig0 := _sha256_bsig0(wa)
+            maj := _sha256_maj(wa, wb, wc)
+            temp2 := (sig0 + maj) & 0xFFFFFFFF
+
+            wh = wg
+            wg = wf
+            wf = we
+            we = (wd + temp1) & 0xFFFFFFFF
+            wd = wc
+            wc = wb
+            wb = wa
+            wa = (temp1 + temp2) & 0xFFFFFFFF
+
+            ri = ri + 1
+        }
+
+        h0 = (h0 + wa) & 0xFFFFFFFF
+        h1 = (h1 + wb) & 0xFFFFFFFF
+        h2 = (h2 + wc) & 0xFFFFFFFF
+        h3 = (h3 + wd) & 0xFFFFFFFF
+        h4 = (h4 + we) & 0xFFFFFFFF
+        h5 = (h5 + wf) & 0xFFFFFFFF
+        h6 = (h6 + wg) & 0xFFFFFFFF
+        h7 = (h7 + wh) & 0xFFFFFFFF
+
+        bi = bi + 1
+    }
+
+    // Output 32 bytes (8 × 4-byte big-endian words)
+    mut result := [0]
+    result = _write_u32_be(result, h0)
+    result = _write_u32_be(result, h1)
+    result = _write_u32_be(result, h2)
+    result = _write_u32_be(result, h3)
+    result = _write_u32_be(result, h4)
+    result = _write_u32_be(result, h5)
+    result = _write_u32_be(result, h6)
+    result = _write_u32_be(result, h7)
+    result
+}
+
+// ============================================================
+// Ad-hoc Code Signature Builder
+// Builds a SuperBlob containing a CodeDirectory with SHA-256
+// page hashes. No CMS signature needed for ad-hoc.
+// ============================================================
+
+fn _compute_cs_size(n_code_slots: i64) -> i64 {
+    // SuperBlob: magic(4) + length(4) + count(4) + BlobIndex(8) = 20
+    // CodeDirectory v0x20400: 88-byte header + 2-byte ident("-\0") + hashes
+    cd_size := 88 + 2 + n_code_slots * CS_HASH_SIZE
+    20 + cd_size
+}
+
+fn _build_code_signature(binary: [i64], code_limit: i64, text_filesize: i64) -> [i64] {
+    n_code_slots := (code_limit + CS_PAGE_SIZE - 1) / CS_PAGE_SIZE
+
+    // CodeDirectory layout
+    cd_header_size := 88
+    ident_len := 2  // "-\0"
+    hash_offset := cd_header_size + ident_len
+    ident_offset := cd_header_size
+    cd_size := cd_header_size + ident_len + n_code_slots * CS_HASH_SIZE
+
+    // SuperBlob layout
+    sb_header_size := 20  // 12 header + 8 BlobIndex
+    total_size := sb_header_size + cd_size
+    cd_blob_offset := sb_header_size
+
+    mut buf := [0]
+
+    // --- SuperBlob header (big-endian) ---
+    buf = _write_u32_be(buf, CS_MAGIC_EMBEDDED_SIGNATURE)
+    buf = _write_u32_be(buf, total_size)
+    buf = _write_u32_be(buf, 1)  // count: 1 blob
+    // BlobIndex[0]
+    buf = _write_u32_be(buf, 0)  // type: CSSLOT_CODEDIRECTORY
+    buf = _write_u32_be(buf, cd_blob_offset)
+
+    // --- CodeDirectory v0x20400 (big-endian) ---
+    buf = _write_u32_be(buf, CS_MAGIC_CODEDIRECTORY)
+    buf = _write_u32_be(buf, cd_size)
+    buf = _write_u32_be(buf, 0x20400)  // version
+    buf = _write_u32_be(buf, CS_ADHOC | CS_LINKER_SIGNED)
+    buf = _write_u32_be(buf, hash_offset)
+    buf = _write_u32_be(buf, ident_offset)
+    buf = _write_u32_be(buf, 0)  // nSpecialSlots
+    buf = _write_u32_be(buf, n_code_slots)
+    buf = _write_u32_be(buf, code_limit)
+    buf = buf.append(CS_HASH_SIZE)       // hashSize (1 byte)
+    buf = buf.append(CS_HASHTYPE_SHA256) // hashType (1 byte)
+    buf = buf.append(0)                  // platform (1 byte)
+    buf = buf.append(CS_PAGE_SIZE_LOG2)  // pageSize (1 byte)
+    buf = _write_u32_be(buf, 0)  // spare2
+    buf = _write_u32_be(buf, 0)  // scatterOffset (v0x20100)
+    buf = _write_u32_be(buf, 0)  // teamOffset (v0x20200)
+    buf = _write_u32_be(buf, 0)  // spare3 (v0x20300)
+    buf = _write_u64_be(buf, 0)  // codeLimit64 (v0x20300)
+    buf = _write_u64_be(buf, 0)  // execSegBase (v0x20400) — __TEXT starts at file offset 0
+    buf = _write_u64_be(buf, text_filesize)  // execSegLimit (v0x20400)
+    buf = _write_u64_be(buf, CS_EXECSEG_MAIN_BINARY)  // execSegFlags (v0x20400)
+
+    // Identifier string: "-\0"
+    buf = buf.append(45)  // '-'
+    buf = buf.append(0)   // null terminator
+
+    // --- Page hashes (SHA-256 of each 4096-byte page) ---
+    mut page := 0
+    while page < n_code_slots {
+        page_start := page * CS_PAGE_SIZE + 1  // +1 for sentinel
+        mut page_end := (page + 1) * CS_PAGE_SIZE + 1
+        if page_end > binary.len() {
+            page_end = binary.len()
+        }
+
+        // Extract page data into sub-array
+        mut page_data := [0]
+        mut pi := page_start
+        while pi < page_end {
+            page_data = page_data.append(binary[pi])
+            pi = pi + 1
+        }
+
+        // Compute SHA-256 hash
+        hash := _sha256_hash(page_data)
+
+        // Append 32-byte hash to signature
+        mut hi := 1
+        while hi < hash.len() {
+            buf = buf.append(hash[hi])
+            hi = hi + 1
+        }
+
+        page = page + 1
+    }
+
+    buf
+}
+
+// ============================================================
+// Build a Mach-O executable with embedded ad-hoc code signature
 // ============================================================
 
 fn build_macho(code_words: [i64], cstring_data: [i64], entry_offset: i64) -> [i64] {
-    // Calculate sizes
-    code_size := (code_words.len() - 1) * 4  // instructions are 4 bytes each, minus sentinel
-    cstring_size := cstring_data.len() - 1  // minus sentinel
+    code_size := (code_words.len() - 1) * 4
+    cstring_size := cstring_data.len() - 1
 
-    // Mach-O header: 32 bytes
-    // Load commands (calculated below)
-    // We need these load commands:
-    //   LC_SEGMENT_64 __PAGEZERO (72 bytes)
-    //   LC_SEGMENT_64 __TEXT with __text + __cstring sections (72 + 80*2 = 232 bytes)
-    //   LC_SEGMENT_64 __LINKEDIT (72 bytes)
-    //   LC_MAIN (24 bytes)
-    //   LC_LOAD_DYLINKER (varies, ~32 bytes aligned)
-    //   LC_LOAD_DYLIB libSystem (varies, ~56 bytes aligned)
-    //   LC_BUILD_VERSION (32 bytes)
-    //   LC_DYLD_INFO_ONLY (48 bytes)
-    //   LC_SYMTAB (24 bytes)
-    //   LC_DYSYMTAB (80 bytes)
-
-    // For simplicity, compute header + load commands size
+    // LC_MAIN + dyld approach (required on ARM64 macOS 26)
     header_size := 32
-    lc_pagezero := 72
-    lc_text := 72 + 80 + 80  // segment + 2 sections
-    lc_linkedit := 72
-    lc_main := 24
-    lc_dylinker := 32  // 28 rounded up to 8-byte align
-    lc_dylib := 56     // approximate, 8-byte aligned
-    lc_build := 32
-    lc_dyld_info := 48
-    lc_symtab := 24
-    lc_dysymtab := 80
-    ncmds := 10
-    total_lc_size := lc_pagezero + lc_text + lc_linkedit + lc_main + lc_dylinker + lc_dylib + lc_build + lc_dyld_info + lc_symtab + lc_dysymtab
-    header_and_lc := header_size + total_lc_size
+    lc_pagezero_size := 72
+    lc_text_size := 72 + 80  // segment + 1 section (__text)
+    lc_linkedit_size := 72
+    lc_chained_fixups_size := 16
+    lc_exports_trie_size := 16
+    lc_symtab_size := 24
+    lc_dysymtab_size := 80
+    lc_dylinker_size := 32
+    lc_uuid_size := 24
+    lc_build_size := 24  // no tools (ntools=0)
+    lc_main_size := 24
+    lc_dylib_size := 56
+    lc_code_sig_size := 16
 
-    // Text segment starts at page boundary
-    text_segment_offset := 0
-    text_segment_vmaddr := 0x100000000  // standard base address for ARM64 macOS
+    ncmds := 13
+    total_lc := lc_pagezero_size + lc_text_size + lc_linkedit_size + lc_chained_fixups_size + lc_exports_trie_size + lc_symtab_size + lc_dysymtab_size + lc_dylinker_size + lc_uuid_size + lc_build_size + lc_main_size + lc_dylib_size + lc_code_sig_size
+    header_and_lc := header_size + total_lc
 
-    // Code starts after header + load commands, page-aligned within __TEXT
-    code_offset := header_and_lc
-    // Align code_offset to 4 bytes (instructions must be 4-byte aligned)
+    text_vmaddr := 0x100000000
+
+    mut code_offset := header_and_lc
     if code_offset % 4 != 0 { code_offset = code_offset + (4 - code_offset % 4) }
 
-    cstring_offset := code_offset + code_size
-    text_segment_size_raw := cstring_offset + cstring_size
-    // Round up to page size
-    mut text_segment_filesize := text_segment_size_raw
-    if text_segment_filesize % PAGE_SIZE != 0 {
-        text_segment_filesize = text_segment_filesize + (PAGE_SIZE - text_segment_filesize % PAGE_SIZE)
+    mut text_filesize := code_offset + code_size + cstring_size
+    if text_filesize % PAGE_SIZE != 0 {
+        text_filesize = text_filesize + (PAGE_SIZE - text_filesize % PAGE_SIZE)
     }
 
-    // __LINKEDIT starts after __TEXT
-    linkedit_offset := text_segment_filesize
-    linkedit_vmaddr := text_segment_vmaddr + text_segment_filesize
-    linkedit_size := PAGE_SIZE  // minimal
+    linkedit_offset := text_filesize
+    linkedit_vmaddr := text_vmaddr + text_filesize
 
-    // Entry point is relative to __TEXT segment start
+    // LINKEDIT: chained_fixups(48) + exports_trie(8) + code_signature
+    fixups_data_size := 48
+    exports_data_size := 8
+    pre_sig_data := fixups_data_size + exports_data_size  // 56
+
+    code_limit := linkedit_offset + pre_sig_data
+    n_code_slots := (code_limit + CS_PAGE_SIZE - 1) / CS_PAGE_SIZE
+    sig_size := _compute_cs_size(n_code_slots)
+
+    linkedit_data_size := pre_sig_data + sig_size
+    mut linkedit_vmsize := linkedit_data_size
+    if linkedit_vmsize % PAGE_SIZE != 0 {
+        linkedit_vmsize = linkedit_vmsize + (PAGE_SIZE - linkedit_vmsize % PAGE_SIZE)
+    }
+
     entry_off := code_offset + entry_offset * 4
+    mh_flags := MH_PIE | MH_TWOLEVEL | MH_DYLDLINK | MH_NOUNDEFS
 
-    // --- Build the file ---
-    mut buf := [0]  // sentinel byte
+    mut buf := [0]
 
-    // --- Mach-O header (32 bytes) ---
+    // --- Header ---
     buf = _write_u32_le(buf, MH_MAGIC_64)
     buf = _write_u32_le(buf, CPU_TYPE_ARM64)
     buf = _write_u32_le(buf, CPU_SUBTYPE_ALL)
     buf = _write_u32_le(buf, MH_EXECUTE)
     buf = _write_u32_le(buf, ncmds)
-    buf = _write_u32_le(buf, total_lc_size)
-    buf = _write_u32_le(buf, MH_PIE)
-    buf = _write_u32_le(buf, 0)  // reserved
+    buf = _write_u32_le(buf, total_lc)
+    buf = _write_u32_le(buf, mh_flags)
+    buf = _write_u32_le(buf, 0)
 
-    // --- LC_SEGMENT_64 __PAGEZERO (72 bytes) ---
+    // --- __PAGEZERO ---
     buf = _write_u32_le(buf, LC_SEGMENT_64)
     buf = _write_u32_le(buf, 72)
     buf = _write_segname(buf, "__PAGEZERO")
-    buf = _write_u64_le(buf, 0)                      // vmaddr
-    buf = _write_u64_le(buf, 0x100000000)             // vmsize (4GB guard)
-    buf = _write_u64_le(buf, 0)                      // fileoff
-    buf = _write_u64_le(buf, 0)                      // filesize
-    buf = _write_u32_le(buf, VM_PROT_NONE)           // maxprot
-    buf = _write_u32_le(buf, VM_PROT_NONE)           // initprot
-    buf = _write_u32_le(buf, 0)                      // nsects
-    buf = _write_u32_le(buf, 0)                      // flags
+    buf = _write_u64_le(buf, 0)
+    buf = _write_u64_le(buf, 0x100000000)
+    buf = _write_u64_le(buf, 0)
+    buf = _write_u64_le(buf, 0)
+    buf = _write_u32_le(buf, VM_PROT_NONE)
+    buf = _write_u32_le(buf, VM_PROT_NONE)
+    buf = _write_u32_le(buf, 0)
+    buf = _write_u32_le(buf, 0)
 
-    // --- LC_SEGMENT_64 __TEXT with 2 sections (232 bytes) ---
+    // --- __TEXT ---
     text_prot := VM_PROT_READ | VM_PROT_EXECUTE
     buf = _write_u32_le(buf, LC_SEGMENT_64)
-    buf = _write_u32_le(buf, lc_text)
+    buf = _write_u32_le(buf, lc_text_size)
     buf = _write_segname(buf, "__TEXT")
-    buf = _write_u64_le(buf, text_segment_vmaddr)    // vmaddr
-    buf = _write_u64_le(buf, text_segment_filesize)  // vmsize
-    buf = _write_u64_le(buf, text_segment_offset)    // fileoff
-    buf = _write_u64_le(buf, text_segment_filesize)  // filesize
-    buf = _write_u32_le(buf, text_prot)              // maxprot
-    buf = _write_u32_le(buf, text_prot)              // initprot
-    buf = _write_u32_le(buf, 2)                      // nsects
-    buf = _write_u32_le(buf, 0)                      // flags
+    buf = _write_u64_le(buf, text_vmaddr)
+    buf = _write_u64_le(buf, text_filesize)
+    buf = _write_u64_le(buf, 0)
+    buf = _write_u64_le(buf, text_filesize)
+    buf = _write_u32_le(buf, text_prot)
+    buf = _write_u32_le(buf, text_prot)
+    buf = _write_u32_le(buf, 1)
+    buf = _write_u32_le(buf, 0)
 
-    // Section: __text (80 bytes)
+    // __text section
     buf = _write_sectname(buf, "__text")
     buf = _write_segname(buf, "__TEXT")
-    buf = _write_u64_le(buf, text_segment_vmaddr + code_offset)  // addr
-    buf = _write_u64_le(buf, code_size)              // size
-    buf = _write_u32_le(buf, code_offset)            // offset
-    buf = _write_u32_le(buf, 2)                      // align (2^2 = 4 bytes)
-    buf = _write_u32_le(buf, 0)                      // reloff
-    buf = _write_u32_le(buf, 0)                      // nreloc
-    buf = _write_u32_le(buf, 0x80000400)             // flags: S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS
-    buf = _write_u32_le(buf, 0)                      // reserved1
-    buf = _write_u32_le(buf, 0)                      // reserved2
-    buf = _write_u32_le(buf, 0)                      // reserved3
-
-    // Section: __cstring (80 bytes)
-    buf = _write_sectname(buf, "__cstring")
-    buf = _write_segname(buf, "__TEXT")
-    buf = _write_u64_le(buf, text_segment_vmaddr + cstring_offset)
-    buf = _write_u64_le(buf, cstring_size)
-    buf = _write_u32_le(buf, cstring_offset)
-    buf = _write_u32_le(buf, 0)                      // align
+    buf = _write_u64_le(buf, text_vmaddr + code_offset)
+    buf = _write_u64_le(buf, code_size)
+    buf = _write_u32_le(buf, code_offset)
+    buf = _write_u32_le(buf, 2)
     buf = _write_u32_le(buf, 0)
     buf = _write_u32_le(buf, 0)
-    buf = _write_u32_le(buf, S_CSTRING_LITERALS)
+    buf = _write_u32_le(buf, 0x80000400)
     buf = _write_u32_le(buf, 0)
     buf = _write_u32_le(buf, 0)
     buf = _write_u32_le(buf, 0)
 
-    // --- LC_SEGMENT_64 __LINKEDIT (72 bytes) ---
+    // --- __LINKEDIT ---
     buf = _write_u32_le(buf, LC_SEGMENT_64)
     buf = _write_u32_le(buf, 72)
     buf = _write_segname(buf, "__LINKEDIT")
     buf = _write_u64_le(buf, linkedit_vmaddr)
-    buf = _write_u64_le(buf, linkedit_size)
+    buf = _write_u64_le(buf, linkedit_vmsize)
     buf = _write_u64_le(buf, linkedit_offset)
-    buf = _write_u64_le(buf, linkedit_size)
-    rw_prot := VM_PROT_READ | VM_PROT_WRITE
-    buf = _write_u32_le(buf, rw_prot)
-    buf = _write_u32_le(buf, rw_prot)
+    buf = _write_u64_le(buf, linkedit_data_size)
+    buf = _write_u32_le(buf, VM_PROT_READ)
+    buf = _write_u32_le(buf, VM_PROT_READ)
     buf = _write_u32_le(buf, 0)
     buf = _write_u32_le(buf, 0)
 
-    // --- LC_MAIN (24 bytes) ---
-    buf = _write_u32_le(buf, LC_MAIN)
-    buf = _write_u32_le(buf, 24)
-    buf = _write_u64_le(buf, entry_off)              // entryoff
-    buf = _write_u64_le(buf, 0)                      // stacksize (default)
+    // --- LC_DYLD_CHAINED_FIXUPS ---
+    buf = _write_u32_le(buf, LC_DYLD_CHAINED_FIXUPS)
+    buf = _write_u32_le(buf, 16)
+    buf = _write_u32_le(buf, linkedit_offset)
+    buf = _write_u32_le(buf, fixups_data_size)
 
-    // --- LC_LOAD_DYLINKER (32 bytes) ---
-    dylinker := "/usr/lib/dyld"
-    buf = _write_u32_le(buf, LC_LOAD_DYLINKER)
-    buf = _write_u32_le(buf, 32)                     // cmdsize (padded)
-    buf = _write_u32_le(buf, 12)                     // name offset
-    buf = _write_str(buf, dylinker)
-    buf = _write_zeros(buf, 32 - 12 - dylinker.len())  // padding
+    // --- LC_DYLD_EXPORTS_TRIE ---
+    buf = _write_u32_le(buf, LC_DYLD_EXPORTS_TRIE)
+    buf = _write_u32_le(buf, 16)
+    buf = _write_u32_le(buf, linkedit_offset + fixups_data_size)
+    buf = _write_u32_le(buf, exports_data_size)
 
-    // --- LC_LOAD_DYLIB libSystem (56 bytes) ---
-    dylib := "/usr/lib/libSystem.B.dylib"
-    buf = _write_u32_le(buf, LC_LOAD_DYLIB)
-    buf = _write_u32_le(buf, 56)
-    buf = _write_u32_le(buf, 24)                     // name offset
-    buf = _write_u32_le(buf, 2)                      // timestamp
-    buf = _write_u32_le(buf, 0x010000)               // current_version
-    buf = _write_u32_le(buf, 0x010000)               // compat_version
-    buf = _write_str(buf, dylib)
-    buf = _write_zeros(buf, 56 - 24 - dylib.len())  // padding
-
-    // --- LC_BUILD_VERSION (32 bytes) ---
-    buf = _write_u32_le(buf, LC_BUILD_VERSION)
-    buf = _write_u32_le(buf, 32)
-    buf = _write_u32_le(buf, 1)                      // platform: MACOS
-    buf = _write_u32_le(buf, 0x000E0000)             // minos: 14.0
-    buf = _write_u32_le(buf, 0x000F0000)             // sdk: 15.0
-    buf = _write_u32_le(buf, 1)                      // ntools
-    buf = _write_u32_le(buf, 3)                      // tool: LD
-    buf = _write_u32_le(buf, 0x03000000)             // tool version
-
-    // --- LC_DYLD_INFO_ONLY (48 bytes) ---
-    buf = _write_u32_le(buf, LC_DYLD_INFO_ONLY)
-    buf = _write_u32_le(buf, 48)
-    buf = _write_u32_le(buf, 0)   // rebase_off
-    buf = _write_u32_le(buf, 0)   // rebase_size
-    buf = _write_u32_le(buf, 0)   // bind_off
-    buf = _write_u32_le(buf, 0)   // bind_size
-    buf = _write_u32_le(buf, 0)   // weak_bind_off
-    buf = _write_u32_le(buf, 0)   // weak_bind_size
-    buf = _write_u32_le(buf, 0)   // lazy_bind_off
-    buf = _write_u32_le(buf, 0)   // lazy_bind_size
-    buf = _write_u32_le(buf, 0)   // export_off
-    buf = _write_u32_le(buf, 0)   // export_size
-
-    // --- LC_SYMTAB (24 bytes) ---
+    // --- LC_SYMTAB (empty) ---
     buf = _write_u32_le(buf, LC_SYMTAB)
     buf = _write_u32_le(buf, 24)
-    buf = _write_u32_le(buf, 0)   // symoff
-    buf = _write_u32_le(buf, 0)   // nsyms
-    buf = _write_u32_le(buf, 0)   // stroff
-    buf = _write_u32_le(buf, 0)   // strsize
+    buf = _write_u32_le(buf, 0)
+    buf = _write_u32_le(buf, 0)
+    buf = _write_u32_le(buf, 0)
+    buf = _write_u32_le(buf, 0)
 
-    // --- LC_DYSYMTAB (80 bytes) ---
+    // --- LC_DYSYMTAB ---
     buf = _write_u32_le(buf, LC_DYSYMTAB)
     buf = _write_u32_le(buf, 80)
-    buf = _write_zeros(buf, 72)   // all fields zero for minimal binary
+    buf = _write_zeros(buf, 72)
+
+    // --- LC_LOAD_DYLINKER ---
+    buf = _write_u32_le(buf, LC_LOAD_DYLINKER)
+    buf = _write_u32_le(buf, 32)
+    buf = _write_u32_le(buf, 12)
+    buf = _write_str(buf, "/usr/lib/dyld")
+    buf = _write_zeros(buf, 32 - 12 - 13)
+
+    // --- LC_UUID (deterministic, derived from code) ---
+    buf = _write_u32_le(buf, LC_UUID)
+    buf = _write_u32_le(buf, 24)
+    // 16-byte UUID — use a fixed value (SHA-256 prefix of "aria-compiler")
+    buf = buf.append(0xA1)
+    buf = buf.append(0x1A)
+    buf = buf.append(0xC0)
+    buf = buf.append(0xDE)
+    buf = buf.append(0x00)
+    buf = buf.append(0x01)
+    buf = buf.append(0x02)
+    buf = buf.append(0x03)
+    buf = buf.append(0x04)
+    buf = buf.append(0x05)
+    buf = buf.append(0x06)
+    buf = buf.append(0x07)
+    buf = buf.append(0x08)
+    buf = buf.append(0x09)
+    buf = buf.append(0x0A)
+    buf = buf.append(0x0B)
+
+    // --- LC_BUILD_VERSION (no tools) ---
+    buf = _write_u32_le(buf, LC_BUILD_VERSION)
+    buf = _write_u32_le(buf, 24)
+    buf = _write_u32_le(buf, 1)           // platform: macOS
+    buf = _write_u32_le(buf, 0x001A0000)  // minos: 26.0
+    buf = _write_u32_le(buf, 0x001A0200)  // sdk: 26.2
+    buf = _write_u32_le(buf, 0)           // ntools: 0
+
+    // --- LC_MAIN ---
+    buf = _write_u32_le(buf, LC_MAIN)
+    buf = _write_u32_le(buf, 24)
+    buf = _write_u64_le(buf, entry_off)
+    buf = _write_u64_le(buf, 0)
+
+    // --- LC_LOAD_DYLIB ---
+    buf = _write_u32_le(buf, LC_LOAD_DYLIB)
+    buf = _write_u32_le(buf, 56)
+    buf = _write_u32_le(buf, 24)
+    buf = _write_u32_le(buf, 2)
+    buf = _write_u32_le(buf, 0x010000)
+    buf = _write_u32_le(buf, 0x010000)
+    dylib := "/usr/lib/libSystem.B.dylib"
+    buf = _write_str(buf, dylib)
+    buf = _write_zeros(buf, 56 - 24 - dylib.len())
+
+    // --- LC_CODE_SIGNATURE ---
+    buf = _write_u32_le(buf, LC_CODE_SIGNATURE)
+    buf = _write_u32_le(buf, 16)
+    buf = _write_u32_le(buf, linkedit_offset + pre_sig_data)
+    buf = _write_u32_le(buf, sig_size)
 
     // --- Pad to code_offset ---
     cur_size := buf.len() - 1
@@ -347,31 +750,54 @@ fn build_macho(code_words: [i64], cstring_data: [i64], entry_offset: i64) -> [i6
         buf = _write_zeros(buf, code_offset - cur_size)
     }
 
-    // --- Write code (ARM64 instructions) ---
-    mut ci := 1  // skip sentinel
+    // --- Code ---
+    mut ci := 1
     while ci < code_words.len() {
         buf = _write_inst(buf, code_words[ci])
         ci = ci + 1
     }
 
-    // --- Write cstring data ---
+    // --- Cstring data ---
     mut si := 1
     while si < cstring_data.len() {
         buf = buf.append(cstring_data[si])
         si = si + 1
     }
 
-    // --- Pad to text_segment_filesize ---
+    // --- Pad to text_filesize ---
     cur := buf.len() - 1
-    if cur < text_segment_filesize {
-        buf = _write_zeros(buf, text_segment_filesize - cur)
+    if cur < text_filesize {
+        buf = _write_zeros(buf, text_filesize - cur)
     }
 
-    // --- __LINKEDIT segment (minimal, empty for now) ---
-    buf = _write_zeros(buf, linkedit_size)
+    // --- LINKEDIT data: chained fixups (48 bytes) ---
+    buf = _write_u32_le(buf, 0)   // fixups_version
+    buf = _write_u32_le(buf, 32)  // starts_offset
+    buf = _write_u32_le(buf, 48)  // imports_offset
+    buf = _write_u32_le(buf, 48)  // symbols_offset
+    buf = _write_u32_le(buf, 0)   // imports_count
+    buf = _write_u32_le(buf, 1)   // imports_format
+    buf = _write_u32_le(buf, 0)   // symbols_format
+    buf = _write_u32_le(buf, 0)   // padding
+    buf = _write_u32_le(buf, 3)   // seg_count
+    buf = _write_u32_le(buf, 0)   // seg_info_offset[0]
+    buf = _write_u32_le(buf, 0)   // seg_info_offset[1]
+    buf = _write_u32_le(buf, 0)   // seg_info_offset[2]
+
+    // --- LINKEDIT data: exports trie (8 bytes) ---
+    buf = buf.append(0)
+    buf = buf.append(0)
+    buf = _write_zeros(buf, 6)
+
+    // --- Build and append ad-hoc code signature ---
+    cs := _build_code_signature(buf, code_limit, text_filesize)
+    mut csi := 1
+    while csi < cs.len() {
+        buf = buf.append(cs[csi])
+        csi = csi + 1
+    }
 
     buf
 }
 
-// --- Helper: buffer size (excluding sentinel) ---
 fn buf_size(buf: [i64]) -> i64 = buf.len() - 1

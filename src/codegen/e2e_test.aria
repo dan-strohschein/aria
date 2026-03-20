@@ -1,0 +1,26 @@
+mod codegen
+
+entry {
+    // Test exit(42)
+    mut code42 := [0]
+    code42 = code42.append(enc_movz(X0, 42, 0))
+    code42 = code42.append(enc_movz(X16, 1, 0))
+    code42 = code42.append(enc_svc(0x80))
+    _ariaWriteBinaryFile("/tmp/aria_exit42", build_macho(code42, [0], 0))
+
+    // Test exit(7)
+    mut code7 := [0]
+    code7 = code7.append(enc_movz(X0, 7, 0))
+    code7 = code7.append(enc_movz(X16, 1, 0))
+    code7 = code7.append(enc_svc(0x80))
+    _ariaWriteBinaryFile("/tmp/aria_exit7", build_macho(code7, [0], 0))
+
+    // Test exit(0)
+    mut code0 := [0]
+    code0 = code0.append(enc_movz(X0, 0, 0))
+    code0 = code0.append(enc_movz(X16, 1, 0))
+    code0 = code0.append(enc_svc(0x80))
+    _ariaWriteBinaryFile("/tmp/aria_exit0", build_macho(code0, [0], 0))
+
+    println("wrote 3 test binaries")
+}

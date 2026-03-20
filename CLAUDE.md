@@ -201,6 +201,29 @@ test "lexer tokenizes integer literal" {
 }
 ```
 
+## Native Binary Generation (ARM64 macOS)
+
+The compiler generates native Mach-O executables with embedded ad-hoc code signatures. No external tools (`codesign`, `ld`) are needed.
+
+### macOS ARM64 Mach-O Requirements
+
+These are **non-negotiable** — the kernel silently SIGKILLs binaries missing any of them:
+
+- **MH flags**: Must set all four: `MH_PIE | MH_TWOLEVEL | MH_DYLDLINK | MH_NOUNDEFS` (0x200085)
+- **LC_UUID**: Required by dyld — crashes with "missing LC_UUID" without it
+- **LC_DYLD_CHAINED_FIXUPS + LC_DYLD_EXPORTS_TRIE**: Modern dyld binding format (LC_DYLD_INFO_ONLY is obsolete)
+- **LC_MAIN + LC_LOAD_DYLINKER + LC_LOAD_DYLIB**: Dynamic linking through dyld is mandatory on ARM64
+- **LC_BUILD_VERSION**: Must target the host macOS version
+- **LINKEDIT strict validation**: No gaps between data regions, filesize = exact data total, vmsize page-aligned
+- **Ad-hoc code signature**: SuperBlob + CodeDirectory with SHA-256 page hashes, all big-endian
+
+### Debugging Mach-O issues
+
+- `codesign --verify --strict` can pass while the kernel still rejects the binary
+- `DYLD_PRINT_APIS=1 ./binary` — if no output appears, the kernel killed it before dyld started
+- Exit code 137 (SIGKILL) with no log output = Mach-O structure rejected by kernel
+- Compare against `cc -nostdlib -lSystem` reference binary with `otool -l`
+
 ## Common Pitfalls
 
 - **`[T]` is both generics and array type** — parser disambiguates by context

@@ -8,6 +8,7 @@ use diagnostic
 use lexer
 use resolver
 use checker
+use codegen
 
 // --- CLI Command ---
 
@@ -193,12 +194,27 @@ fn run_check(files: [str], format: str) -> i64 {
 }
 
 fn run_build(files: [str], format: str, target: str) -> i64 {
-    // TODO: Implement full pipeline + codegen
     if files.len() == 0 {
         println("error: no input files")
         return 1
     }
-    println("build: not yet implemented")
+    // Read source file
+    source := _ariaReadFile(files[0])
+    file := files[0]
+
+    // Determine output path (strip .aria, add no extension)
+    mut output := "a.out"
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+
+    // Run full pipeline: lex → resolve → check → lower → emit → write
+    diags := generate_from_source(source, file, output)
+    if bag_has_errors(diags) {
+        println(format_summary(diags))
+        return 1
+    }
+    println("built: " + output)
     0
 }
 

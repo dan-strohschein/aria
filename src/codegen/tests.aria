@@ -210,6 +210,39 @@ test "runtime externals" {
     assert exts.len() >= 4
 }
 
+// --- SHA-256 tests ---
+
+test "sha256 empty" {
+    data := [0]
+    hash := _sha256_hash(data)
+    assert hash.len() == 33  // sentinel + 32 bytes
+    // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    assert hash[1] == 0xE3
+    assert hash[2] == 0xB0
+    assert hash[3] == 0xC4
+    assert hash[4] == 0x42
+    assert hash[31] == 0xB8
+    assert hash[32] == 0x55
+}
+
+test "sha256 abc" {
+    mut data := [0]
+    data = data.append(97)
+    data = data.append(98)
+    data = data.append(99)
+    hash := _sha256_hash(data)
+    assert hash.len() == 33
+    // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    assert hash[1] == 0xBA
+    assert hash[2] == 0x78
+    assert hash[3] == 0x16
+    assert hash[4] == 0xBF
+    assert hash[29] == 0xF2
+    assert hash[30] == 0x00
+    assert hash[31] == 0x15
+    assert hash[32] == 0xAD
+}
+
 // --- Mach-O tests ---
 
 test "macho builds binary" {
@@ -228,12 +261,44 @@ test "macho builds binary" {
     assert binary[4] == 0xFE
 }
 
+test "macho has code signature" {
+    mut code := [0]
+    code = code.append(enc_movz(X0, 0, 0))
+    code = code.append(enc_movz(X16, 1, 0))
+    code = code.append(enc_svc(0x80))
+    binary := build_macho(code, [0], 0)
+    // File should be > 16KB (TEXT page + LINKEDIT)
+    assert binary.len() - 1 > 16384
+    // Code signature SuperBlob magic at LINKEDIT+56 (big-endian 0xFADE0CC0)
+    // LINKEDIT starts at 16384, chained_fixups(48) + exports(8) = 56
+    assert binary[16441] == 0xFA
+    assert binary[16442] == 0xDE
+    assert binary[16443] == 0x0C
+    assert binary[16444] == 0xC0
+}
+
 test "generate exit binary" {
     binary := generate_exit_binary(42)
     assert binary.len() > 100
     // Check Mach-O magic
     assert binary[1] == 0xCF
     assert binary[4] == 0xFE
+}
+
+// --- Full pipeline test ---
+
+test "generate from module" {
+    // Create a simple IR module: entry that exits with 0
+    mut m := new_ir_module()
+    mut f := new_ir_func("_main", 0, 0)
+    f = func_add_inst(f, new_inst(OpConst, 0, 0, 0, "", 0))
+    f = func_add_inst(f, new_inst(OpRet, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 1)
+    m = mod_add_func(m, f)
+    m = mod_set_entry(m, "_main")
+    result := generate_from_module(m)
+    assert result.binary.len() > 100
+    assert result.binary[1] == 0xCF
 }
 
 // --- Lowering tests ---
