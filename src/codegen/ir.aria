@@ -1,0 +1,197 @@
+mod codegen
+
+// ============================================================
+// Intermediate Representation
+// Linear IR with flat structs and tag enums.
+// Each instruction produces a value in a numbered temporary.
+// ============================================================
+
+// --- IR Operation ---
+
+type IrOp =
+    | OpConst
+    | OpConstStr
+    | OpAdd
+    | OpSub
+    | OpMul
+    | OpDiv
+    | OpMod
+    | OpNeg
+    | OpEq
+    | OpNeq
+    | OpLt
+    | OpGt
+    | OpLte
+    | OpGte
+    | OpAnd
+    | OpOr
+    | OpNot
+    | OpBitAnd
+    | OpBitOr
+    | OpBitXor
+    | OpShl
+    | OpShr
+    | OpCall
+    | OpRet
+    | OpRetVoid
+    | OpArg
+    | OpLocal
+    | OpStore
+    | OpLoad
+    | OpFieldGet
+    | OpFieldSet
+    | OpAlloc
+    | OpArrayNew
+    | OpArrayGet
+    | OpArraySet
+    | OpArrayLen
+    | OpArrayAppend
+    | OpStrLen
+    | OpStrConcat
+    | OpStrEq
+    | OpStrCharAt
+    | OpStrSubstring
+    | OpStrContains
+    | OpIntToStr
+    | OpJump
+    | OpBranchTrue
+    | OpBranchFalse
+    | OpLabel
+    | OpNop
+
+fn ir_op_name(op: IrOp) -> str = match op {
+    OpConst => "Const"
+    OpConstStr => "ConstStr"
+    OpAdd => "Add"
+    OpSub => "Sub"
+    OpMul => "Mul"
+    OpDiv => "Div"
+    OpMod => "Mod"
+    OpNeg => "Neg"
+    OpEq => "Eq"
+    OpNeq => "Neq"
+    OpLt => "Lt"
+    OpGt => "Gt"
+    OpLte => "Lte"
+    OpGte => "Gte"
+    OpAnd => "And"
+    OpOr => "Or"
+    OpNot => "Not"
+    OpBitAnd => "BitAnd"
+    OpBitOr => "BitOr"
+    OpBitXor => "BitXor"
+    OpShl => "Shl"
+    OpShr => "Shr"
+    OpCall => "Call"
+    OpRet => "Ret"
+    OpRetVoid => "RetVoid"
+    OpArg => "Arg"
+    OpLocal => "Local"
+    OpStore => "Store"
+    OpLoad => "Load"
+    OpFieldGet => "FieldGet"
+    OpFieldSet => "FieldSet"
+    OpAlloc => "Alloc"
+    OpArrayNew => "ArrayNew"
+    OpArrayGet => "ArrayGet"
+    OpArraySet => "ArraySet"
+    OpArrayLen => "ArrayLen"
+    OpArrayAppend => "ArrayAppend"
+    OpStrLen => "StrLen"
+    OpStrConcat => "StrConcat"
+    OpStrEq => "StrEq"
+    OpStrCharAt => "StrCharAt"
+    OpStrSubstring => "StrSubstring"
+    OpStrContains => "StrContains"
+    OpIntToStr => "IntToStr"
+    OpJump => "Jump"
+    OpBranchTrue => "BranchTrue"
+    OpBranchFalse => "BranchFalse"
+    OpLabel => "Label"
+    OpNop => "Nop"
+}
+
+// --- IR Instruction ---
+
+struct IrInst {
+    op: IrOp
+    dest: i64
+    arg1: i64
+    arg2: i64
+    s1: str
+    type_id: i64
+}
+
+fn _sentinel_inst() -> IrInst =
+    IrInst{op: OpNop, dest: 0, arg1: 0, arg2: 0, s1: "", type_id: 0}
+
+fn new_inst(op: IrOp, dest: i64, arg1: i64, arg2: i64, s1: str, tid: i64) -> IrInst =
+    IrInst{op: op, dest: dest, arg1: arg1, arg2: arg2, s1: s1, type_id: tid}
+
+// --- IR Function ---
+
+struct IrFunc {
+    name: str
+    param_count: i64
+    insts: [IrInst]
+    return_type: i64
+    local_count: i64
+}
+
+fn _sentinel_func() -> IrFunc =
+    IrFunc{name: "", param_count: 0, insts: [_sentinel_inst()], return_type: 0, local_count: 0}
+
+fn new_ir_func(name: str, param_count: i64, ret_type: i64) -> IrFunc =
+    IrFunc{name: name, param_count: param_count, insts: [_sentinel_inst()], return_type: ret_type, local_count: 0}
+
+fn func_add_inst(f: IrFunc, inst: IrInst) -> IrFunc =
+    IrFunc{name: f.name, param_count: f.param_count,
+           insts: f.insts.append(inst), return_type: f.return_type,
+           local_count: f.local_count}
+
+fn func_set_locals(f: IrFunc, count: i64) -> IrFunc =
+    IrFunc{name: f.name, param_count: f.param_count,
+           insts: f.insts, return_type: f.return_type,
+           local_count: count}
+
+fn func_inst_count(f: IrFunc) -> i64 = f.insts.len() - 1  // minus sentinel
+
+// --- IR Module ---
+
+struct IrModule {
+    funcs: [IrFunc]
+    string_constants: [str]
+    entry_func: str
+}
+
+fn new_ir_module() -> IrModule =
+    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: ""}
+
+fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule =
+    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func}
+
+fn mod_add_string(m: IrModule, s: str) -> IrModule =
+    IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func}
+
+fn mod_set_entry(m: IrModule, name: str) -> IrModule =
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name}
+
+fn mod_find_string(m: IrModule, s: str) -> i64 {
+    mut i := 1
+    while i < m.string_constants.len() {
+        if m.string_constants[i] == s { return i }
+        i = i + 1
+    }
+    0  // not found
+}
+
+fn mod_func_count(m: IrModule) -> i64 = m.funcs.len() - 1
+
+fn mod_find_func(m: IrModule, name: str) -> IrFunc {
+    mut i := 1
+    while i < m.funcs.len() {
+        if m.funcs[i].name == name { return m.funcs[i] }
+        i = i + 1
+    }
+    _sentinel_func()
+}

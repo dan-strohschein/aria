@@ -1,0 +1,163 @@
+mod codegen
+
+// ============================================================
+// Codegen Tests — ARM64 encoding and IR
+// ============================================================
+
+// --- ARM64 encoding tests ---
+// Verified against ARM Architecture Reference Manual
+
+test "enc movz x0 42" {
+    inst := enc_movz(X0, 42, 0)
+    // MOVZ X0, #42 = 0xD2800540
+    assert inst == 0xD2800540
+}
+
+test "enc movz x1 0" {
+    inst := enc_movz(X1, 0, 0)
+    // MOVZ X1, #0 = 0xD2800001
+    assert inst == 0xD2800001
+}
+
+test "enc add reg" {
+    inst := enc_add_reg(X0, X1, X2)
+    // ADD X0, X1, X2 = 0x8B020020
+    assert inst == 0x8B020020
+}
+
+test "enc sub reg" {
+    inst := enc_sub_reg(X0, X1, X2)
+    // SUB X0, X1, X2 = 0xCB020020
+    assert inst == 0xCB020020
+}
+
+test "enc ret" {
+    inst := enc_ret()
+    assert inst == 0xD65F03C0
+}
+
+test "enc nop" {
+    inst := enc_nop()
+    assert inst == 0xD503201F
+}
+
+test "enc add imm" {
+    inst := enc_add_imm(SP, SP, 16)
+    // ADD SP, SP, #16 = 0x910043FF
+    assert inst == 0x910043FF
+}
+
+test "enc sub imm" {
+    inst := enc_sub_imm(SP, SP, 16)
+    // SUB SP, SP, #16 = 0xD10043FF
+    assert inst == 0xD10043FF
+}
+
+test "enc mov reg" {
+    inst := enc_mov_reg(X0, X1)
+    // MOV X0, X1 = ORR X0, XZR, X1 = 0xAA0103E0
+    assert inst == 0xAA0103E0
+}
+
+test "enc b unconditional" {
+    inst := enc_b(4)
+    // B +4 = 0x14000004
+    assert inst == 0x14000004
+}
+
+test "enc bl call" {
+    inst := enc_bl(10)
+    // BL +10 = 0x9400000A
+    assert inst == 0x9400000A
+}
+
+test "enc b eq" {
+    inst := enc_b_cond(COND_EQ, 3)
+    // B.EQ +3 = 0x54000060
+    assert inst == 0x54000060
+}
+
+test "enc ldr imm" {
+    // LDR X0, [X29, #8] — offset is imm12 in units of 8 bytes, so imm12=1
+    inst := enc_ldr_imm(X0, X29, 1)
+    // 0xF94007A0
+    assert inst == 0xF94007A0
+}
+
+test "enc str imm" {
+    // STR X0, [X29, #8] — imm12=1
+    inst := enc_str_imm(X0, X29, 1)
+    // 0xF90007A0
+    assert inst == 0xF90007A0
+}
+
+test "enc cmp reg" {
+    inst := enc_cmp_reg(X0, X1)
+    // CMP X0, X1 = SUBS XZR, X0, X1 = 0xEB01001F
+    assert inst == 0xEB01001F
+}
+
+test "enc mul" {
+    inst := enc_mul(X0, X1, X2)
+    // MUL X0, X1, X2 = MADD X0, X1, X2, XZR
+    // 0x9B027C20
+    assert inst == 0x9B027C20
+}
+
+test "enc load imm64 small" {
+    code := enc_load_imm64(X0, 42)
+    // Should be [sentinel, MOVZ X0, #42]
+    assert code.len() == 2
+    assert code[1] == enc_movz(X0, 42, 0)
+}
+
+test "enc prologue" {
+    code := enc_prologue(32)
+    // [sentinel, STP x29 x30 pre, MOV x29 sp, SUB sp sp 32]
+    assert code.len() == 4
+}
+
+test "enc epilogue" {
+    code := enc_epilogue(32)
+    // [sentinel, ADD sp sp 32, LDP x29 x30 post, RET]
+    assert code.len() == 4
+}
+
+// --- IR type tests ---
+
+test "ir op name" {
+    assert ir_op_name(OpConst) == "Const"
+    assert ir_op_name(OpAdd) == "Add"
+    assert ir_op_name(OpRet) == "Ret"
+    assert ir_op_name(OpLabel) == "Label"
+}
+
+test "ir func add inst" {
+    mut f := new_ir_func("main", 0, 0)
+    inst := new_inst(OpConst, 1, 42, 0, "", 0)
+    f = func_add_inst(f, inst)
+    assert func_inst_count(f) == 1
+}
+
+test "ir module add func" {
+    mut m := new_ir_module()
+    f := new_ir_func("main", 0, 0)
+    m = mod_add_func(m, f)
+    assert mod_func_count(m) == 1
+}
+
+test "ir module add string" {
+    mut m := new_ir_module()
+    m = mod_add_string(m, "hello")
+    idx := mod_find_string(m, "hello")
+    assert idx == 1
+}
+
+test "ir module find func" {
+    mut m := new_ir_module()
+    f := new_ir_func("foo", 2, 1)
+    m = mod_add_func(m, f)
+    found := mod_find_func(m, "foo")
+    assert found.name == "foo"
+    assert found.param_count == 2
+}

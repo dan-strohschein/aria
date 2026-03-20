@@ -1,0 +1,420 @@
+mod codegen
+
+// ============================================================
+// ARM64 Instruction Encoding
+// Pure functions: parameters → 32-bit instruction word (as i64).
+// Reference: ARM Architecture Reference Manual for A-profile
+// ============================================================
+
+// --- Register constants ---
+
+const X0: i64 = 0
+const X1: i64 = 1
+const X2: i64 = 2
+const X3: i64 = 3
+const X4: i64 = 4
+const X5: i64 = 5
+const X6: i64 = 6
+const X7: i64 = 7
+const X8: i64 = 8
+const X9: i64 = 9
+const X10: i64 = 10
+const X11: i64 = 11
+const X12: i64 = 12
+const X13: i64 = 13
+const X14: i64 = 14
+const X15: i64 = 15
+const X16: i64 = 16
+const X17: i64 = 17
+const X18: i64 = 18
+const X19: i64 = 19
+const X20: i64 = 20
+const X21: i64 = 21
+const X22: i64 = 22
+const X23: i64 = 23
+const X24: i64 = 24
+const X25: i64 = 25
+const X26: i64 = 26
+const X27: i64 = 27
+const X28: i64 = 28
+const X29: i64 = 29
+const X30: i64 = 30
+const XZR: i64 = 31
+const SP: i64 = 31
+
+// --- Condition codes ---
+
+const COND_EQ: i64 = 0
+const COND_NE: i64 = 1
+const COND_CS: i64 = 2
+const COND_CC: i64 = 3
+const COND_MI: i64 = 4
+const COND_PL: i64 = 5
+const COND_VS: i64 = 6
+const COND_VC: i64 = 7
+const COND_HI: i64 = 8
+const COND_LS: i64 = 9
+const COND_GE: i64 = 10
+const COND_LT: i64 = 11
+const COND_GT: i64 = 12
+const COND_LE: i64 = 13
+const COND_AL: i64 = 14
+
+// --- Bit manipulation helpers ---
+
+fn _bits(val: i64, hi: i64, lo: i64) -> i64 {
+    // Extract bits [hi:lo] from val
+    width := hi - lo + 1
+    mask := (1 << width) - 1
+    (val >> lo) & mask
+}
+
+fn _encode_field(val: i64, width: i64, shift: i64) -> i64 {
+    // Place val (masked to width bits) at bit position shift
+    mask := (1 << width) - 1
+    (val & mask) << shift
+}
+
+// ============================================================
+// Data Processing — Immediate
+// ============================================================
+
+// MOVZ: Move wide with zero — Rd = imm16 << (hw * 16)
+// Encoding: sf=1 opc=10 100101 hw imm16 Rd
+fn enc_movz(rd: i64, imm16: i64, hw: i64) -> i64 {
+    base := 0xD2800000  // 1 10 100101 00 0000000000000000 00000
+    base | _encode_field(hw, 2, 21) | _encode_field(imm16, 16, 5) | _encode_field(rd, 5, 0)
+}
+
+// MOVK: Move wide with keep — Rd[hw*16 +: 16] = imm16
+// Encoding: sf=1 opc=11 100101 hw imm16 Rd
+fn enc_movk(rd: i64, imm16: i64, hw: i64) -> i64 {
+    base := 0xF2800000  // 1 11 100101 00 0000000000000000 00000
+    base | _encode_field(hw, 2, 21) | _encode_field(imm16, 16, 5) | _encode_field(rd, 5, 0)
+}
+
+// MOVN: Move wide with NOT — Rd = ~(imm16 << (hw * 16))
+fn enc_movn(rd: i64, imm16: i64, hw: i64) -> i64 {
+    base := 0x92800000  // 1 00 100101 00 0000000000000000 00000
+    base | _encode_field(hw, 2, 21) | _encode_field(imm16, 16, 5) | _encode_field(rd, 5, 0)
+}
+
+// ADD immediate: Rd = Rn + imm12
+// Encoding: sf=1 op=0 S=0 100010 sh=0 imm12 Rn Rd
+fn enc_add_imm(rd: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0x91000000  // 1 0 0 100010 0 000000000000 00000 00000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SUB immediate: Rd = Rn - imm12
+// Encoding: sf=1 op=1 S=0 100010 sh=0 imm12 Rn Rd
+fn enc_sub_imm(rd: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0xD1000000  // 1 1 0 100010 0 000000000000 00000 00000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SUBS immediate (for CMP): XZR = Rn - imm12, set flags
+fn enc_cmp_imm(rn: i64, imm12: i64) -> i64 {
+    base := 0xF1000000  // 1 1 1 100010 0 000000000000 00000 00000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(XZR, 5, 0)
+}
+
+// ============================================================
+// Data Processing — Register
+// ============================================================
+
+// ADD register: Rd = Rn + Rm
+// Encoding: sf=1 op=0 S=0 01011 shift=00 0 Rm imm6=000000 Rn Rd
+fn enc_add_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x8B000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SUB register: Rd = Rn - Rm
+fn enc_sub_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xCB000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SUBS register (for CMP): set flags from Rn - Rm
+fn enc_cmp_reg(rn: i64, rm: i64) -> i64 {
+    base := 0xEB000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(XZR, 5, 0)
+}
+
+// MUL: Rd = Rn * Rm (alias of MADD Rd, Rn, Rm, XZR)
+fn enc_mul(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x9B007C00  // MADD with Ra=XZR
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// SDIV: Rd = Rn / Rm (signed)
+fn enc_sdiv(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x9AC00C00
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// MOV register: Rd = Rm (alias of ORR Rd, XZR, Rm)
+fn enc_mov_reg(rd: i64, rm: i64) -> i64 {
+    base := 0xAA0003E0  // ORR Xd, XZR, Xm
+    base | _encode_field(rm, 5, 16) | _encode_field(rd, 5, 0)
+}
+
+// AND register: Rd = Rn & Rm
+fn enc_and_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x8A000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// ORR register: Rd = Rn | Rm
+fn enc_orr_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xAA000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// EOR register: Rd = Rn ^ Rm
+fn enc_eor_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0xCA000000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// LSL register: Rd = Rn << Rm (alias of LSLV)
+fn enc_lsl_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x9AC02000
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// ASR register: Rd = Rn >> Rm (arithmetic, alias of ASRV)
+fn enc_asr_reg(rd: i64, rn: i64, rm: i64) -> i64 {
+    base := 0x9AC02800
+    base | _encode_field(rm, 5, 16) | _encode_field(rn, 5, 5) | _encode_field(rd, 5, 0)
+}
+
+// NEG: Rd = -Rm (alias of SUB Rd, XZR, Rm)
+fn enc_neg(rd: i64, rm: i64) -> i64 = enc_sub_reg(rd, XZR, rm)
+
+// ============================================================
+// Conditional select
+// ============================================================
+
+// CSET: Rd = (cond) ? 1 : 0 (alias of CSINC Rd, XZR, XZR, invert(cond))
+fn enc_cset(rd: i64, cond: i64) -> i64 {
+    inv_cond := cond ^ 1
+    base := 0x9A9F07E0  // CSINC Xd, XZR, XZR, cond
+    base | _encode_field(inv_cond, 4, 12) | _encode_field(rd, 5, 0)
+}
+
+// ============================================================
+// Branch
+// ============================================================
+
+// B: unconditional branch, PC-relative offset (in instructions, not bytes)
+// Encoding: 000101 imm26
+fn enc_b(offset: i64) -> i64 {
+    base := 0x14000000
+    base | _encode_field(offset, 26, 0)
+}
+
+// BL: branch with link (call), PC-relative
+// Encoding: 100101 imm26
+fn enc_bl(offset: i64) -> i64 {
+    base := 0x94000000
+    base | _encode_field(offset, 26, 0)
+}
+
+// B.cond: conditional branch, PC-relative offset (in instructions)
+// Encoding: 01010100 imm19 0 cond
+fn enc_b_cond(cond: i64, offset: i64) -> i64 {
+    base := 0x54000000
+    base | _encode_field(offset, 19, 5) | _encode_field(cond, 4, 0)
+}
+
+// CBZ: compare and branch if zero
+// Encoding: sf=1 011010 0 imm19 Rt
+fn enc_cbz(rt: i64, offset: i64) -> i64 {
+    base := 0xB4000000
+    base | _encode_field(offset, 19, 5) | _encode_field(rt, 5, 0)
+}
+
+// CBNZ: compare and branch if not zero
+fn enc_cbnz(rt: i64, offset: i64) -> i64 {
+    base := 0xB5000000
+    base | _encode_field(offset, 19, 5) | _encode_field(rt, 5, 0)
+}
+
+// RET: return (branch to X30)
+fn enc_ret() -> i64 = 0xD65F03C0
+
+// BR: branch to register
+fn enc_br(rn: i64) -> i64 {
+    base := 0xD61F0000
+    base | _encode_field(rn, 5, 5)
+}
+
+// BLR: branch with link to register (indirect call)
+fn enc_blr(rn: i64) -> i64 {
+    base := 0xD63F0000
+    base | _encode_field(rn, 5, 5)
+}
+
+// ============================================================
+// Load / Store
+// ============================================================
+
+// LDR (unsigned offset): Rt = [Rn + imm12*8]
+// Encoding: 11 111 0 01 01 imm12 Rn Rt
+fn enc_ldr_imm(rt: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0xF9400000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// STR (unsigned offset): [Rn + imm12*8] = Rt
+// Encoding: 11 111 0 01 00 imm12 Rn Rt
+fn enc_str_imm(rt: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0xF9000000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// STP (pre-index): [Rn - imm*8] = (Rt1, Rt2); Rn -= imm*8
+// Used for: STP x29, x30, [sp, #-16]!
+// Encoding: 10 101 0 011 0 imm7 Rt2 Rn Rt1
+fn enc_stp_pre(rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64 {
+    base := 0xA9800000  // pre-index
+    base | _encode_field(imm7, 7, 15) | _encode_field(rt2, 5, 10) | _encode_field(rn, 5, 5) | _encode_field(rt1, 5, 0)
+}
+
+// LDP (post-index): (Rt1, Rt2) = [Rn]; Rn += imm*8
+// Used for: LDP x29, x30, [sp], #16
+// Encoding: 10 101 0 001 1 imm7 Rt2 Rn Rt1
+fn enc_ldp_post(rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64 {
+    base := 0xA8C00000  // post-index
+    base | _encode_field(imm7, 7, 15) | _encode_field(rt2, 5, 10) | _encode_field(rn, 5, 5) | _encode_field(rt1, 5, 0)
+}
+
+// STP (signed offset): [Rn + imm*8] = (Rt1, Rt2)
+// Encoding: 10 101 0 010 0 imm7 Rt2 Rn Rt1
+fn enc_stp_offset(rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64 {
+    base := 0xA9000000
+    base | _encode_field(imm7, 7, 15) | _encode_field(rt2, 5, 10) | _encode_field(rn, 5, 5) | _encode_field(rt1, 5, 0)
+}
+
+// LDP (signed offset): (Rt1, Rt2) = [Rn + imm*8]
+// Encoding: 10 101 0 010 1 imm7 Rt2 Rn Rt1
+fn enc_ldp_offset(rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64 {
+    base := 0xA9400000
+    base | _encode_field(imm7, 7, 15) | _encode_field(rt2, 5, 10) | _encode_field(rn, 5, 5) | _encode_field(rt1, 5, 0)
+}
+
+// LDRB (unsigned offset): Rt = zero_extend([Rn + imm12])
+fn enc_ldrb_imm(rt: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0x39400000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// STRB (unsigned offset): [Rn + imm12] = Rt[7:0]
+fn enc_strb_imm(rt: i64, rn: i64, imm12: i64) -> i64 {
+    base := 0x39000000
+    base | _encode_field(imm12, 12, 10) | _encode_field(rn, 5, 5) | _encode_field(rt, 5, 0)
+}
+
+// ============================================================
+// PC-relative addressing
+// ============================================================
+
+// ADRP: Rd = PC[page] + imm*4096
+// Encoding: 1 immlo[1:0] 10000 immhi[18:0] Rd
+fn enc_adrp(rd: i64, imm21: i64) -> i64 {
+    immlo := imm21 & 3
+    immhi := (imm21 >> 2) & 0x7FFFF
+    base := 0x90000000
+    base | _encode_field(immlo, 2, 29) | _encode_field(immhi, 19, 5) | _encode_field(rd, 5, 0)
+}
+
+// ADR: Rd = PC + imm21
+// Encoding: 0 immlo[1:0] 10000 immhi[18:0] Rd
+fn enc_adr(rd: i64, imm21: i64) -> i64 {
+    immlo := imm21 & 3
+    immhi := (imm21 >> 2) & 0x7FFFF
+    base := 0x10000000
+    base | _encode_field(immlo, 2, 29) | _encode_field(immhi, 19, 5) | _encode_field(rd, 5, 0)
+}
+
+// ============================================================
+// System
+// ============================================================
+
+// NOP
+fn enc_nop() -> i64 = 0xD503201F
+
+// SVC: supervisor call (system call)
+fn enc_svc(imm16: i64) -> i64 {
+    base := 0xD4000001
+    base | _encode_field(imm16, 16, 5)
+}
+
+// BRK: breakpoint
+fn enc_brk(imm16: i64) -> i64 {
+    base := 0xD4200000
+    base | _encode_field(imm16, 16, 5)
+}
+
+// ============================================================
+// Helpers for common patterns
+// ============================================================
+
+// Load a 64-bit immediate into register using MOVZ + up to 3 MOVK
+fn enc_load_imm64(rd: i64, val: i64) -> [i64] {
+    // Check if small positive (fits in MOVZ)
+    if val >= 0 && val < 65536 {
+        mut result := [0]
+        result = result.append(enc_movz(rd, val, 0))
+        return result
+    }
+    // Check if small negative (fits in MOVN)
+    if val < 0 && val >= 0 - 65536 {
+        inv := (0 - val) - 1
+        mut result := [0]
+        result = result.append(enc_movn(rd, inv & 0xFFFF, 0))
+        return result
+    }
+    // General case: MOVZ + MOVK for each non-zero 16-bit chunk
+    w0 := val & 0xFFFF
+    w1 := (val >> 16) & 0xFFFF
+    w2 := (val >> 32) & 0xFFFF
+    w3 := (val >> 48) & 0xFFFF
+
+    mut result := [0]
+    result = result.append(enc_movz(rd, w0, 0))
+    if w1 != 0 { result = result.append(enc_movk(rd, w1, 1)) }
+    if w2 != 0 { result = result.append(enc_movk(rd, w2, 2)) }
+    if w3 != 0 { result = result.append(enc_movk(rd, w3, 3)) }
+    result
+}
+
+// Function prologue: save frame pointer and link register
+fn enc_prologue(frame_size: i64) -> [i64] {
+    mut code := [0]
+    // STP x29, x30, [sp, #-16]!
+    code = code.append(enc_stp_pre(X29, X30, SP, -2))  // -2 * 8 = -16
+    // MOV x29, sp
+    code = code.append(enc_mov_reg(X29, SP))
+    // SUB sp, sp, #frame_size (if needed)
+    if frame_size > 0 {
+        code = code.append(enc_sub_imm(SP, SP, frame_size))
+    }
+    code
+}
+
+// Function epilogue: restore and return
+fn enc_epilogue(frame_size: i64) -> [i64] {
+    mut code := [0]
+    // ADD sp, sp, #frame_size
+    if frame_size > 0 {
+        code = code.append(enc_add_imm(SP, SP, frame_size))
+    }
+    // LDP x29, x30, [sp], #16
+    code = code.append(enc_ldp_post(X29, X30, SP, 2))  // 2 * 8 = 16
+    // RET
+    code = code.append(enc_ret())
+    code
+}
