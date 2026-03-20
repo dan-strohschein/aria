@@ -235,3 +235,54 @@ test "generate exit binary" {
     assert binary[1] == 0xCF
     assert binary[4] == 0xFE
 }
+
+// --- Lowering tests ---
+
+test "lower simple fn" {
+    source := "mod test\nfn foo() -> i64 = 42"
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    cr := check(toks, rr.table, "test.aria")
+    m := lower(toks, cr.store, cr.registry, rr.table, "test.aria")
+    f := mod_find_func(m, "foo")
+    assert f.name == "foo"
+    assert func_inst_count(f) > 0
+}
+
+test "lower fn with arithmetic" {
+    source := "mod test\nfn add(a: i64, b: i64) -> i64 = a + b"
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    cr := check(toks, rr.table, "test.aria")
+    m := lower(toks, cr.store, cr.registry, rr.table, "test.aria")
+    f := mod_find_func(m, "add")
+    assert f.name == "add"
+    assert f.param_count == 2
+}
+
+test "lower entry block" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 = 42\nentry " + lb + "\n    foo()\n" + rb
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    cr := check(toks, rr.table, "test.aria")
+    m := lower(toks, cr.store, cr.registry, rr.table, "test.aria")
+    assert m.entry_func == "_main"
+    f := mod_find_func(m, "_main")
+    assert f.name == "_main"
+}
+
+test "lower string constant" {
+    source := "mod test\nfn greet() -> str = \"hello\""
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    cr := check(toks, rr.table, "test.aria")
+    m := lower(toks, cr.store, cr.registry, rr.table, "test.aria")
+    idx := mod_find_string(m, "hello")
+    assert idx > 0
+}
