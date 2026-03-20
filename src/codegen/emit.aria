@@ -1,0 +1,388 @@
+mod codegen
+
+// ============================================================
+// Code Emitter — IR to ARM64 Machine Code
+// Spill-everything register allocation: every IR temporary
+// gets a stack slot. Load before use, store after define.
+// ============================================================
+
+// --- Emitter state ---
+
+struct Emitter {
+    code: [i64]
+    label_offsets: [i64]
+    pending_branches: [PendingBranch]
+    frame_size: i64
+    temp_count: i64
+}
+
+struct PendingBranch {
+    code_index: i64
+    label_id: i64
+    is_cond: bool
+    cond: i64
+    reg: i64
+    is_cbz: bool
+}
+
+fn _sentinel_branch() -> PendingBranch =
+    PendingBranch{code_index: 0, label_id: 0, is_cond: false, cond: 0, reg: 0, is_cbz: false}
+
+fn new_emitter() -> Emitter =
+    Emitter{
+        code: [0],
+        label_offsets: [0],
+        pending_branches: [_sentinel_branch()],
+        frame_size: 0,
+        temp_count: 0
+    }
+
+// --- Helpers ---
+
+fn _emit_word(e: Emitter, word: i64) -> Emitter =
+    Emitter{code: e.code.append(word), label_offsets: e.label_offsets,
+            pending_branches: e.pending_branches,
+            frame_size: e.frame_size, temp_count: e.temp_count}
+
+fn _emit_words(e: Emitter, words: [i64]) -> Emitter {
+    mut ee := e
+    mut i := 1  // skip sentinel
+    while i < words.len() {
+        ee = _emit_word(ee, words[i])
+        i = i + 1
+    }
+    ee
+}
+
+fn _code_pos(e: Emitter) -> i64 = e.code.len() - 1  // instructions emitted so far
+
+// Stack slot offset for a temporary (relative to frame pointer x29)
+// Temp 0 at [x29 - 8], temp 1 at [x29 - 16], etc.
+// LDR/STR use unsigned offset from base, so we use SP-relative addressing:
+// temp N at [sp + N*8]
+fn _slot_offset(temp: i64) -> i64 = temp  // offset in units of 8 bytes (LDR/STR scale)
+
+// Load temp from stack into register
+fn _load_temp(e: Emitter, reg: i64, temp: i64) -> Emitter =
+    _emit_word(e, enc_ldr_imm(reg, SP, _slot_offset(temp)))
+
+// Store register to temp's stack slot
+fn _store_temp(e: Emitter, reg: i64, temp: i64) -> Emitter =
+    _emit_word(e, enc_str_imm(reg, SP, _slot_offset(temp)))
+
+// Add a label at current position
+fn _set_label(e: Emitter, label_id: i64) -> Emitter {
+    pos := _code_pos(e)
+    // Grow label_offsets array if needed
+    mut labels := e.label_offsets
+    while labels.len() <= label_id + 1 {
+        labels = labels.append(0)
+    }
+    // Set the label position — reconstruct array with updated value
+    // Since we can't do random-access write, we rebuild
+    mut new_labels := [0]
+    mut i := 1
+    while i < labels.len() {
+        if i == label_id + 1 {
+            new_labels = new_labels.append(pos)
+        } else {
+            new_labels = new_labels.append(labels[i])
+        }
+        i = i + 1
+    }
+    Emitter{code: e.code, label_offsets: new_labels,
+            pending_branches: e.pending_branches,
+            frame_size: e.frame_size, temp_count: e.temp_count}
+}
+
+// Record a pending branch to patch later
+fn _add_pending(e: Emitter, label_id: i64, is_cond: bool, cond: i64, reg: i64, is_cbz: bool) -> Emitter {
+    pb := PendingBranch{code_index: _code_pos(e), label_id: label_id,
+                        is_cond: is_cond, cond: cond, reg: reg, is_cbz: is_cbz}
+    Emitter{code: e.code, label_offsets: e.label_offsets,
+            pending_branches: e.pending_branches.append(pb),
+            frame_size: e.frame_size, temp_count: e.temp_count}
+}
+
+// ============================================================
+// Emit a single IR function
+// ============================================================
+
+fn emit_function(f: IrFunc) -> Emitter {
+    // Calculate frame size: each temp gets 8 bytes
+    // Count max temp number used
+    mut max_temp := f.param_count
+    mut i := 1
+    while i < f.insts.len() {
+        inst := f.insts[i]
+        if inst.dest > max_temp { max_temp = inst.dest }
+        if inst.arg1 > max_temp && ir_op_name(inst.op) != "Const" && ir_op_name(inst.op) != "ConstStr" {
+            max_temp = inst.arg1
+        }
+        i = i + 1
+    }
+    temp_count := max_temp + 1
+    frame_raw := temp_count * 8
+    // Align frame to 16 bytes
+    mut frame := frame_raw
+    if frame % 16 != 0 { frame = frame + (16 - frame % 16) }
+
+    mut e := new_emitter()
+    e = Emitter{code: e.code, label_offsets: e.label_offsets,
+                pending_branches: e.pending_branches,
+                frame_size: frame, temp_count: temp_count}
+
+    // Prologue
+    e = _emit_words(e, enc_prologue(frame))
+
+    // Store incoming arguments to stack slots
+    // ARM64 ABI: first 8 args in x0-x7
+    mut pi := 0
+    while pi < f.param_count && pi < 8 {
+        e = _store_temp(e, pi, pi)  // store x(pi) to slot pi
+        pi = pi + 1
+    }
+
+    // Emit each IR instruction
+    i = 1
+    while i < f.insts.len() {
+        e = _emit_ir_inst(e, f.insts[i])
+        i = i + 1
+    }
+
+    // If function doesn't end with ret, add one
+    last_op := if f.insts.len() > 1 { ir_op_name(f.insts[f.insts.len() - 1].op) } else { "Nop" }
+    if last_op != "Ret" && last_op != "RetVoid" {
+        e = _emit_words(e, enc_epilogue(frame))
+    }
+
+    // Resolve branch fixups
+    e = _resolve_branches(e)
+    e
+}
+
+// ============================================================
+// Emit individual IR instructions
+// ============================================================
+
+fn _emit_ir_inst(e: Emitter, inst: IrInst) -> Emitter {
+    op := ir_op_name(inst.op)
+
+    if op == "Const" {
+        return _emit_const(e, inst)
+    }
+    if op == "ConstStr" {
+        // String constants handled differently — store pointer and length
+        // For now, just store the string index as an immediate
+        mut ee := _emit_words(e, enc_load_imm64(X0, inst.arg1))
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+    if op == "Add" { return _emit_binop(e, inst, "add") }
+    if op == "Sub" { return _emit_binop(e, inst, "sub") }
+    if op == "Mul" { return _emit_binop(e, inst, "mul") }
+    if op == "Div" { return _emit_binop(e, inst, "div") }
+    if op == "Mod" { return _emit_binop(e, inst, "mod") }
+    if op == "BitAnd" { return _emit_binop(e, inst, "and") }
+    if op == "BitOr" { return _emit_binop(e, inst, "or") }
+    if op == "BitXor" { return _emit_binop(e, inst, "xor") }
+    if op == "Shl" { return _emit_binop(e, inst, "shl") }
+    if op == "Shr" { return _emit_binop(e, inst, "shr") }
+
+    if op == "Neg" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _emit_word(ee, enc_neg(X0, X0))
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+    if op == "Not" {
+        // Logical not: dest = (arg1 == 0) ? 1 : 0
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _emit_word(ee, enc_cmp_imm(X0, 0))
+        ee = _emit_word(ee, enc_cset(X0, COND_EQ))
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+
+    if op == "Eq" { return _emit_cmp(e, inst, COND_EQ) }
+    if op == "Neq" { return _emit_cmp(e, inst, COND_NE) }
+    if op == "Lt" { return _emit_cmp(e, inst, COND_LT) }
+    if op == "Gt" { return _emit_cmp(e, inst, COND_GT) }
+    if op == "Lte" { return _emit_cmp(e, inst, COND_LE) }
+    if op == "Gte" { return _emit_cmp(e, inst, COND_GE) }
+
+    if op == "And" {
+        // Logical AND: both must be nonzero
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _load_temp(ee, X1, inst.arg2)
+        ee = _emit_word(ee, enc_and_reg(X0, X0, X1))
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+    if op == "Or" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _load_temp(ee, X1, inst.arg2)
+        ee = _emit_word(ee, enc_orr_reg(X0, X0, X1))
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+
+    if op == "Arg" {
+        // Load function argument — already stored in prologue
+        return e
+    }
+    if op == "Store" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+    if op == "Load" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _store_temp(ee, X0, inst.dest)
+        return ee
+    }
+
+    if op == "Ret" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _emit_words(ee, enc_epilogue(e.frame_size))
+        return ee
+    }
+    if op == "RetVoid" {
+        return _emit_words(e, enc_epilogue(e.frame_size))
+    }
+
+    if op == "Call" {
+        return _emit_call(e, inst)
+    }
+
+    if op == "Label" {
+        return _set_label(e, inst.arg1)
+    }
+    if op == "Jump" {
+        // Emit placeholder B instruction, patch later
+        mut ee := _add_pending(e, inst.arg1, false, 0, 0, false)
+        ee = _emit_word(ee, enc_nop())  // placeholder
+        return ee
+    }
+    if op == "BranchTrue" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _add_pending(ee, inst.arg2, false, 0, X0, false)
+        ee = _emit_word(ee, enc_nop())  // placeholder CBNZ
+        return ee
+    }
+    if op == "BranchFalse" {
+        mut ee := _load_temp(e, X0, inst.arg1)
+        ee = _add_pending(ee, inst.arg2, false, 0, X0, true)
+        ee = _emit_word(ee, enc_nop())  // placeholder CBZ
+        return ee
+    }
+
+    // Nop and unhandled ops
+    e
+}
+
+// --- Emit constant ---
+
+fn _emit_const(e: Emitter, inst: IrInst) -> Emitter {
+    mut ee := _emit_words(e, enc_load_imm64(X0, inst.arg1))
+    _store_temp(ee, X0, inst.dest)
+}
+
+// --- Emit binary operation ---
+
+fn _emit_binop(e: Emitter, inst: IrInst, kind: str) -> Emitter {
+    mut ee := _load_temp(e, X0, inst.arg1)
+    ee = _load_temp(ee, X1, inst.arg2)
+
+    if kind == "add" { ee = _emit_word(ee, enc_add_reg(X0, X0, X1)) } else if kind == "sub" { ee = _emit_word(ee, enc_sub_reg(X0, X0, X1)) } else if kind == "mul" { ee = _emit_word(ee, enc_mul(X0, X0, X1)) } else if kind == "div" { ee = _emit_word(ee, enc_sdiv(X0, X0, X1)) } else if kind == "mod" {
+        // a % b = a - (a / b) * b
+        ee = _emit_word(ee, enc_sdiv(X2, X0, X1))
+        ee = _emit_word(ee, enc_mul(X2, X2, X1))
+        ee = _emit_word(ee, enc_sub_reg(X0, X0, X2))
+    } else if kind == "and" { ee = _emit_word(ee, enc_and_reg(X0, X0, X1)) } else if kind == "or" { ee = _emit_word(ee, enc_orr_reg(X0, X0, X1)) } else if kind == "xor" { ee = _emit_word(ee, enc_eor_reg(X0, X0, X1)) } else if kind == "shl" { ee = _emit_word(ee, enc_lsl_reg(X0, X0, X1)) } else if kind == "shr" { ee = _emit_word(ee, enc_asr_reg(X0, X0, X1)) }
+
+    _store_temp(ee, X0, inst.dest)
+}
+
+// --- Emit comparison ---
+
+fn _emit_cmp(e: Emitter, inst: IrInst, cond: i64) -> Emitter {
+    mut ee := _load_temp(e, X0, inst.arg1)
+    ee = _load_temp(ee, X1, inst.arg2)
+    ee = _emit_word(ee, enc_cmp_reg(X0, X1))
+    ee = _emit_word(ee, enc_cset(X0, cond))
+    _store_temp(ee, X0, inst.dest)
+}
+
+// --- Emit function call ---
+
+fn _emit_call(e: Emitter, inst: IrInst) -> Emitter {
+    // inst.arg1 = first argument temp, inst.arg2 = arg count
+    // Load args into x0-x7
+    mut ee := e
+    mut ai := 0
+    while ai < inst.arg2 && ai < 8 {
+        ee = _load_temp(ee, ai, inst.arg1 + ai)
+        ai = ai + 1
+    }
+    // BL to function — for now emit NOP placeholder
+    // External calls will be patched by the linker
+    ee = _emit_word(ee, enc_bl(0))  // placeholder
+    // Store return value
+    if inst.dest > 0 {
+        ee = _store_temp(ee, X0, inst.dest)
+    }
+    ee
+}
+
+// ============================================================
+// Resolve branch fixups
+// ============================================================
+
+fn _resolve_branches(e: Emitter) -> Emitter {
+    mut code := e.code
+    mut i := 1
+    while i < e.pending_branches.len() {
+        pb := e.pending_branches[i]
+        label_idx := pb.label_id + 1
+        if label_idx > 0 && label_idx < e.label_offsets.len() {
+            target_pos := e.label_offsets[label_idx]
+            src_pos := pb.code_index
+            offset := target_pos - src_pos  // in instructions
+
+            // Patch the instruction
+            mut new_inst := 0
+            if pb.is_cbz {
+                new_inst = enc_cbz(pb.reg, offset)
+            } else if pb.reg > 0 {
+                new_inst = enc_cbnz(pb.reg, offset)
+            } else {
+                new_inst = enc_b(offset)
+            }
+
+            // Replace instruction in code array
+            code_idx := pb.code_index + 1  // +1 for sentinel
+            mut new_code := [0]
+            mut ci := 1
+            while ci < code.len() {
+                if ci == code_idx {
+                    new_code = new_code.append(new_inst)
+                } else {
+                    new_code = new_code.append(code[ci])
+                }
+                ci = ci + 1
+            }
+            code = new_code
+        }
+        i = i + 1
+    }
+    Emitter{code: code, label_offsets: e.label_offsets,
+            pending_branches: e.pending_branches,
+            frame_size: e.frame_size, temp_count: e.temp_count}
+}
+
+// --- Get emitted code words ---
+
+fn emitter_code(e: Emitter) -> [i64] = e.code
+
+fn emitter_code_size(e: Emitter) -> i64 = e.code.len() - 1

@@ -161,3 +161,77 @@ test "ir module find func" {
     assert found.name == "foo"
     assert found.param_count == 2
 }
+
+// --- Emitter tests ---
+
+test "emit const and ret" {
+    mut f := new_ir_func("test_fn", 0, 0)
+    f = func_add_inst(f, new_inst(OpConst, 0, 42, 0, "", 0))
+    f = func_add_inst(f, new_inst(OpRet, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 1)
+    em := emit_function(f)
+    // Should have emitted some code
+    assert emitter_code_size(em) > 0
+}
+
+test "emit add" {
+    mut f := new_ir_func("test_add", 2, 0)
+    f = func_add_inst(f, new_inst(OpAdd, 2, 0, 1, "", 0))
+    f = func_add_inst(f, new_inst(OpRet, 0, 2, 0, "", 0))
+    f = func_set_locals(f, 3)
+    em := emit_function(f)
+    assert emitter_code_size(em) > 0
+}
+
+test "emit branch and label" {
+    mut f := new_ir_func("test_branch", 0, 0)
+    f = func_add_inst(f, new_inst(OpConst, 0, 1, 0, "", 0))
+    f = func_add_inst(f, new_inst(OpBranchFalse, 0, 0, 0, "", 0))  // branch to label 0 if false
+    f = func_add_inst(f, new_inst(OpConst, 1, 42, 0, "", 0))
+    f = func_add_inst(f, new_inst(OpLabel, 0, 0, 0, "", 0))        // label 0
+    f = func_add_inst(f, new_inst(OpConst, 1, 0, 0, "", 0))
+    f = func_add_inst(f, new_inst(OpRet, 0, 1, 0, "", 0))
+    f = func_set_locals(f, 2)
+    em := emit_function(f)
+    assert emitter_code_size(em) > 0
+}
+
+// --- Runtime tests ---
+
+test "runtime module has funcs" {
+    m := build_runtime_module()
+    assert mod_func_count(m) >= 3
+    found := mod_find_func(m, "_aria_exit")
+    assert found.name == "_aria_exit"
+}
+
+test "runtime externals" {
+    exts := runtime_externals()
+    assert exts.len() >= 4
+}
+
+// --- Mach-O tests ---
+
+test "macho builds binary" {
+    // Minimal: just exit(0)
+    mut code := [0]
+    code = code.append(enc_movz(X0, 0, 0))
+    code = code.append(enc_movz(X16, 1, 0))
+    code = code.append(enc_svc(0x80))
+    cstrings := [0]
+    binary := build_macho(code, cstrings, 0)
+    // Binary should start with MH_MAGIC_64 bytes (CF FA ED FE in little-endian)
+    assert binary.len() > 100
+    assert binary[1] == 0xCF   // first byte of 0xFEEDFACF in LE
+    assert binary[2] == 0xFA
+    assert binary[3] == 0xED
+    assert binary[4] == 0xFE
+}
+
+test "generate exit binary" {
+    binary := generate_exit_binary(42)
+    assert binary.len() > 100
+    // Check Mach-O magic
+    assert binary[1] == 0xCF
+    assert binary[4] == 0xFE
+}

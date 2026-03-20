@@ -1,0 +1,143 @@
+mod codegen
+
+// ============================================================
+// Code Generation Public API
+// Wires: lower → emit → macho → binary
+// ============================================================
+
+use diagnostic
+
+// --- CodegenResult ---
+
+struct CodegenResult {
+    binary: [i64]
+    diagnostics: DiagnosticBag
+}
+
+// --- Generate a minimal exit-only binary (for testing) ---
+// This creates a Mach-O that just calls exit(code)
+
+fn generate_exit_binary(exit_code: i64) -> [i64] {
+    // Build a minimal main function:
+    //   mov x0, #exit_code
+    //   mov x16, #1         ; syscall number for exit
+    //   svc #0x80           ; make syscall
+    mut code := [0]
+    // Load exit code into x0
+    mut imm_insts := enc_load_imm64(X0, exit_code)
+    mut ii := 1
+    while ii < imm_insts.len() {
+        code = code.append(imm_insts[ii])
+        ii = ii + 1
+    }
+    // mov x16, #1 (exit syscall)
+    code = code.append(enc_movz(X16, 1, 0))
+    // svc #0x80
+    code = code.append(enc_svc(0x80))
+
+    // No string constants
+    cstrings := [0]
+
+    // Build Mach-O with entry at offset 0
+    build_macho(code, cstrings, 0)
+}
+
+// --- Generate a hello-world binary (for testing) ---
+
+fn generate_hello_binary() -> [i64] {
+    // Build main that writes "hello, world!\n" to stdout then exits
+    //
+    // ARM64 macOS syscall:
+    //   x16 = syscall number (4 = write, 1 = exit)
+    //   x0 = fd (1 = stdout)
+    //   x1 = buffer pointer (pc-relative)
+    //   x2 = length
+    //   svc #0x80
+    //
+    // Note: on macOS, direct syscalls work for simple cases
+    // but production code should use libSystem
+
+    hello_str := "hello, world!\n"
+    str_len := 14
+
+    mut code := [0]
+
+    // Write syscall:
+    // mov x0, #1 (stdout)
+    code = code.append(enc_movz(X0, 1, 0))
+    // adr x1, string_data (PC-relative to cstring section)
+    // We'll compute this offset: code has N instructions,
+    // cstrings start right after code
+    // For now, use a placeholder that we'll fix up
+    code = code.append(enc_nop())  // placeholder for ADR x1
+
+    // mov x2, #str_len
+    code = code.append(enc_movz(X2, str_len, 0))
+    // mov x16, #4 (write syscall)
+    code = code.append(enc_movz(X16, 4, 0))
+    // svc #0x80
+    code = code.append(enc_svc(0x80))
+
+    // Exit syscall:
+    // mov x0, #0 (exit code)
+    code = code.append(enc_movz(X0, 0, 0))
+    // mov x16, #1 (exit syscall)
+    code = code.append(enc_movz(X16, 1, 0))
+    // svc #0x80
+    code = code.append(enc_svc(0x80))
+
+    // Now fix up the ADR instruction
+    // ADR x1 needs the offset from instruction position to string data
+    // code has (code.len()-1) instructions = N words
+    // String data starts at code_offset + N*4 in the file
+    // ADR offset is in bytes from the ADR instruction: (N-1)*4
+    // where N-1 = remaining instructions after ADR
+    code_count := code.len() - 1  // 8 instructions
+    adr_pos := 1  // second instruction (index 1 in code, 0-based in instruction stream)
+    remaining := code_count - adr_pos
+    byte_offset := remaining * 4
+    // Replace NOP with ADR x1, #byte_offset
+    mut fixed_code := [0]
+    mut ci := 1
+    while ci < code.len() {
+        if ci == adr_pos + 1 {  // +1 for sentinel
+            fixed_code = fixed_code.append(enc_adr(X1, byte_offset))
+        } else {
+            fixed_code = fixed_code.append(code[ci])
+        }
+        ci = ci + 1
+    }
+
+    // String data as bytes
+    mut cstrings := [0]
+    // "hello, world!\n"
+    cstrings = cstrings.append(104)  // h
+    cstrings = cstrings.append(101)  // e
+    cstrings = cstrings.append(108)  // l
+    cstrings = cstrings.append(108)  // l
+    cstrings = cstrings.append(111)  // o
+    cstrings = cstrings.append(44)   // ,
+    cstrings = cstrings.append(32)   // space
+    cstrings = cstrings.append(119)  // w
+    cstrings = cstrings.append(111)  // o
+    cstrings = cstrings.append(114)  // r
+    cstrings = cstrings.append(108)  // l
+    cstrings = cstrings.append(100)  // d
+    cstrings = cstrings.append(33)   // !
+    cstrings = cstrings.append(10)   // \n
+    cstrings = cstrings.append(0)    // null terminator
+
+    build_macho(fixed_code, cstrings, 0)
+}
+
+// --- Write binary bytes to file ---
+// Uses the bootstrap's _ariaWriteFile if available,
+// otherwise this is a stub that needs to be wired up
+
+fn write_binary_file(path: str, bytes: [i64]) -> bool {
+    // Convert byte array to string for file writing
+    // This is a workaround since we can't write raw bytes easily
+    // through the bootstrap's string-based file API
+    // For now, return false — actual file writing needs native I/O
+    false
+}

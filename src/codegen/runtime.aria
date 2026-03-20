@@ -1,0 +1,92 @@
+mod codegen
+
+// ============================================================
+// Runtime Stubs
+// Built-in functions emitted as IR that get compiled into
+// every executable. Uses libSystem calls via dynamic linking.
+//
+// macOS ARM64 syscall convention (via libSystem wrappers):
+//   _write(fd, buf, len) — x0=fd, x1=buf, x2=len
+//   _exit(code)          — x0=code
+//   _malloc(size)         — x0=size, returns x0=ptr
+//   _free(ptr)           — x0=ptr
+// ============================================================
+
+// --- Build runtime IR functions ---
+
+// _aria_exit(code: i64)
+// Calls _exit from libSystem
+fn build_exit_func() -> IrFunc {
+    mut f := new_ir_func("_aria_exit", 1, 0)
+    // arg 0 = exit code, already in slot 0
+    // OpCall to _exit with 1 arg starting at temp 0
+    f = func_add_inst(f, new_inst(OpCall, 0, 0, 1, "_exit", 0))
+    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 1)
+    f
+}
+
+// _aria_write(fd: i64, ptr: i64, len: i64)
+// Calls _write from libSystem
+fn build_write_func() -> IrFunc {
+    mut f := new_ir_func("_aria_write", 3, 0)
+    // args: slot 0=fd, slot 1=ptr, slot 2=len
+    f = func_add_inst(f, new_inst(OpCall, 0, 0, 3, "_write", 0))
+    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 3)
+    f
+}
+
+// _aria_println_str(ptr: i64, len: i64)
+// Writes string to stdout followed by newline
+fn build_println_str_func() -> IrFunc {
+    mut f := new_ir_func("_aria_println_str", 2, 0)
+    // Write the string: _write(1, ptr, len)
+    // We need to set up: x0=1 (stdout), x1=ptr, x2=len
+    // args are in slots 0=ptr, 1=len
+    // Move ptr to temp 3, len to temp 4
+    // Set temp 2 = 1 (stdout fd)
+    f = func_add_inst(f, new_inst(OpConst, 2, 1, 0, "", 0))       // temp2 = 1 (stdout)
+    f = func_add_inst(f, new_inst(OpLoad, 3, 0, 0, "", 0))        // temp3 = arg0 (ptr)
+    f = func_add_inst(f, new_inst(OpLoad, 4, 1, 0, "", 0))        // temp4 = arg1 (len)
+    f = func_add_inst(f, new_inst(OpCall, 0, 2, 3, "_write", 0))  // _write(fd, ptr, len) — 3 args starting at temp 2
+    // Write newline
+    // For newline, we'll use a stack slot with '\n' (0x0A)
+    f = func_add_inst(f, new_inst(OpConst, 5, 10, 0, "", 0))      // temp5 = 10 (newline char)
+    // We need address of temp5 on stack — this requires knowing the stack layout
+    // For simplicity, this will be handled in emit as a special case
+    f = func_add_inst(f, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 6)
+    f
+}
+
+// _aria_malloc(size: i64) -> ptr
+fn build_malloc_func() -> IrFunc {
+    mut f := new_ir_func("_aria_malloc", 1, 0)
+    f = func_add_inst(f, new_inst(OpCall, 0, 0, 1, "_malloc", 0))
+    f = func_add_inst(f, new_inst(OpRet, 0, 0, 0, "", 0))
+    f = func_set_locals(f, 1)
+    f
+}
+
+// --- Collect all runtime functions ---
+
+fn build_runtime_module() -> IrModule {
+    mut m := new_ir_module()
+    m = mod_add_func(m, build_exit_func())
+    m = mod_add_func(m, build_write_func())
+    m = mod_add_func(m, build_println_str_func())
+    m = mod_add_func(m, build_malloc_func())
+    m
+}
+
+// --- External symbols needed from libSystem ---
+
+fn runtime_externals() -> [str] {
+    mut syms := [""]
+    syms = syms.append("_exit")
+    syms = syms.append("_write")
+    syms = syms.append("_malloc")
+    syms = syms.append("_free")
+    syms
+}
