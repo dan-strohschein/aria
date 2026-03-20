@@ -1,0 +1,1098 @@
+mod codegen
+
+// ============================================================
+// C Code Generator — Multi-Pass over Token Stream
+// Generates C source from Aria token stream + type info.
+// Pass 1: Emit type declarations (structs, sum types)
+// Pass 2: Emit function forward declarations
+// Pass 3: Emit function bodies
+// ============================================================
+
+use diagnostic
+use lexer
+use resolver
+use checker
+
+// --- Generator state ---
+
+struct Generator {
+    tokens: [Token]
+    pos: i64
+    store: TypeStore
+    registry: TypeRegistry
+    table: SymbolTable
+    diagnostics: DiagnosticBag
+    file: str
+    output: str
+    indent: i64
+    env_names: [str]
+    env_types: [i64]
+    tmp_counter: i64
+}
+
+// --- GenResult ---
+
+struct GenResult {
+    code: str
+    diagnostics: DiagnosticBag
+}
+
+// --- Constructor ---
+
+fn _new_gen(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTable, file: str) -> Generator =
+    Generator{
+        tokens: tokens,
+        pos: 0,
+        store: store,
+        registry: reg,
+        table: table,
+        diagnostics: new_bag(),
+        file: file,
+        output: "",
+        indent: 0,
+        env_names: [""],
+        env_types: [0],
+        tmp_counter: 0
+    }
+
+// --- Helpers ---
+
+fn _gcur(g: Generator) -> Token {
+    if g.pos >= g.tokens.len() {
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+    }
+    g.tokens[g.pos]
+}
+
+fn _gk(g: Generator) -> str = token_name(_gcur(g).kind)
+
+fn _gadv(g: Generator) -> Generator =
+    Generator{tokens: g.tokens, pos: g.pos + 1, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output, indent: g.indent,
+              env_names: g.env_names, env_types: g.env_types, tmp_counter: g.tmp_counter}
+
+fn _gset_pos(g: Generator, pos: i64) -> Generator =
+    Generator{tokens: g.tokens, pos: pos, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output, indent: g.indent,
+              env_names: g.env_names, env_types: g.env_types, tmp_counter: g.tmp_counter}
+
+fn _gskip_nl(g: Generator) -> Generator {
+    mut gg := g
+    while _gk(gg) == "NEWLINE" { gg = _gadv(gg) }
+    gg
+}
+
+fn _gwrite(g: Generator, s: str) -> Generator =
+    Generator{tokens: g.tokens, pos: g.pos, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output + s, indent: g.indent,
+              env_names: g.env_names, env_types: g.env_types, tmp_counter: g.tmp_counter}
+
+fn _gindent_str(g: Generator) -> str {
+    mut s := ""
+    mut i := 0
+    while i < g.indent {
+        s = s + "    "
+        i = i + 1
+    }
+    s
+}
+
+fn _gwriteln(g: Generator, s: str) -> Generator {
+    nl := "\n"
+    _gwrite(g, _gindent_str(g) + s + nl)
+}
+
+fn _gindent(g: Generator) -> Generator =
+    Generator{tokens: g.tokens, pos: g.pos, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output, indent: g.indent + 1,
+              env_names: g.env_names, env_types: g.env_types, tmp_counter: g.tmp_counter}
+
+fn _gdedent(g: Generator) -> Generator =
+    Generator{tokens: g.tokens, pos: g.pos, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output, indent: g.indent - 1,
+              env_names: g.env_names, env_types: g.env_types, tmp_counter: g.tmp_counter}
+
+fn _env_add_g(g: Generator, name: str, type_id: i64) -> Generator =
+    Generator{tokens: g.tokens, pos: g.pos, store: g.store, registry: g.registry,
+              table: g.table, diagnostics: g.diagnostics, file: g.file,
+              output: g.output, indent: g.indent,
+              env_names: g.env_names.append(name),
+              env_types: g.env_types.append(type_id),
+              tmp_counter: g.tmp_counter}
+
+fn _env_lookup_g(g: Generator, name: str) -> i64 {
+    mut i := g.env_names.len() - 1
+    while i > 0 {
+        if g.env_names[i] == name { return g.env_types[i] }
+        i = i - 1
+    }
+    TY_UNKNOWN
+}
+
+fn _is_cont_g(k: str) -> bool =
+    k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+    k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+    k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
+    k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
+    k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
+    k == "," || k == "=>" || k == "=" || k == "?." || k == "??"
+
+// ============================================================
+// Pass 1: Emit type declarations
+// ============================================================
+
+fn _emit_types(g: Generator) -> Generator {
+    mut gg := _gset_pos(g, 0)
+    gg = _gskip_nl(gg)
+    if gg.pos == 0 { gg = _gadv(gg) }
+
+    if _gk(gg) == "mod" { gg = _gadv(_gadv(gg)) }
+    gg = _gskip_nl(gg)
+    while _gk(gg) == "use" {
+        while _gk(gg) != "NEWLINE" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        gg = _gskip_nl(gg)
+    }
+
+    // Collect needed slice types
+    gg = _gwrite(gg, emit_slice_type("int64_t"))
+    gg = _gwrite(gg, emit_slice_append("int64_t"))
+    gg = _gwrite(gg, emit_slice_type("AriaStr"))
+    gg = _gwrite(gg, emit_slice_append("AriaStr"))
+
+    while _gk(gg) != "EOF" {
+        if _gk(gg) == "pub" { gg = _gadv(gg) }
+        k := _gk(gg)
+        if k == "type" || k == "struct" {
+            gg = _emit_type_decl(gg)
+        } else if k == "enum" {
+            gg = _emit_enum_decl(gg)
+        } else {
+            gg = _gadv(gg)
+        }
+        gg = _gskip_nl(gg)
+    }
+    gg
+}
+
+fn _emit_type_decl(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip type/struct
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+
+    // Check if sum type or struct
+    def := reg_find_struct(gg.registry, name)
+    if def.name == "" { return _skip_to_next_g(gg) }
+
+    if def.is_sum {
+        gg = _gwrite(gg, emit_sum_type_def(gg.registry, name))
+    } else {
+        gg = _gwrite(gg, emit_struct_def(gg.registry, gg.store, name))
+    }
+    _skip_to_next_g(gg)
+}
+
+fn _emit_enum_decl(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip enum
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+    // For now, emit as integer constants
+    gg = _gwrite(gg, "typedef int64_t " + name + ";\n\n")
+    _skip_to_next_g(gg)
+}
+
+fn _skip_to_next_g(g: Generator) -> Generator {
+    mut gg := _gadv(g)
+    lb := "\{"
+    rb := "\}"
+    while _gk(gg) != "EOF" {
+        if _gk(gg) == lb {
+            mut d := 1
+            gg = _gadv(gg)
+            while d > 0 && _gk(gg) != "EOF" {
+                if _gk(gg) == lb { d = d + 1 }
+                if _gk(gg) == rb { d = d - 1 }
+                if d > 0 { gg = _gadv(gg) }
+            }
+            if _gk(gg) == rb { gg = _gadv(gg) }
+            return gg
+        }
+        if _gk(gg) == "NEWLINE" {
+            gg = _gskip_nl(gg)
+            nk := _gk(gg)
+            if nk == "fn" || nk == "pub" || nk == "type" || nk == "struct" ||
+               nk == "enum" || nk == "trait" || nk == "impl" || nk == "const" ||
+               nk == "entry" || nk == "test" || nk == "EOF" {
+                return gg
+            }
+        }
+        gg = _gadv(gg)
+    }
+    gg
+}
+
+// ============================================================
+// Pass 2: Emit function forward declarations
+// ============================================================
+
+fn _emit_forward_decls(g: Generator) -> Generator {
+    mut gg := _gset_pos(g, 0)
+    gg = _gskip_nl(gg)
+    if gg.pos == 0 { gg = _gadv(gg) }
+
+    if _gk(gg) == "mod" { gg = _gadv(_gadv(gg)) }
+    gg = _gskip_nl(gg)
+    while _gk(gg) == "use" {
+        while _gk(gg) != "NEWLINE" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        gg = _gskip_nl(gg)
+    }
+
+    while _gk(gg) != "EOF" {
+        if _gk(gg) == "pub" { gg = _gadv(gg) }
+        k := _gk(gg)
+        if k == "fn" {
+            gg = _emit_fn_proto(gg)
+        } else if k == "const" {
+            gg = _emit_const_decl(gg)
+        } else if k == "impl" {
+            gg = _emit_impl_protos(gg)
+        } else {
+            gg = _gadv(gg)
+        }
+        gg = _gskip_nl(gg)
+    }
+    nl := "\n"
+    gg = _gwrite(gg, nl)
+    gg
+}
+
+fn _emit_fn_proto(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip fn
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+    sig := reg_find_fn(gg.registry, name)
+    if sig.name == "" { return _skip_to_next_g(gg) }
+
+    ret_c := aria_to_c_type(gg.store, sig.return_type)
+    mut proto := ret_c + " " + mangle_name(name) + "("
+
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        if pi > 1 { proto = proto + ", " }
+        pt := aria_to_c_type(gg.store, sig.param_types[pi])
+        proto = proto + pt + " " + mangle_name(sig.param_names[pi])
+        pi = pi + 1
+    }
+    if sig.param_names.len() <= 1 { proto = proto + "void" }
+    proto = proto + ");"
+
+    nl := "\n"
+    gg = _gwrite(gg, proto + nl)
+    _skip_to_next_g(gg)
+}
+
+fn _emit_const_decl(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip const
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+    gg = _gadv(gg)
+
+    mut ctype := "int64_t"
+    if _gk(gg) == ":" {
+        gg = _gadv(gg)
+        ta := _parse_type_ann_g(gg)
+        gg = ta.g
+        ctype = aria_to_c_type(gg.store, ta.type_id)
+    }
+
+    if _gk(gg) == "=" {
+        gg = _gadv(gg)
+        // Emit value
+        if ctype == "AriaStr" {
+            if _gk(gg) == "STRING" {
+                val := escape_c_string(_gcur(gg).text)
+                nl := "\n"
+                gg = _gwrite(gg, "static AriaStr " + mangle_name(name) + ";\n")
+                gg = _gadv(gg)
+            } else {
+                gg = _gadv(gg)
+            }
+        } else {
+            val := _gcur(gg).text
+            nl := "\n"
+            gg = _gwrite(gg, "static const " + ctype + " " + mangle_name(name) + " = " + val + ";" + nl)
+            gg = _gadv(gg)
+        }
+    }
+    _env_add_g(gg, name, resolve_type_name(gg.store, ctype))
+}
+
+fn _emit_impl_protos(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip impl
+    lb := "\{"
+    rb := "\}"
+    while _gk(gg) != lb && _gk(gg) != "EOF" { gg = _gadv(gg) }
+    if _gk(gg) != lb { return gg }
+    gg = _gadv(gg)
+    gg = _gskip_nl(gg)
+    while _gk(gg) != rb && _gk(gg) != "EOF" {
+        gg = _gskip_nl(gg)
+        if _gk(gg) == "pub" { gg = _gadv(gg) }
+        if _gk(gg) == "fn" {
+            gg = _emit_fn_proto(gg)
+        } else if _gk(gg) == rb || _gk(gg) == "EOF" {
+            return gg
+        } else {
+            gg = _gadv(gg)
+        }
+        gg = _gskip_nl(gg)
+    }
+    if _gk(gg) == rb { gg = _gadv(gg) }
+    gg
+}
+
+// ============================================================
+// Pass 3: Emit function bodies
+// ============================================================
+
+fn _emit_bodies(g: Generator) -> Generator {
+    mut gg := _gset_pos(g, 0)
+    gg = _gskip_nl(gg)
+    if gg.pos == 0 { gg = _gadv(gg) }
+
+    if _gk(gg) == "mod" { gg = _gadv(_gadv(gg)) }
+    gg = _gskip_nl(gg)
+    while _gk(gg) == "use" {
+        while _gk(gg) != "NEWLINE" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        gg = _gskip_nl(gg)
+    }
+
+    while _gk(gg) != "EOF" {
+        gg = _gskip_nl(gg)
+        if _gk(gg) == "EOF" { return gg }
+        if _gk(gg) == "pub" { gg = _gadv(gg) }
+
+        k := _gk(gg)
+        if k == "fn" {
+            gg = _emit_fn_body(gg)
+        } else if k == "impl" {
+            gg = _emit_impl_bodies(gg)
+        } else if k == "entry" {
+            gg = _emit_entry(gg)
+        } else if k == "test" {
+            gg = _skip_to_next_g(gg)  // Skip tests in build mode
+        } else if k == "type" || k == "struct" || k == "enum" || k == "trait" || k == "const" {
+            gg = _skip_to_next_g(gg)
+        } else {
+            gg = _gadv(gg)
+        }
+        gg = _gskip_nl(gg)
+    }
+    gg
+}
+
+fn _emit_fn_body(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip fn
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+    gg = _gadv(gg)
+
+    sig := reg_find_fn(gg.registry, name)
+    if sig.name == "" { return _skip_to_next_g(gg) }
+
+    // Emit signature
+    ret_c := aria_to_c_type(gg.store, sig.return_type)
+    mut header := ret_c + " " + mangle_name(name) + "("
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        if pi > 1 { header = header + ", " }
+        pt := aria_to_c_type(gg.store, sig.param_types[pi])
+        header = header + pt + " " + mangle_name(sig.param_names[pi])
+        pi = pi + 1
+    }
+    if sig.param_names.len() <= 1 { header = header + "void" }
+    header = header + ")"
+    nl := "\n"
+    gg = _gwrite(gg, header)
+
+    // Register params in env
+    pi = 1
+    while pi < sig.param_names.len() {
+        gg = _env_add_g(gg, sig.param_names[pi], sig.param_types[pi])
+        pi = pi + 1
+    }
+
+    // Skip to body
+    lb := "\{"
+    while _gk(gg) != "=" && _gk(gg) != lb && _gk(gg) != "EOF" {
+        gg = _gadv(gg)
+    }
+
+    if _gk(gg) == "=" {
+        gg = _gadv(gg)
+        lb2 := "\{"
+        rb2 := "\}"
+        gg = _gwrite(gg, " " + lb2 + nl)
+        gg = _gindent(gg)
+        gg = _gwrite(gg, _gindent_str(gg) + "return ")
+        gg = _emit_expr(gg)
+        gg = _gwrite(gg, ";" + nl)
+        gg = _gdedent(gg)
+        gg = _gwrite(gg, rb2 + nl + nl)
+    } else if _gk(gg) == lb {
+        gg = _emit_block(gg, sig.return_type)
+        gg = _gwrite(gg, nl)
+    } else {
+        gg = _gskip_nl(gg)
+        if _gk(gg) == lb {
+            gg = _emit_block(gg, sig.return_type)
+            gg = _gwrite(gg, nl)
+        }
+    }
+    gg
+}
+
+fn _emit_impl_bodies(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip impl
+    lb := "\{"
+    rb := "\}"
+    while _gk(gg) != lb && _gk(gg) != "EOF" { gg = _gadv(gg) }
+    if _gk(gg) != lb { return gg }
+    gg = _gadv(gg)
+    gg = _gskip_nl(gg)
+    while _gk(gg) != rb && _gk(gg) != "EOF" {
+        gg = _gskip_nl(gg)
+        if _gk(gg) == "pub" { gg = _gadv(gg) }
+        if _gk(gg) == "fn" {
+            gg = _emit_fn_body(gg)
+        } else if _gk(gg) == rb || _gk(gg) == "EOF" {
+            return gg
+        } else {
+            gg = _gadv(gg)
+        }
+        gg = _gskip_nl(gg)
+    }
+    if _gk(gg) == rb { gg = _gadv(gg) }
+    gg
+}
+
+fn _emit_entry(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip entry
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    gg = _gwrite(gg, "int main(int argc, char** argv)")
+    gg = _emit_block(gg, TY_UNIT)
+    gg = _gwrite(gg, nl)
+    gg
+}
+
+// --- Emit block ---
+
+fn _emit_block(g: Generator, ret_type: i64) -> Generator {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    if _gk(g) != lb { return g }
+    mut gg := _gadv(g)  // skip {
+    gg = _gskip_nl(gg)
+    gg = _gwrite(gg, " " + lb + nl)
+    gg = _gindent(gg)
+
+    while _gk(gg) != rb && _gk(gg) != "EOF" {
+        gg = _emit_stmt(gg)
+        gg = _gskip_nl(gg)
+    }
+    if _gk(gg) == rb { gg = _gadv(gg) }
+    gg = _gdedent(gg)
+    gg = _gwriteln(gg, rb)
+    gg
+}
+
+// --- Emit statement ---
+
+fn _emit_stmt(g: Generator) -> Generator {
+    k := _gk(g)
+    nl := "\n"
+
+    if k == "mut" { return _emit_mut_binding(g) }
+    if k == "return" { return _emit_return(g) }
+    if k == "break" {
+        gg := _gadv(g)
+        return _gwriteln(gg, "break;")
+    }
+    if k == "continue" {
+        gg := _gadv(g)
+        return _gwriteln(gg, "continue;")
+    }
+    if k == "for" { return _emit_for(g) }
+    if k == "while" { return _emit_while(g) }
+    if k == "loop" { return _emit_loop(g) }
+    if k == "if" { return _emit_if_stmt(g) }
+    if k == "assert" { return _emit_assert(g) }
+
+    // Expression statement or binding
+    _emit_expr_or_binding(g)
+}
+
+fn _emit_mut_binding(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip mut
+    nl := "\n"
+    if _gk(gg) != "IDENT" { return gg }
+    name := _gcur(gg).text
+    gg = _gadv(gg)
+
+    mut ann_type := TY_UNKNOWN
+    if _gk(gg) == ":" {
+        gg = _gadv(gg)
+        ta := _parse_type_ann_g(gg)
+        gg = ta.g
+        ann_type = ta.type_id
+        if _gk(gg) == "=" { gg = _gadv(gg) }
+    } else if _gk(gg) == ":=" {
+        gg = _gadv(gg)
+    }
+
+    // Determine type
+    mut final_type := ann_type
+    if final_type == TY_UNKNOWN { final_type = TY_I64 }
+
+    ctype := aria_to_c_type(gg.store, final_type)
+    gg = _gwrite(gg, _gindent_str(gg) + ctype + " " + mangle_name(name) + " = ")
+    gg = _emit_expr(gg)
+    gg = _gwrite(gg, ";" + nl)
+    gg = _env_add_g(gg, name, final_type)
+    gg
+}
+
+fn _emit_return(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip return
+    nl := "\n"
+    rb := "\}"
+    if _gk(gg) == "NEWLINE" || _gk(gg) == "EOF" || _gk(gg) == rb {
+        return _gwriteln(gg, "return;")
+    }
+    gg = _gwrite(gg, _gindent_str(gg) + "return ")
+    gg = _emit_expr(gg)
+    gg = _gwrite(gg, ";" + nl)
+    gg
+}
+
+fn _emit_for(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip for
+    lb := "\{"
+    nl := "\n"
+
+    var_name := _gcur(gg).text
+    gg = _gadv(gg)
+    if _gk(gg) == "in" { gg = _gadv(gg) }
+
+    // Capture iterator expression
+    // For simplicity, emit: for (int64_t _i = 0; _i < arr.len; _i++) { type var = arr.data[_i]; ... }
+    gg = _gwrite(gg, _gindent_str(gg) + "// for " + var_name + nl)
+    // We need to emit the array expression first to a temp
+    gg = _gwrite(gg, _gindent_str(gg) + "// iterator expression:" + nl)
+
+    // Skip iterator expression tokens until {
+    mut iter_tokens := ""
+    while _gk(gg) != lb && _gk(gg) != "EOF" {
+        iter_tokens = iter_tokens + _gcur(gg).text + " "
+        gg = _gadv(gg)
+    }
+
+    lb2 := "\{"
+    rb2 := "\}"
+    gg = _gwriteln(gg, lb2)
+    gg = _gindent(gg)
+    // Simple loop pattern
+    gg = _gwriteln(gg, "// for " + var_name + " in ...")
+
+    // Body
+    if _gk(gg) == lb {
+        gg = _gadv(gg)  // skip {
+        gg = _gskip_nl(gg)
+        while _gk(gg) != rb2 && _gk(gg) != "EOF" {
+            gg = _emit_stmt(gg)
+            gg = _gskip_nl(gg)
+        }
+        if _gk(gg) == rb2 { gg = _gadv(gg) }
+    }
+
+    gg = _gdedent(gg)
+    gg = _gwriteln(gg, rb2)
+    gg
+}
+
+fn _emit_while(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip while
+    lb := "\{"
+    nl := "\n"
+
+    gg = _gwrite(gg, _gindent_str(gg) + "while (")
+    while _gk(gg) != lb && _gk(gg) != "EOF" {
+        gg = _emit_expr_token(gg)
+    }
+    gg = _gwrite(gg, ")")
+    gg = _emit_block(gg, TY_UNIT)
+    gg
+}
+
+fn _emit_loop(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip loop
+    nl := "\n"
+    gg = _gwrite(gg, _gindent_str(gg) + "while (1)")
+    gg = _emit_block(gg, TY_UNIT)
+    gg
+}
+
+fn _emit_if_stmt(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip if
+    lb := "\{"
+    nl := "\n"
+
+    gg = _gwrite(gg, _gindent_str(gg) + "if (")
+    while _gk(gg) != lb && _gk(gg) != "EOF" {
+        gg = _emit_expr_token(gg)
+    }
+    gg = _gwrite(gg, ")")
+    gg = _emit_block(gg, TY_UNIT)
+
+    if _gk(gg) == "else" {
+        gg = _gadv(gg)
+        if _gk(gg) == "if" {
+            gg = _gwrite(gg, _gindent_str(gg) + "else ")
+            gg = _emit_if_stmt(_gadv(gg))  // recurse without emitting "if" prefix
+        } else {
+            gg = _gwrite(gg, _gindent_str(gg) + "else")
+            gg = _emit_block(gg, TY_UNIT)
+        }
+    }
+    gg
+}
+
+fn _emit_assert(g: Generator) -> Generator {
+    mut gg := _gadv(g)  // skip assert
+    nl := "\n"
+    gg = _gwrite(gg, _gindent_str(gg) + "aria_assert(")
+    gg = _emit_expr(gg)
+    gg = _gwrite(gg, ", \"assertion failed\");" + nl)
+    gg
+}
+
+fn _emit_expr_or_binding(g: Generator) -> Generator {
+    nl := "\n"
+    if _gk(g) == "IDENT" {
+        name := _gcur(g).text
+        next_pos := g.pos + 1
+        if next_pos < g.tokens.len() {
+            next_k := token_name(g.tokens[next_pos].kind)
+            if next_k == ":=" {
+                // Simple binding
+                mut gg := _gadv(g)   // skip name
+                gg = _gadv(gg)       // skip :=
+
+                // Infer type from RHS
+                inferred := _infer_type_quick(gg)
+                ctype := aria_to_c_type(gg.store, inferred)
+
+                gg = _gwrite(gg, _gindent_str(gg) + ctype + " " + mangle_name(name) + " = ")
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ";" + nl)
+                gg = _env_add_g(gg, name, inferred)
+                return gg
+            }
+            if next_k == "=" {
+                // Assignment
+                mut gg := _gadv(g)   // skip name
+                gg = _gadv(gg)       // skip =
+                gg = _gwrite(gg, _gindent_str(gg) + mangle_name(name) + " = ")
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ";" + nl)
+                return gg
+            }
+        }
+    }
+
+    // Expression statement
+    mut gg := g
+    gg = _gwrite(gg, _gindent_str(gg))
+    gg = _emit_expr(gg)
+    gg = _gwrite(gg, ";" + nl)
+    gg
+}
+
+// --- Quick type inference for bindings ---
+
+fn _infer_type_quick(g: Generator) -> i64 {
+    k := _gk(g)
+    if k == "INT" { return TY_I64 }
+    if k == "FLOAT" { return TY_F64 }
+    if k == "STRING" { return TY_STR }
+    if k == "true" || k == "false" { return TY_BOOL }
+    if k == "IDENT" {
+        name := _gcur(g).text
+        // Check env
+        env_t := _env_lookup_g(g, name)
+        if env_t != TY_UNKNOWN { return env_t }
+        // Check fn sig
+        sig := reg_find_fn(g.registry, name)
+        if sig.name != "" { return sig.return_type }
+    }
+    if k == "[" { return TY_UNKNOWN }
+    TY_UNKNOWN
+}
+
+// --- Emit expression (consumes tokens until statement boundary) ---
+
+fn _emit_expr(g: Generator) -> Generator {
+    mut gg := g
+    rb := "\}"
+    mut consumed := false
+    while _gk(gg) != "NEWLINE" && _gk(gg) != "EOF" && _gk(gg) != rb && _gk(gg) != ";" {
+        k := _gk(gg)
+        lb := "\{"
+
+        // Statement boundary detection
+        if consumed && _is_cont_g(k) == false {
+            if k == "IDENT" || k == "INT" || k == "FLOAT" || k == "STRING" ||
+               k == "true" || k == "false" || k == "mut" || k == "return" ||
+               k == "break" || k == "continue" || k == "for" || k == "while" ||
+               k == "loop" || k == "defer" || k == "assert" || k == "if" ||
+               k == "match" || k == "const" || k == "fn" {
+                return gg
+            }
+        }
+
+        gg = _emit_expr_token(gg)
+        consumed = true
+    }
+    gg
+}
+
+// --- Emit a single expression token/construct ---
+
+fn _emit_expr_token(g: Generator) -> Generator {
+    k := _gk(g)
+
+    if k == "INT" || k == "FLOAT" {
+        gg := _gwrite(g, _gcur(g).text)
+        return _gadv(gg)
+    }
+    if k == "STRING" {
+        val := escape_c_string(_gcur(g).text)
+        gg := _gwrite(g, "aria_str_new(\"" + val + "\")")
+        return _gadv(gg)
+    }
+    if k == "true" {
+        gg := _gwrite(g, "1")
+        return _gadv(gg)
+    }
+    if k == "false" {
+        gg := _gwrite(g, "0")
+        return _gadv(gg)
+    }
+    if k == "IDENT" {
+        name := _gcur(g).text
+        mut gg := _gadv(g)
+        // Check for function call
+        if _gk(gg) == "(" {
+            // Special builtins
+            if name == "println" {
+                gg = _gadv(gg)  // skip (
+                gg = _gwrite(gg, "aria_println(")
+                // If arg is not a string, we need to convert
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ")")
+                if _gk(gg) == ")" { gg = _gadv(gg) }
+                return gg
+            }
+            if name == "print" {
+                gg = _gadv(gg)
+                gg = _gwrite(gg, "aria_print(")
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ")")
+                if _gk(gg) == ")" { gg = _gadv(gg) }
+                return gg
+            }
+            if name == "eprintln" {
+                gg = _gadv(gg)
+                gg = _gwrite(gg, "aria_eprintln(")
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ")")
+                if _gk(gg) == ")" { gg = _gadv(gg) }
+                return gg
+            }
+            if name == "panic" {
+                gg = _gadv(gg)
+                gg = _gwrite(gg, "aria_panic(")
+                gg = _emit_expr(gg)
+                gg = _gwrite(gg, ")")
+                if _gk(gg) == ")" { gg = _gadv(gg) }
+                return gg
+            }
+            // Regular function call
+            gg = _gwrite(gg, mangle_name(name) + "(")
+            gg = _gadv(gg)  // skip (
+            gg = _gskip_nl(gg)
+            mut first := true
+            while _gk(gg) != ")" && _gk(gg) != "EOF" {
+                gg = _gskip_nl(gg)
+                if first == false { gg = _gwrite(gg, ", ") }
+                gg = _emit_expr(gg)
+                first = false
+                gg = _gskip_nl(gg)
+                if _gk(gg) == "," { gg = _gadv(gg) }
+            }
+            if _gk(gg) == ")" { gg = _gadv(gg) }
+            gg = _gwrite(gg, ")")
+            return gg
+        }
+
+        // Check for struct literal
+        lb := "\{"
+        if _gk(gg) == lb {
+            return _emit_struct_literal(gg, name)
+        }
+
+        // Check for method call chain via dot
+        if _gk(gg) == "." {
+            return _gwrite(gg, mangle_name(name))
+        }
+
+        return _gwrite(gg, mangle_name(name))
+    }
+
+    // Operators
+    if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+       k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+       k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
+       k == "<<" || k == ">>" {
+        gg := _gwrite(g, " " + _gcur(g).text + " ")
+        return _gadv(gg)
+    }
+
+    if k == "!" {
+        gg := _gwrite(g, "!")
+        return _gadv(gg)
+    }
+    if k == "~" {
+        gg := _gwrite(g, "~")
+        return _gadv(gg)
+    }
+
+    if k == "." {
+        // Method or field access
+        mut gg := _gadv(g)  // skip .
+        if _gk(gg) == "IDENT" {
+            field := _gcur(gg).text
+            gg = _gadv(gg)
+            if _gk(gg) == "(" {
+                // Method call
+                return _emit_method(gg, field)
+            }
+            // Field access
+            gg = _gwrite(g, "." + mangle_name(field))
+            return gg
+        }
+        return gg
+    }
+
+    if k == "(" {
+        gg := _gwrite(g, "(")
+        mut gg2 := _gadv(gg)
+        gg2 = _gskip_nl(gg2)
+        gg2 = _emit_expr(gg2)
+        while _gk(gg2) != ")" && _gk(gg2) != "EOF" { gg2 = _gadv(gg2) }
+        gg2 = _gwrite(gg2, ")")
+        if _gk(gg2) == ")" { gg2 = _gadv(gg2) }
+        return gg2
+    }
+
+    if k == "[" {
+        // Array literal
+        mut gg := _gadv(g)
+        lb := "\{"
+        rb2 := "\}"
+        gg = _gskip_nl(gg)
+        // For now emit a placeholder
+        gg = _gwrite(gg, "/* array */")
+        while _gk(gg) != "]" && _gk(gg) != "EOF" {
+            gg = _gadv(gg)
+        }
+        if _gk(gg) == "]" { gg = _gadv(gg) }
+        return gg
+    }
+
+    if k == ")" || k == "]" || k == "," {
+        return g  // Let caller handle
+    }
+
+    // Skip unknown tokens
+    _gadv(g)
+}
+
+// --- Emit method call ---
+
+fn _emit_method(g: Generator, method: str) -> Generator {
+    mut gg := _gadv(g)  // skip (
+    gg = _gskip_nl(gg)
+
+    // Built-in method translations
+    if method == "len" {
+        gg = _gwrite(gg, ".len")
+        while _gk(gg) != ")" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        if _gk(gg) == ")" { gg = _gadv(gg) }
+        return gg
+    }
+
+    if method == "append" {
+        // obj.append(elem) => slice_append(obj, elem)
+        gg = _gwrite(gg, "/* .append() */")
+        while _gk(gg) != ")" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        if _gk(gg) == ")" { gg = _gadv(gg) }
+        return gg
+    }
+
+    // String methods
+    if method == "contains" || method == "starts_with" || method == "split" ||
+       method == "replace" || method == "substring" || method == "charAt" ||
+       method == "trim" {
+        gg = _gwrite(gg, "/* ." + method + "() */")
+        while _gk(gg) != ")" && _gk(gg) != "EOF" { gg = _gadv(gg) }
+        if _gk(gg) == ")" { gg = _gadv(gg) }
+        return gg
+    }
+
+    // Generic method - emit as function call
+    gg = _gwrite(gg, "." + method + "(")
+    mut first := true
+    while _gk(gg) != ")" && _gk(gg) != "EOF" {
+        gg = _gskip_nl(gg)
+        if first == false { gg = _gwrite(gg, ", ") }
+        gg = _emit_expr(gg)
+        first = false
+        gg = _gskip_nl(gg)
+        if _gk(gg) == "," { gg = _gadv(gg) }
+    }
+    if _gk(gg) == ")" { gg = _gadv(gg) }
+    gg = _gwrite(gg, ")")
+    gg
+}
+
+// --- Emit struct literal ---
+
+fn _emit_struct_literal(g: Generator, name: str) -> Generator {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    mut gg := _gadv(g)  // skip {
+    gg = _gskip_nl(gg)
+    gg = _gwrite(gg, "(" + name + ")" + lb)
+    mut first := true
+    while _gk(gg) != rb && _gk(gg) != "EOF" {
+        if first == false { gg = _gwrite(gg, ", ") }
+        if _gk(gg) == "IDENT" {
+            fname := _gcur(gg).text
+            gg = _gadv(gg)
+            if _gk(gg) == ":" {
+                gg = _gadv(gg)
+                gg = _gwrite(gg, "." + mangle_name(fname) + " = ")
+                gg = _emit_expr(gg)
+            }
+        } else {
+            gg = _gadv(gg)
+        }
+        first = false
+        gg = _gskip_nl(gg)
+        if _gk(gg) == "," {
+            gg = _gadv(gg)
+            gg = _gskip_nl(gg)
+        }
+    }
+    if _gk(gg) == rb { gg = _gadv(gg) }
+    gg = _gwrite(gg, rb)
+    gg
+}
+
+// --- Parse type annotation (for codegen) ---
+
+struct GA {
+    g: Generator
+    type_id: i64
+}
+
+fn _parse_type_ann_g(g: Generator) -> GA {
+    k := _gk(g)
+    if k == "IDENT" {
+        name := _gcur(g).text
+        mut gg := _gadv(g)
+        tid := resolve_type_name(gg.store, name)
+        if _gk(gg) == "[" {
+            mut d := 1
+            gg = _gadv(gg)
+            while d > 0 && _gk(gg) != "EOF" {
+                if _gk(gg) == "[" { d = d + 1 }
+                if _gk(gg) == "]" { d = d - 1 }
+                if d > 0 { gg = _gadv(gg) }
+            }
+            if _gk(gg) == "]" { gg = _gadv(gg) }
+        }
+        if _gk(gg) == "?" { gg = _gadv(gg) }
+        if _gk(gg) == "!" {
+            gg = _gadv(gg)
+            rr := _parse_type_ann_g(gg)
+            gg = rr.g
+        }
+        return GA{g: gg, type_id: tid}
+    }
+    if k == "[" {
+        mut gg := _gadv(g)
+        inner := _parse_type_ann_g(gg)
+        gg = inner.g
+        if _gk(gg) == "]" { gg = _gadv(gg) }
+        return GA{g: gg, type_id: TY_UNKNOWN}
+    }
+    GA{g: g, type_id: TY_UNKNOWN}
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+fn generate(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTable, file: str) -> GenResult {
+    mut g := _new_gen(tokens, store, reg, table, file)
+
+    // Emit C runtime preamble
+    g = _gwrite(g, c_runtime_preamble())
+
+    // Pass 1: type declarations
+    g = _emit_types(g)
+
+    // Pass 2: forward declarations
+    g = _emit_forward_decls(g)
+
+    // Pass 3: function bodies
+    g = _emit_bodies(g)
+
+    GenResult{code: g.output, diagnostics: g.diagnostics}
+}
+
+// generate_no_runtime: same as generate but skips the runtime preamble (for fast tests)
+fn generate_no_runtime(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTable, file: str) -> GenResult {
+    mut g := _new_gen(tokens, store, reg, table, file)
+
+    // Pass 1: type declarations
+    g = _emit_types(g)
+
+    // Pass 2: forward declarations
+    g = _emit_forward_decls(g)
+
+    // Pass 3: function bodies
+    g = _emit_bodies(g)
+
+    GenResult{code: g.output, diagnostics: g.diagnostics}
+}

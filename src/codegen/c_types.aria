@@ -1,0 +1,160 @@
+mod codegen
+
+// ============================================================
+// C Type Mapping
+// Maps Aria types to C type strings, emits struct/enum/sum defs.
+// ============================================================
+
+use diagnostic
+use lexer
+use resolver
+use checker
+
+// --- Map Aria type ID to C type string ---
+
+fn aria_to_c_type(store: TypeStore, type_id: i64) -> str {
+    if type_id <= 0 { return "void" }
+    if type_id >= store.types.len() { return "void" }
+    info := store.types[type_id]
+    kn := type_kind_name(info.kind)
+    if kn == "i64" { return "int64_t" }
+    if kn == "i32" { return "int32_t" }
+    if kn == "i16" { return "int16_t" }
+    if kn == "i8" { return "int8_t" }
+    if kn == "u64" { return "uint64_t" }
+    if kn == "u32" { return "uint32_t" }
+    if kn == "u16" { return "uint16_t" }
+    if kn == "u8" { return "uint8_t" }
+    if kn == "f64" { return "double" }
+    if kn == "f32" { return "float" }
+    if kn == "bool" { return "bool" }
+    if kn == "str" { return "AriaStr" }
+    if kn == "char" { return "char" }
+    if kn == "unit" { return "void" }
+    if kn == "Never" { return "void" }
+    if kn == "Unknown" { return "int64_t" }
+    if kn == "Named" { return info.name }
+    if kn == "Array" {
+        elem := aria_to_c_type(store, info.type_id)
+        return "AriaSlice_" + elem
+    }
+    "int64_t"
+}
+
+// --- Mangle Aria name to safe C identifier ---
+
+fn _is_c_keyword(name: str) -> bool =
+    name == "auto" || name == "break" || name == "case" || name == "char" ||
+    name == "const" || name == "continue" || name == "default" || name == "do" ||
+    name == "double" || name == "else" || name == "enum" || name == "extern" ||
+    name == "float" || name == "for" || name == "goto" || name == "if" ||
+    name == "int" || name == "long" || name == "register" || name == "return" ||
+    name == "short" || name == "signed" || name == "sizeof" || name == "static" ||
+    name == "struct" || name == "switch" || name == "typedef" || name == "union" ||
+    name == "unsigned" || name == "void" || name == "volatile" || name == "while" ||
+    name == "bool" || name == "true" || name == "false" || name == "inline" ||
+    name == "restrict" || name == "new" || name == "delete"
+
+fn mangle_name(name: str) -> str {
+    if _is_c_keyword(name) { return "aria_" + name }
+    name
+}
+
+// --- Emit C struct definition ---
+
+fn emit_struct_def(reg: TypeRegistry, store: TypeStore, name: str) -> str {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    def := reg_find_struct(reg, name)
+    if def.name == "" { return "" }
+
+    mut s := "typedef struct " + lb + nl
+    mut i := 1  // skip sentinel
+    while i < def.fields.len() {
+        f := def.fields[i]
+        ctype := aria_to_c_type(store, f.type_id)
+        s = s + "    " + ctype + " " + mangle_name(f.name) + ";" + nl
+        i = i + 1
+    }
+    s = s + rb + " " + name + ";" + nl + nl
+    s
+}
+
+// --- Emit C sum type (tagged union) ---
+
+fn emit_sum_type_def(reg: TypeRegistry, name: str) -> str {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    def := reg_find_struct(reg, name)
+    if def.name == "" { return "" }
+    if def.is_sum == false { return "" }
+
+    // Emit tag enum
+    mut s := "typedef enum " + lb + nl
+    mut i := 1  // skip sentinel
+    while i < def.variant_names.len() {
+        vname := def.variant_names[i]
+        s = s + "    " + name + "_" + vname
+        if i < def.variant_names.len() - 1 { s = s + "," }
+        s = s + nl
+        i = i + 1
+    }
+    s = s + rb + " " + name + "Tag;" + nl + nl
+
+    // Emit struct with tag field
+    s = s + "typedef struct " + lb + nl
+    s = s + "    " + name + "Tag tag;" + nl
+    s = s + rb + " " + name + ";" + nl + nl
+
+    s
+}
+
+// --- Emit array slice type ---
+
+fn emit_slice_type(elem_c_type: str) -> str {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    slice_name := "AriaSlice_" + elem_c_type
+    mut s := "typedef struct " + lb + nl
+    s = s + "    " + elem_c_type + "* data;" + nl
+    s = s + "    int64_t len;" + nl
+    s = s + "    int64_t cap;" + nl
+    s = s + rb + " " + slice_name + ";" + nl + nl
+    s
+}
+
+// --- Emit slice append function ---
+
+fn emit_slice_append(elem_c_type: str) -> str {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    slice_name := "AriaSlice_" + elem_c_type
+    fn_name := slice_name + "_append"
+    mut s := slice_name + " " + fn_name + "(" + slice_name + " s, " + elem_c_type + " elem) " + lb + nl
+    s = s + "    if (s.len >= s.cap) " + lb + nl
+    s = s + "        int64_t new_cap = s.cap == 0 ? 4 : s.cap * 2;" + nl
+    s = s + "        s.data = (" + elem_c_type + "*)realloc(s.data, sizeof(" + elem_c_type + ") * new_cap);" + nl
+    s = s + "        s.cap = new_cap;" + nl
+    s = s + "    " + rb + nl
+    s = s + "    s.data[s.len++] = elem;" + nl
+    s = s + "    return s;" + nl
+    s = s + rb + nl + nl
+    s
+}
+
+// --- Escape string for C string literal ---
+
+fn escape_c_string(s: str) -> str {
+    mut result := ""
+    mut i := 0
+    while i < s.len() {
+        ch := s.charAt(i)
+        if ch == "\\" { result = result + "\\\\" } else if ch == "\"" { result = result + "\\\"" } else if ch == "\n" { result = result + "\\n" } else if ch == "\t" { result = result + "\\t" } else if ch == "\r" { result = result + "\\r" } else { result = result + ch }
+        i = i + 1
+    }
+    result
+}

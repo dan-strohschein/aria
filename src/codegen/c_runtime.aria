@@ -1,0 +1,169 @@
+mod codegen
+
+// ============================================================
+// C Runtime Preamble
+// Returns the C runtime code that is prepended to every
+// generated C file. Provides string type, I/O, slices, etc.
+// ============================================================
+
+fn c_runtime_preamble() -> str {
+    lb := "\{"
+    rb := "\}"
+    nl := "\n"
+    mut s := ""
+
+    // Includes
+    s = s + "#include <stdio.h>" + nl
+    s = s + "#include <stdlib.h>" + nl
+    s = s + "#include <string.h>" + nl
+    s = s + "#include <stdint.h>" + nl
+    s = s + "#include <stdbool.h>" + nl
+    s = s + nl
+
+    // AriaStr
+    s = s + "typedef struct " + lb + " char* data; int64_t len; int64_t cap; " + rb + " AriaStr;" + nl
+    s = s + nl
+
+    // String creation
+    s = s + "AriaStr aria_str_new(const char* s) " + lb + nl
+    s = s + "    int64_t len = (int64_t)strlen(s);" + nl
+    s = s + "    char* data = (char*)malloc(len + 1);" + nl
+    s = s + "    memcpy(data, s, len + 1);" + nl
+    s = s + "    return (AriaStr)" + lb + "data, len, len" + rb + ";" + nl
+    s = s + rb + nl + nl
+
+    // String length
+    s = s + "int64_t aria_str_len(AriaStr s) " + lb + " return s.len; " + rb + nl + nl
+
+    // String concat
+    s = s + "AriaStr aria_str_concat(AriaStr a, AriaStr b) " + lb + nl
+    s = s + "    int64_t len = a.len + b.len;" + nl
+    s = s + "    char* data = (char*)malloc(len + 1);" + nl
+    s = s + "    memcpy(data, a.data, a.len);" + nl
+    s = s + "    memcpy(data + a.len, b.data, b.len);" + nl
+    s = s + "    data[len] = 0;" + nl
+    s = s + "    return (AriaStr)" + lb + "data, len, len" + rb + ";" + nl
+    s = s + rb + nl + nl
+
+    // String equality
+    s = s + "bool aria_str_eq(AriaStr a, AriaStr b) " + lb + nl
+    s = s + "    if (a.len != b.len) return false;" + nl
+    s = s + "    return memcmp(a.data, b.data, a.len) == 0;" + nl
+    s = s + rb + nl + nl
+
+    // String comparison
+    s = s + "int aria_str_cmp(AriaStr a, AriaStr b) " + lb + nl
+    s = s + "    int64_t min_len = a.len < b.len ? a.len : b.len;" + nl
+    s = s + "    int r = memcmp(a.data, b.data, min_len);" + nl
+    s = s + "    if (r != 0) return r;" + nl
+    s = s + "    if (a.len < b.len) return -1;" + nl
+    s = s + "    if (a.len > b.len) return 1;" + nl
+    s = s + "    return 0;" + nl
+    s = s + rb + nl + nl
+
+    // charAt
+    s = s + "AriaStr aria_str_charAt(AriaStr s, int64_t i) " + lb + nl
+    s = s + "    if (i < 0 || i >= s.len) return aria_str_new(\"\");" + nl
+    s = s + "    char buf[2] = " + lb + "s.data[i], 0" + rb + ";" + nl
+    s = s + "    return aria_str_new(buf);" + nl
+    s = s + rb + nl + nl
+
+    // substring
+    s = s + "AriaStr aria_str_substring(AriaStr s, int64_t start, int64_t end) " + lb + nl
+    s = s + "    if (start < 0) start = 0;" + nl
+    s = s + "    if (end > s.len) end = s.len;" + nl
+    s = s + "    if (start >= end) return aria_str_new(\"\");" + nl
+    s = s + "    int64_t len = end - start;" + nl
+    s = s + "    char* data = (char*)malloc(len + 1);" + nl
+    s = s + "    memcpy(data, s.data + start, len);" + nl
+    s = s + "    data[len] = 0;" + nl
+    s = s + "    return (AriaStr)" + lb + "data, len, len" + rb + ";" + nl
+    s = s + rb + nl + nl
+
+    // contains
+    s = s + "bool aria_str_contains(AriaStr s, AriaStr sub) " + lb + nl
+    s = s + "    if (sub.len == 0) return true;" + nl
+    s = s + "    if (sub.len > s.len) return false;" + nl
+    s = s + "    return strstr(s.data, sub.data) != NULL;" + nl
+    s = s + rb + nl + nl
+
+    // replace
+    s = s + "AriaStr aria_str_replace(AriaStr s, AriaStr old, AriaStr new_s) " + lb + nl
+    s = s + "    if (old.len == 0) return s;" + nl
+    s = s + "    char* pos = strstr(s.data, old.data);" + nl
+    s = s + "    if (!pos) return s;" + nl
+    s = s + "    int64_t before = pos - s.data;" + nl
+    s = s + "    int64_t len = s.len - old.len + new_s.len;" + nl
+    s = s + "    char* data = (char*)malloc(len + 1);" + nl
+    s = s + "    memcpy(data, s.data, before);" + nl
+    s = s + "    memcpy(data + before, new_s.data, new_s.len);" + nl
+    s = s + "    memcpy(data + before + new_s.len, pos + old.len, s.len - before - old.len);" + nl
+    s = s + "    data[len] = 0;" + nl
+    s = s + "    return (AriaStr)" + lb + "data, len, len" + rb + ";" + nl
+    s = s + rb + nl + nl
+
+    // split
+    s = s + "typedef struct " + lb + " AriaStr* data; int64_t len; int64_t cap; " + rb + " AriaSliceStr;" + nl + nl
+
+    s = s + "AriaSliceStr aria_str_split(AriaStr s, AriaStr delim) " + lb + nl
+    s = s + "    AriaSliceStr result = " + lb + "NULL, 0, 0" + rb + ";" + nl
+    s = s + "    if (delim.len == 0) " + lb + nl
+    s = s + "        result.data = (AriaStr*)malloc(sizeof(AriaStr));" + nl
+    s = s + "        result.data[0] = s; result.len = 1; result.cap = 1;" + nl
+    s = s + "        return result;" + nl
+    s = s + "    " + rb + nl
+    s = s + "    int64_t cap = 8;" + nl
+    s = s + "    result.data = (AriaStr*)malloc(sizeof(AriaStr) * cap);" + nl
+    s = s + "    char* start = s.data;" + nl
+    s = s + "    char* end = s.data + s.len;" + nl
+    s = s + "    while (start < end) " + lb + nl
+    s = s + "        char* pos = strstr(start, delim.data);" + nl
+    s = s + "        if (!pos) pos = end;" + nl
+    s = s + "        int64_t part_len = pos - start;" + nl
+    s = s + "        if (result.len >= cap) " + lb + nl
+    s = s + "            cap *= 2; result.data = (AriaStr*)realloc(result.data, sizeof(AriaStr) * cap);" + nl
+    s = s + "        " + rb + nl
+    s = s + "        char* part = (char*)malloc(part_len + 1);" + nl
+    s = s + "        memcpy(part, start, part_len); part[part_len] = 0;" + nl
+    s = s + "        result.data[result.len++] = (AriaStr)" + lb + "part, part_len, part_len" + rb + ";" + nl
+    s = s + "        start = pos + delim.len;" + nl
+    s = s + "    " + rb + nl
+    s = s + "    result.cap = cap;" + nl
+    s = s + "    return result;" + nl
+    s = s + rb + nl + nl
+
+    // I/O
+    s = s + "void aria_println(AriaStr s) " + lb + " printf(\"%.*s\\n\", (int)s.len, s.data); " + rb + nl
+    s = s + "void aria_print(AriaStr s) " + lb + " printf(\"%.*s\", (int)s.len, s.data); " + rb + nl
+    s = s + "void aria_eprintln(AriaStr s) " + lb + " fprintf(stderr, \"%.*s\\n\", (int)s.len, s.data); " + rb + nl + nl
+
+    // Format i64 to string
+    s = s + "AriaStr aria_str_format_i64(int64_t n) " + lb + nl
+    s = s + "    char buf[32];" + nl
+    s = s + "    snprintf(buf, 32, \"%lld\", (long long)n);" + nl
+    s = s + "    return aria_str_new(buf);" + nl
+    s = s + rb + nl + nl
+
+    // Format f64 to string
+    s = s + "AriaStr aria_str_format_f64(double n) " + lb + nl
+    s = s + "    char buf[64];" + nl
+    s = s + "    snprintf(buf, 64, \"%g\", n);" + nl
+    s = s + "    return aria_str_new(buf);" + nl
+    s = s + rb + nl + nl
+
+    // Panic
+    s = s + "void aria_panic(AriaStr msg) " + lb + nl
+    s = s + "    fprintf(stderr, \"panic: %.*s\\n\", (int)msg.len, msg.data);" + nl
+    s = s + "    exit(1);" + nl
+    s = s + rb + nl + nl
+
+    // Assert
+    s = s + "void aria_assert(bool cond, const char* msg) " + lb + nl
+    s = s + "    if (!cond) " + lb + nl
+    s = s + "        fprintf(stderr, \"assertion failed: %s\\n\", msg);" + nl
+    s = s + "        exit(1);" + nl
+    s = s + "    " + rb + nl
+    s = s + rb + nl + nl
+
+    s
+}
