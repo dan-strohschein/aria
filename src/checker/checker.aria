@@ -1,0 +1,1520 @@
+mod checker
+
+// ============================================================
+// Type Checker — Multi-Pass over Token Stream
+// Pass 1: Register type declarations
+// Pass 2: Register function signatures
+// Pass 3: Check function/entry/test bodies
+// ============================================================
+
+use diagnostic
+use lexer
+use resolver
+
+// --- Checker state ---
+
+struct Checker {
+    tokens: [Token]
+    pos: i64
+    store: TypeStore
+    registry: TypeRegistry
+    treg: TraitRegistry
+    diagnostics: DiagnosticBag
+    table: SymbolTable
+    current_scope: i64
+    file: str
+    // Type environment (parallel arrays)
+    env_names: [str]
+    env_types: [i64]
+    env_scopes: [i64]
+    // Function context
+    fn_return_type: i64
+    fn_error_type: i64
+    in_loop: bool
+}
+
+// --- Checker + Expression type result ---
+
+struct CE {
+    c: Checker
+    type_id: i64
+}
+
+// --- CheckResult ---
+
+struct CheckResult {
+    store: TypeStore
+    registry: TypeRegistry
+    diagnostics: DiagnosticBag
+}
+
+// --- Constructor ---
+
+fn _new_checker(tokens: [Token], table: SymbolTable, file: str) -> Checker =
+    Checker{
+        tokens: tokens,
+        pos: 0,
+        store: new_store(),
+        registry: new_registry(),
+        treg: populate_builtins(new_trait_registry()),
+        diagnostics: new_bag(),
+        table: table,
+        current_scope: 0,
+        file: file,
+        env_names: [""],
+        env_types: [0],
+        env_scopes: [0],
+        fn_return_type: TY_UNIT,
+        fn_error_type: 0,
+        in_loop: false
+    }
+
+// --- Helpers ---
+
+fn _ccur(c: Checker) -> Token {
+    if c.pos >= c.tokens.len() {
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+    }
+    c.tokens[c.pos]
+}
+
+fn _ck2(c: Checker) -> str = token_name(_ccur(c).kind)
+
+fn _cadv(c: Checker) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos + 1, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _cset_pos(c: Checker, pos: i64) -> Checker =
+    Checker{tokens: c.tokens, pos: pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _cset_store(c: Checker, store: TypeStore) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _cset_reg(c: Checker, reg: TypeRegistry) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: reg,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _cset_diag(c: Checker, diag: DiagnosticBag) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: diag, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _cset_fn_ctx(c: Checker, ret: i64, err: i64) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: ret, fn_error_type: err, in_loop: c.in_loop}
+
+fn _cset_loop(c: Checker, in_loop: bool) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: in_loop}
+
+fn _cspan(c: Checker) -> Span {
+    tok := _ccur(c)
+    new_span(c.file, tok.line, tok.col, tok.offset, tok.text.len())
+}
+
+fn _cskip_nl(c: Checker) -> Checker {
+    mut cc := c
+    while _ck2(cc) == "NEWLINE" { cc = _cadv(cc) }
+    cc
+}
+
+fn _cerror(c: Checker, code: str, msg: str) -> Checker {
+    span := _cspan(c)
+    _cset_diag(c, bag_add_error(c.diagnostics, code, msg, span))
+}
+
+fn _cwarning(c: Checker, code: str, msg: str) -> Checker {
+    span := _cspan(c)
+    _cset_diag(c, bag_add_warning(c.diagnostics, code, msg, span))
+}
+
+// --- Type environment ---
+
+fn _env_add(c: Checker, name: str, type_id: i64, sc: i64) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names.append(name),
+            env_types: c.env_types.append(type_id),
+            env_scopes: c.env_scopes.append(sc),
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
+fn _env_lookup(c: Checker, name: str) -> i64 {
+    // Walk backwards to find latest binding
+    mut i := c.env_names.len() - 1
+    while i > 0 {
+        if c.env_names[i] == name {
+            return c.env_types[i]
+        }
+        i = i - 1
+    }
+    TY_UNKNOWN
+}
+
+// --- Parse a type annotation from tokens, return type_id ---
+
+fn _parse_type_ann(c: Checker) -> CE {
+    k := _ck2(c)
+    if k == "IDENT" {
+        name := _ccur(c).text
+        mut cc := _cadv(c)
+        // Check for array type [T]
+        if _ck2(cc) == "[" {
+            // Generic type like Map[K, V] — skip for now
+            mut d := 1
+            cc = _cadv(cc)
+            while d > 0 && _ck2(cc) != "EOF" {
+                if _ck2(cc) == "[" { d = d + 1 }
+                if _ck2(cc) == "]" { d = d - 1 }
+                if d > 0 { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+            tid := resolve_type_name(cc.store, name)
+            return CE{c: cc, type_id: tid}
+        }
+        // Check for optional T?
+        if _ck2(cc) == "?" {
+            cc = _cadv(cc)
+            inner := resolve_type_name(cc.store, name)
+            new_store := store_add(cc.store, mk_optional_type(inner))
+            cc = _cset_store(cc, new_store)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
+        }
+        // Check for result T ! E
+        if _ck2(cc) == "!" {
+            cc = _cadv(cc)
+            ok_type := resolve_type_name(cc.store, name)
+            err_result := _parse_type_ann(cc)
+            cc = err_result.c
+            new_store := store_add(cc.store, mk_result_type(ok_type, err_result.type_id))
+            cc = _cset_store(cc, new_store)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
+        }
+        tid := resolve_type_name(cc.store, name)
+        return CE{c: cc, type_id: tid}
+    }
+    if k == "[" {
+        // Array type [T]
+        mut cc := _cadv(c)
+        elem := _parse_type_ann(cc)
+        cc = elem.c
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+        new_store := store_add(cc.store, mk_array_type(elem.type_id))
+        cc = _cset_store(cc, new_store)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
+    }
+    if k == "fn" {
+        // Function type fn(A, B) -> R
+        mut cc := _cadv(c)
+        if _ck2(cc) == "(" {
+            cc = _cadv(cc)
+            while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+                pr := _parse_type_ann(cc)
+                cc = pr.c
+                if _ck2(cc) == "," { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+        }
+        mut ret := TY_UNIT
+        if _ck2(cc) == "->" {
+            cc = _cadv(cc)
+            rr := _parse_type_ann(cc)
+            cc = rr.c
+            ret = rr.type_id
+        }
+        return CE{c: cc, type_id: ret}
+    }
+    if k == "(" {
+        // Tuple type or grouped type — skip for now
+        mut cc := _cadv(c)
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        if _ck2(cc) == ")" { cc = _cadv(cc) }
+        return CE{c: cc, type_id: TY_UNKNOWN}
+    }
+    CE{c: c, type_id: TY_UNKNOWN}
+}
+
+// --- Skip type tokens (without computing type) ---
+
+fn _skip_type_toks(c: Checker) -> Checker {
+    mut cc := c
+    k := _ck2(cc)
+    if k == "IDENT" || k == "Self" {
+        cc = _cadv(cc)
+        while _ck2(cc) == "." { cc = _cadv(_cadv(cc)) }
+        if _ck2(cc) == "[" {
+            mut d := 1
+            cc = _cadv(cc)
+            while d > 0 && _ck2(cc) != "EOF" {
+                if _ck2(cc) == "[" { d = d + 1 }
+                if _ck2(cc) == "]" { d = d - 1 }
+                if d > 0 { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "?" { cc = _cadv(cc) }
+        if _ck2(cc) == "!" {
+            cc = _cadv(cc)
+            cc = _skip_type_toks(cc)
+        }
+        return cc
+    }
+    if k == "[" {
+        cc = _cadv(cc)
+        cc = _skip_type_toks(cc)
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+        return cc
+    }
+    if k == "fn" {
+        cc = _cadv(cc)
+        if _ck2(cc) == "(" {
+            cc = _cadv(cc)
+            while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+                cc = _skip_type_toks(cc)
+                if _ck2(cc) == "," { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "->" {
+            cc = _cadv(cc)
+            cc = _skip_type_toks(cc)
+        }
+        return cc
+    }
+    if k == "(" {
+        cc = _cadv(cc)
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+            cc = _skip_type_toks(cc)
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == ")" { cc = _cadv(cc) }
+        if _ck2(cc) == "->" {
+            cc = _cadv(cc)
+            cc = _skip_type_toks(cc)
+        }
+        return cc
+    }
+    cc
+}
+
+// ============================================================
+// Pass 1: Register type declarations
+// ============================================================
+
+fn _pass1_types(c: Checker) -> Checker {
+    mut cc := _cset_pos(c, 0)
+    cc = _cskip_nl(cc)
+    if cc.pos == 0 { cc = _cadv(cc) }
+
+    // Skip mod
+    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
+    cc = _cskip_nl(cc)
+    // Skip use
+    while _ck2(cc) == "use" {
+        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+    }
+
+    while _ck2(cc) != "EOF" {
+        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        k := _ck2(cc)
+        if k == "type" || k == "struct" {
+            cc = _register_type_decl(cc)
+        } else if k == "enum" {
+            cc = _register_enum_decl(cc)
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    cc
+}
+
+fn _register_type_decl(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip type/struct
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    // Skip generic params
+    if _ck2(cc) == "[" {
+        mut d := 1
+        cc = _cadv(cc)
+        while d > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { d = d + 1 }
+            if _ck2(cc) == "]" { d = d - 1 }
+            if d > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    lb := "\{"
+    // Check for sum type (= | Variant ...)
+    if _ck2(cc) == "=" {
+        cc = _cadv(cc)
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "|" {
+            // Sum type
+            mut variants := [""]
+            while _ck2(cc) == "|" {
+                cc = _cadv(cc)
+                cc = _cskip_nl(cc)
+                if _ck2(cc) == "IDENT" {
+                    variants = variants.append(_ccur(cc).text)
+                    cc = _cadv(cc)
+                }
+                // Skip payload
+                if _ck2(cc) == "(" {
+                    mut d := 1
+                    cc = _cadv(cc)
+                    while d > 0 && _ck2(cc) != "EOF" {
+                        if _ck2(cc) == "(" { d = d + 1 }
+                        if _ck2(cc) == ")" { d = d - 1 }
+                        if d > 0 { cc = _cadv(cc) }
+                    }
+                    if _ck2(cc) == ")" { cc = _cadv(cc) }
+                }
+                if _ck2(cc) == lb { cc = _skip_braces2(cc) }
+                cc = _cskip_nl(cc)
+            }
+            // Register as named type
+            new_st := store_add(cc.store, mk_named_type(name))
+            cc = _cset_store(cc, new_st)
+            def := new_struct_def(name, [_sentinel_field()], true, variants)
+            cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+            return cc
+        }
+    }
+
+    // Struct type { fields }
+    if _ck2(cc) == lb {
+        cc = _cadv(cc)  // skip {
+        cc = _cskip_nl(cc)
+        mut fields := [_sentinel_field()]
+        rb := "\}"
+        while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "IDENT" {
+                fname := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    ft := _parse_type_ann(cc)
+                    cc = ft.c
+                    fields = fields.append(FieldInfo{name: fname, type_id: ft.type_id})
+                }
+            } else {
+                cc = _cadv(cc)
+            }
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+            cc = _cskip_nl(cc)
+        }
+        if _ck2(cc) == rb { cc = _cadv(cc) }
+
+        new_st := store_add(cc.store, mk_named_type(name))
+        cc = _cset_store(cc, new_st)
+        def := new_struct_def(name, fields, false, [""])
+        cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+    }
+    cc
+}
+
+fn _register_enum_decl(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip enum
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+    // Skip brace block
+    cc = _skip_braces2(cc)
+    new_st := store_add(cc.store, mk_named_type(name))
+    cc = _cset_store(cc, new_st)
+    def := new_struct_def(name, [_sentinel_field()], false, [""])
+    cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+    cc
+}
+
+fn _skip_braces2(c: Checker) -> Checker {
+    lb := "\{"
+    rb := "\}"
+    if _ck2(c) != lb { return c }
+    mut cc := _cadv(c)
+    mut d := 1
+    while d > 0 && _ck2(cc) != "EOF" {
+        if _ck2(cc) == lb { d = d + 1 }
+        if _ck2(cc) == rb { d = d - 1 }
+        if d > 0 { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
+// ============================================================
+// Pass 2: Register function signatures
+// ============================================================
+
+fn _pass2_fns(c: Checker) -> Checker {
+    mut cc := _cset_pos(c, 0)
+    cc = _cskip_nl(cc)
+    if cc.pos == 0 { cc = _cadv(cc) }
+
+    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
+    cc = _cskip_nl(cc)
+    while _ck2(cc) == "use" {
+        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+    }
+
+    while _ck2(cc) != "EOF" {
+        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        k := _ck2(cc)
+        if k == "fn" {
+            cc = _register_fn_sig(cc)
+        } else if k == "impl" {
+            cc = _register_impl_fns(cc)
+        } else if k == "const" {
+            cc = _register_const(cc)
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    cc
+}
+
+fn _register_fn_sig(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip fn
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    // Skip generic params
+    if _ck2(cc) == "[" {
+        mut d := 1
+        cc = _cadv(cc)
+        while d > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { d = d + 1 }
+            if _ck2(cc) == "]" { d = d - 1 }
+            if d > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    // Parse parameters
+    mut pnames := [""]
+    mut ptypes := [0]
+    if _ck2(cc) == "(" {
+        cc = _cadv(cc)
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "IDENT" {
+                pn := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    pt := _parse_type_ann(cc)
+                    cc = pt.c
+                    pnames = pnames.append(pn)
+                    ptypes = ptypes.append(pt.type_id)
+                }
+            } else {
+                cc = _cadv(cc)
+            }
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == ")" { cc = _cadv(cc) }
+    }
+
+    // Return type
+    mut ret := TY_UNIT
+    if _ck2(cc) == "->" {
+        cc = _cadv(cc)
+        rt := _parse_type_ann(cc)
+        cc = rt.c
+        ret = rt.type_id
+    }
+
+    // Error type
+    mut err := 0
+    if _ck2(cc) == "!" {
+        cc = _cadv(cc)
+        et := _parse_type_ann(cc)
+        cc = et.c
+        err = et.type_id
+    }
+
+    sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
+
+    // Skip rest of function (body)
+    lb := "\{"
+    while _ck2(cc) != "EOF" {
+        if _ck2(cc) == lb {
+            cc = _skip_braces2(cc)
+            return cc
+        }
+        if _ck2(cc) == "NEWLINE" { return cc }
+        cc = _cadv(cc)
+    }
+    cc
+}
+
+fn _register_impl_fns(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip impl
+    lb := "\{"
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+    if _ck2(cc) != lb { return cc }
+    cc = _cadv(cc)  // skip {
+    cc = _cskip_nl(cc)
+    rb := "\}"
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        if _ck2(cc) == "fn" {
+            cc = _register_fn_sig(cc)
+        } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
+            return cc
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
+fn _register_const(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip const
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    mut ctype := TY_UNKNOWN
+    if _ck2(cc) == ":" {
+        cc = _cadv(cc)
+        ct := _parse_type_ann(cc)
+        cc = ct.c
+        ctype = ct.type_id
+    }
+
+    // Register in env
+    cc = _env_add(cc, name, ctype, 0)
+
+    // Skip = expr
+    if _ck2(cc) == "=" {
+        cc = _cadv(cc)
+        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+    }
+    cc
+}
+
+// ============================================================
+// Pass 3: Check function/entry/test bodies
+// ============================================================
+
+fn _pass3_bodies(c: Checker) -> Checker {
+    mut cc := _cset_pos(c, 0)
+    cc = _cskip_nl(cc)
+    if cc.pos == 0 { cc = _cadv(cc) }
+
+    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
+    cc = _cskip_nl(cc)
+    while _ck2(cc) == "use" {
+        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+    }
+
+    while _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "EOF" { return cc }
+        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+
+        k := _ck2(cc)
+        if k == "fn" {
+            cc = _check_fn(cc)
+        } else if k == "impl" {
+            cc = _check_impl(cc)
+        } else if k == "entry" {
+            cc = _check_entry(cc)
+        } else if k == "test" {
+            cc = _check_test(cc)
+        } else if k == "type" || k == "struct" || k == "enum" || k == "trait" || k == "const" {
+            cc = _skip_decl(cc)
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    cc
+}
+
+fn _skip_decl(c: Checker) -> Checker {
+    mut cc := _cadv(c)
+    lb := "\{"
+    while _ck2(cc) != "EOF" {
+        if _ck2(cc) == lb {
+            cc = _skip_braces2(cc)
+            // Skip derives
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "derives" {
+                while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+            }
+            return cc
+        }
+        if _ck2(cc) == "NEWLINE" {
+            cc = _cskip_nl(cc)
+            nk := _ck2(cc)
+            if nk == "fn" || nk == "pub" || nk == "type" || nk == "struct" ||
+               nk == "enum" || nk == "trait" || nk == "impl" || nk == "const" ||
+               nk == "entry" || nk == "test" || nk == "EOF" {
+                return cc
+            }
+        }
+        cc = _cadv(cc)
+    }
+    cc
+}
+
+// --- Check function ---
+
+fn _check_fn(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip fn
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    // Look up registered signature
+    sig := reg_find_fn(cc.registry, name)
+
+    // Set function context
+    cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
+
+    // Register params in env
+    mut pi := 1  // skip sentinel
+    while pi < sig.param_names.len() {
+        cc = _env_add(cc, sig.param_names[pi], sig.param_types[pi], 0)
+        pi = pi + 1
+    }
+
+    // Skip to body
+    lb := "\{"
+    while _ck2(cc) != "=" && _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        cc = _cadv(cc)
+    }
+
+    if _ck2(cc) == "=" {
+        cc = _cadv(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        // Check return type
+        if sig.return_type != TY_UNKNOWN && sig.return_type != TY_UNIT {
+            if is_assignable(cc.store, result.type_id, sig.return_type) == false && result.type_id != TY_UNKNOWN {
+                q := _q()
+                cc = _cerror(cc, E0106, "expected return type " + q + format_type(cc.store, sig.return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+            }
+        }
+    } else if _ck2(cc) == lb {
+        result := _check_block(cc)
+        cc = result.c
+    } else {
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == lb {
+            result := _check_block(cc)
+            cc = result.c
+        }
+    }
+    cc
+}
+
+fn _check_impl(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip impl
+    lb := "\{"
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+    if _ck2(cc) != lb { return cc }
+    cc = _cadv(cc)  // skip {
+    cc = _cskip_nl(cc)
+    rb := "\}"
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        if _ck2(cc) == "fn" {
+            cc = _check_fn(cc)
+        } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
+            return cc
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
+fn _check_entry(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip entry
+    cc = _cset_fn_ctx(cc, TY_UNIT, 0)
+    result := _check_block(cc)
+    result.c
+}
+
+fn _check_test(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip test
+    if _ck2(cc) == "STRING" || _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+    cc = _cset_fn_ctx(cc, TY_UNIT, 0)
+    result := _check_block(cc)
+    result.c
+}
+
+// ============================================================
+// Expression type checking
+// ============================================================
+
+// Check if token is an expression continuation
+fn _is_cont(k: str) -> bool =
+    k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+    k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+    k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" || k == "~" ||
+    k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
+    k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
+    k == "," || k == "=>" || k == "=" || k == "?." || k == "??"
+
+fn _check_block(c: Checker) -> CE {
+    lb := "\{"
+    rb := "\}"
+    if _ck2(c) != lb { return CE{c: c, type_id: TY_UNIT} }
+    mut cc := _cadv(c)  // skip {
+    cc = _cskip_nl(cc)
+    mut last_type := TY_UNIT
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        result := _check_stmt(cc)
+        cc = result.c
+        last_type = result.type_id
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    CE{c: cc, type_id: last_type}
+}
+
+fn _check_stmt(c: Checker) -> CE {
+    k := _ck2(c)
+    if k == "mut" { return _check_mut_binding(c) }
+    if k == "return" { return _check_return(c) }
+    if k == "break" { return CE{c: _cadv(c), type_id: TY_NEVER} }
+    if k == "continue" { return CE{c: _cadv(c), type_id: TY_NEVER} }
+    if k == "for" { return _check_for(c) }
+    if k == "while" { return _check_while(c) }
+    if k == "loop" { return _check_loop(c) }
+    if k == "if" { return _check_if(c) }
+    if k == "match" { return _check_match(c) }
+    if k == "defer" {
+        cc := _cadv(c)
+        result := _check_expr_full(cc)
+        return CE{c: result.c, type_id: TY_UNIT}
+    }
+    if k == "assert" {
+        cc := _cadv(c)
+        result := _check_expr_full(cc)
+        return CE{c: result.c, type_id: TY_UNIT}
+    }
+
+    // Check for binding or expression
+    _check_expr_or_binding(c)
+}
+
+fn _check_mut_binding(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip mut
+    if _ck2(cc) != "IDENT" { return CE{c: cc, type_id: TY_UNIT} }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    mut ann_type := TY_UNKNOWN
+    if _ck2(cc) == ":" {
+        cc = _cadv(cc)
+        at := _parse_type_ann(cc)
+        cc = at.c
+        ann_type = at.type_id
+        if _ck2(cc) == "=" { cc = _cadv(cc) }
+    } else if _ck2(cc) == ":=" {
+        cc = _cadv(cc)
+    }
+
+    result := _check_expr_full(cc)
+    cc = result.c
+    mut final_type := result.type_id
+    if ann_type != TY_UNKNOWN { final_type = ann_type }
+    cc = _env_add(cc, name, final_type, 0)
+    CE{c: cc, type_id: TY_UNIT}
+}
+
+fn _check_return(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip return
+    rb := "\}"
+    if _ck2(cc) == "NEWLINE" || _ck2(cc) == "EOF" || _ck2(cc) == rb {
+        return CE{c: cc, type_id: TY_NEVER}
+    }
+    result := _check_expr_full(cc)
+    cc = result.c
+    // Check against function return type
+    if cc.fn_return_type != TY_UNKNOWN && cc.fn_return_type != TY_UNIT {
+        if is_assignable(cc.store, result.type_id, cc.fn_return_type) == false && result.type_id != TY_UNKNOWN {
+            q := _q()
+            cc = _cerror(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+        }
+    }
+    CE{c: cc, type_id: TY_NEVER}
+}
+
+fn _check_expr_or_binding(c: Checker) -> CE {
+    if _ck2(c) == "IDENT" {
+        name := _ccur(c).text
+        next_pos := c.pos + 1
+        if next_pos < c.tokens.len() {
+            next_k := token_name(c.tokens[next_pos].kind)
+            if next_k == ":=" {
+                mut cc := _cadv(c)   // skip name
+                cc = _cadv(cc)       // skip :=
+                result := _check_expr_full(cc)
+                cc = result.c
+                cc = _env_add(cc, name, result.type_id, 0)
+                return CE{c: cc, type_id: TY_UNIT}
+            }
+            if next_k == ":" {
+                // Typed binding: name : Type = expr
+                mut cc := _cadv(c)   // skip name
+                cc = _cadv(cc)       // skip :
+                saved_pos := cc.pos
+                at := _parse_type_ann(cc)
+                cc = at.c
+                if _ck2(cc) == "=" {
+                    cc = _cadv(cc)  // skip =
+                    result := _check_expr_full(cc)
+                    cc = result.c
+                    cc = _env_add(cc, name, at.type_id, 0)
+                    return CE{c: cc, type_id: TY_UNIT}
+                }
+                // Not a binding, restore
+                cc = _cset_pos(cc, c.pos)
+            }
+        }
+    }
+    // Regular expression
+    _check_expr_full(c)
+}
+
+// --- Full expression (handles binary operators, postfix, assignment) ---
+
+fn _check_expr_full(c: Checker) -> CE {
+    mut result := _check_primary(c)
+    mut cc := result.c
+    mut left_type := result.type_id
+
+    // Postfix and binary
+    mut running := true
+    while running {
+        k := _ck2(cc)
+        if k == "." {
+            // Field access or method call
+            cc = _cadv(cc)
+            if _ck2(cc) != "IDENT" {
+                running = false
+            } else {
+                field := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == "(" {
+                    // Method call
+                    mr := _check_method_call(cc, left_type, field)
+                    cc = mr.c
+                    left_type = mr.type_id
+                } else {
+                    // Field access
+                    fr := _check_field(cc, left_type, field)
+                    cc = fr.c
+                    left_type = fr.type_id
+                }
+            }
+        } else if k == "(" {
+            // Function call (callee already consumed as IDENT)
+            // This handles f(args) where f was consumed as IDENT
+            // We need to look up the function
+            cr := _check_call_args(cc, left_type)
+            cc = cr.c
+            left_type = cr.type_id
+        } else if k == "[" {
+            // Index
+            cc = _cadv(cc)
+            idx := _check_expr_full(cc)
+            cc = idx.c
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+            // Result type is element type for arrays
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Array" {
+                left_type = info.type_id
+            } else if type_kind_name(info.kind) == "str" {
+                left_type = TY_STR
+            } else {
+                left_type = TY_UNKNOWN
+            }
+        } else if k == "?" {
+            cc = _cadv(cc)
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Result" {
+                left_type = info.type_id
+            } else if type_kind_name(info.kind) == "Optional" {
+                left_type = info.type_id
+            }
+        } else if k == "!" {
+            cc = _cadv(cc)
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Result" {
+                left_type = info.type_id
+            }
+        } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+                  k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+                  k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
+                  k == "<<" || k == ">>" {
+            op := _ccur(cc).text
+            cc = _cadv(cc)
+            right := _check_primary(cc)
+            cc = right.c
+            // Continue consuming right side with operators
+            mut rr_running := true
+            while rr_running {
+                rk := _ck2(cc)
+                if rk == "." || rk == "(" || rk == "[" || rk == "?" || rk == "!" {
+                    // Need to handle postfix on right operand
+                    post := _check_postfix_chain(cc, right.type_id)
+                    cc = post.c
+                    right = CE{c: cc, type_id: post.type_id}
+                } else {
+                    rr_running = false
+                }
+            }
+
+            // Type check binary operation
+            if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN {
+                q := _q()
+                cc = _cerror(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
+            }
+            // Check operand types match (for arithmetic)
+            if op != "&&" && op != "||" {
+                if left_type != TY_UNKNOWN && right.type_id != TY_UNKNOWN {
+                    if types_equal(cc.store, left_type, right.type_id) == false {
+                        is_str_concat := left_type == TY_STR && right.type_id == TY_STR
+                        is_cmp := op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
+                        if is_str_concat == false && is_cmp {
+                            q := _q()
+                            cc = _cerror(cc, E0102, "cannot compare " + q + format_type(cc.store, left_type) + q + " with " + q + format_type(cc.store, right.type_id) + q)
+                        }
+                    }
+                }
+            }
+            left_type = binary_result_type(cc.store, left_type, op)
+        } else if k == "|>" {
+            // Pipeline: left |> fn
+            cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" {
+                fname := _ccur(cc).text
+                cc = _cadv(cc)
+                sig := reg_find_fn(cc.registry, fname)
+                if sig.name != "" {
+                    left_type = sig.return_type
+                } else {
+                    left_type = TY_UNKNOWN
+                }
+            }
+        } else if k == "=" {
+            // Assignment
+            cc = _cadv(cc)
+            rhs := _check_expr_full(cc)
+            cc = rhs.c
+            left_type = TY_UNIT
+            running = false
+        } else {
+            // Check for statement boundary
+            if _is_cont(k) == false {
+                running = false
+            } else {
+                running = false
+            }
+        }
+    }
+
+    CE{c: cc, type_id: left_type}
+}
+
+fn _check_postfix_chain(c: Checker, base_type: i64) -> CE {
+    mut cc := c
+    mut cur_type := base_type
+    mut running := true
+    while running {
+        k := _ck2(cc)
+        if k == "." {
+            cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" {
+                field := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == "(" {
+                    mr := _check_method_call(cc, cur_type, field)
+                    cc = mr.c
+                    cur_type = mr.type_id
+                } else {
+                    fr := _check_field(cc, cur_type, field)
+                    cc = fr.c
+                    cur_type = fr.type_id
+                }
+            } else {
+                running = false
+            }
+        } else if k == "(" {
+            cr := _check_call_args(cc, cur_type)
+            cc = cr.c
+            cur_type = cr.type_id
+        } else if k == "[" {
+            cc = _cadv(cc)
+            idx := _check_expr_full(cc)
+            cc = idx.c
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+            info := store_get(cc.store, cur_type)
+            if type_kind_name(info.kind) == "Array" {
+                cur_type = info.type_id
+            } else {
+                cur_type = TY_UNKNOWN
+            }
+        } else if k == "?" || k == "!" {
+            cc = _cadv(cc)
+        } else {
+            running = false
+        }
+    }
+    CE{c: cc, type_id: cur_type}
+}
+
+fn _check_primary(c: Checker) -> CE {
+    k := _ck2(c)
+
+    // Unary prefix
+    if k == "-" || k == "!" || k == "~" {
+        cc := _cadv(c)
+        result := _check_primary(cc)
+        if k == "!" {
+            return CE{c: result.c, type_id: TY_BOOL}
+        }
+        return result
+    }
+
+    if k == "INT" { return CE{c: _cadv(c), type_id: TY_I64} }
+    if k == "FLOAT" { return CE{c: _cadv(c), type_id: TY_F64} }
+    if k == "STRING" { return CE{c: _cadv(c), type_id: TY_STR} }
+    if k == "true" || k == "false" { return CE{c: _cadv(c), type_id: TY_BOOL} }
+
+    if k == "if" { return _check_if(c) }
+    if k == "match" { return _check_match(c) }
+
+    if k == "IDENT" {
+        name := _ccur(c).text
+        mut cc := _cadv(c)
+
+        // Check for function call
+        if _ck2(cc) == "(" {
+            sig := reg_find_fn(cc.registry, name)
+            if sig.name != "" {
+                cr := _check_call_args(cc, TY_UNKNOWN)
+                cc = cr.c
+                return CE{c: cc, type_id: sig.return_type}
+            }
+            // Unknown function — still consume args
+            cr := _check_call_args(cc, TY_UNKNOWN)
+            return CE{c: cr.c, type_id: TY_UNKNOWN}
+        }
+
+        // Check for struct literal
+        lb := "\{"
+        if _ck2(cc) == lb {
+            // Could be struct literal
+            tid := resolve_type_name(cc.store, name)
+            if tid != TY_UNKNOWN {
+                sr := _check_struct_lit(cc, name, tid)
+                return sr
+            }
+        }
+
+        // Variable lookup
+        env_type := _env_lookup(cc, name)
+        if env_type != TY_UNKNOWN {
+            return CE{c: cc, type_id: env_type}
+        }
+
+        // Lookup fn sig (for function references)
+        sig := reg_find_fn(cc.registry, name)
+        if sig.name != "" {
+            return CE{c: cc, type_id: sig.return_type}
+        }
+
+        // Check builtins
+        if name == "true" { return CE{c: cc, type_id: TY_BOOL} }
+        if name == "false" { return CE{c: cc, type_id: TY_BOOL} }
+
+        return CE{c: cc, type_id: TY_UNKNOWN}
+    }
+
+    if k == "(" {
+        // Grouped expression
+        mut cc := _cadv(c)
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        if _ck2(cc) == ")" { cc = _cadv(cc) }
+        return CE{c: cc, type_id: result.type_id}
+    }
+
+    if k == "[" {
+        // Array literal
+        mut cc := _cadv(c)
+        cc = _cskip_nl(cc)
+        mut elem_type := TY_UNKNOWN
+        mut count := 0
+        while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+            cc = _cskip_nl(cc)
+            result := _check_expr_full(cc)
+            cc = result.c
+            if count == 0 { elem_type = result.type_id }
+            count = count + 1
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+        new_st := store_add(cc.store, mk_array_type(elem_type))
+        cc = _cset_store(cc, new_st)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
+    }
+
+    if k == "fn" {
+        // Closure — skip and return Unknown for now
+        mut cc := _cadv(c)
+        if _ck2(cc) == "(" {
+            cc = _cadv(cc)
+            while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "->" {
+            cc = _cadv(cc)
+            cc = _skip_type_toks(cc)
+        }
+        if _ck2(cc) == "=>" {
+            cc = _cadv(cc)
+            result := _check_expr_full(cc)
+            cc = result.c
+        }
+        return CE{c: cc, type_id: TY_UNKNOWN}
+    }
+
+    // Unknown
+    CE{c: _cadv(c), type_id: TY_UNKNOWN}
+}
+
+// --- Check function call arguments ---
+
+fn _check_call_args(c: Checker, callee_type: i64) -> CE {
+    mut cc := _cadv(c)  // skip (
+    cc = _cskip_nl(cc)
+    mut arg_count := 0
+    while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        arg_count = arg_count + 1
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == ")" { cc = _cadv(cc) }
+    CE{c: cc, type_id: callee_type}
+}
+
+// --- Check method call ---
+
+fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
+    mut cc := _cadv(c)  // skip (
+    cc = _cskip_nl(cc)
+    while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == ")" { cc = _cadv(cc) }
+
+    // Built-in method return types
+    if method == "len" { return CE{c: cc, type_id: TY_I64} }
+    if method == "contains" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "starts_with" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "ends_with" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "is_empty" { return CE{c: cc, type_id: TY_BOOL} }
+
+    // String methods returning str
+    if method == "trim" || method == "to_upper" || method == "to_lower" ||
+       method == "replace" || method == "substring" || method == "charAt" {
+        return CE{c: cc, type_id: TY_STR}
+    }
+
+    // split returns [str]
+    if method == "split" {
+        new_st := store_add(cc.store, mk_array_type(TY_STR))
+        cc = _cset_store(cc, new_st)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
+    }
+
+    // append returns same array type
+    if method == "append" {
+        return CE{c: cc, type_id: obj_type}
+    }
+
+    CE{c: cc, type_id: TY_UNKNOWN}
+}
+
+// --- Check field access ---
+
+fn _check_field(c: Checker, obj_type: i64, field: str) -> CE {
+    info := store_get(c.store, obj_type)
+    if type_kind_name(info.kind) == "Named" {
+        fi := reg_find_field(c.registry, info.name, field)
+        if fi.name != "" {
+            return CE{c: c, type_id: fi.type_id}
+        }
+        if obj_type != TY_UNKNOWN {
+            q := _q()
+            cc := _cerror(c, E0107, "field " + q + field + q + " not found on type " + q + info.name + q)
+            return CE{c: cc, type_id: TY_UNKNOWN}
+        }
+    }
+    CE{c: c, type_id: TY_UNKNOWN}
+}
+
+// --- Check struct literal ---
+
+fn _check_struct_lit(c: Checker, name: str, type_id: i64) -> CE {
+    lb := "\{"
+    rb := "\}"
+    mut cc := _cadv(c)  // skip {
+    cc = _cskip_nl(cc)
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        if _ck2(cc) == "IDENT" {
+            cc = _cadv(cc)  // skip field name
+            if _ck2(cc) == ":" {
+                cc = _cadv(cc)
+                result := _check_expr_full(cc)
+                cc = result.c
+            }
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," {
+            cc = _cadv(cc)
+            cc = _cskip_nl(cc)
+        }
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    CE{c: cc, type_id: type_id}
+}
+
+// --- Check if expression ---
+
+fn _check_if(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip if
+    lb := "\{"
+    // Check condition
+    mut cond_type := TY_UNKNOWN
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        result := _check_primary(cc)
+        cc = result.c
+        cond_type = result.type_id
+        // Handle operators in condition
+        k := _ck2(cc)
+        if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+           k == "&&" || k == "||" {
+            cc = _cadv(cc)
+            right := _check_primary(cc)
+            cc = right.c
+            cond_type = TY_BOOL
+        } else if _is_cont(k) == false || k == lb {
+            // done with condition
+        } else {
+            cc = _cadv(cc)
+        }
+    }
+
+    // Then block
+    then_result := _check_block(cc)
+    cc = then_result.c
+    mut result_type := then_result.type_id
+
+    // Else
+    if _ck2(cc) == "else" {
+        cc = _cadv(cc)
+        if _ck2(cc) == "if" {
+            else_result := _check_if(cc)
+            cc = else_result.c
+        } else {
+            else_result := _check_block(cc)
+            cc = else_result.c
+        }
+    }
+
+    CE{c: cc, type_id: result_type}
+}
+
+// --- Check match expression ---
+
+fn _check_match(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip match
+    lb := "\{"
+    rb := "\}"
+
+    // Subject
+    mut subj_type := TY_UNKNOWN
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        result := _check_primary(cc)
+        cc = result.c
+        subj_type = result.type_id
+        if _is_cont(_ck2(cc)) && _ck2(cc) != lb {
+            cc = _cadv(cc)
+        }
+    }
+
+    cc = _cskip_nl(cc)
+    if _ck2(cc) != lb { return CE{c: cc, type_id: TY_UNKNOWN} }
+    cc = _cadv(cc)  // skip {
+    cc = _cskip_nl(cc)
+
+    mut arm_type := TY_UNKNOWN
+    mut arm_count := 0
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        // Skip pattern
+        while _ck2(cc) != "=>" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        if _ck2(cc) == "=>" { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+
+        // Check arm body
+        if _ck2(cc) == lb {
+            body := _check_block(cc)
+            cc = body.c
+            if arm_count == 0 { arm_type = body.type_id }
+        } else {
+            body := _check_expr_full(cc)
+            cc = body.c
+            if arm_count == 0 { arm_type = body.type_id }
+        }
+        arm_count = arm_count + 1
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+
+    CE{c: cc, type_id: arm_type}
+}
+
+// --- Check for loop ---
+
+fn _check_for(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip for
+    lb := "\{"
+
+    // Loop variable
+    mut var_name := ""
+    if _ck2(cc) == "IDENT" {
+        var_name = _ccur(cc).text
+        cc = _cadv(cc)
+    }
+    if _ck2(cc) == "in" { cc = _cadv(cc) }
+
+    // Iterator expression
+    mut iter_type := TY_UNKNOWN
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        result := _check_expr_full(cc)
+        cc = result.c
+        iter_type = result.type_id
+    }
+
+    // Determine element type
+    mut elem_type := TY_UNKNOWN
+    info := store_get(cc.store, iter_type)
+    if type_kind_name(info.kind) == "Array" {
+        elem_type = info.type_id
+    }
+
+    // Register loop variable
+    if var_name != "" {
+        cc = _env_add(cc, var_name, elem_type, 0)
+    }
+
+    cc = _cset_loop(cc, true)
+    body := _check_block(cc)
+    cc = body.c
+    cc = _cset_loop(cc, false)
+    CE{c: cc, type_id: TY_UNIT}
+}
+
+// --- Check while loop ---
+
+fn _check_while(c: Checker) -> CE {
+    mut cc := _cadv(c)  // skip while
+    lb := "\{"
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        result := _check_primary(cc)
+        cc = result.c
+        if _is_cont(_ck2(cc)) && _ck2(cc) != lb { cc = _cadv(cc) }
+    }
+    cc = _cset_loop(cc, true)
+    body := _check_block(cc)
+    cc = body.c
+    cc = _cset_loop(cc, false)
+    CE{c: cc, type_id: TY_UNIT}
+}
+
+// --- Check loop ---
+
+fn _check_loop(c: Checker) -> CE {
+    cc := _cadv(c)  // skip loop
+    body := _check_block(cc)
+    CE{c: body.c, type_id: TY_UNIT}
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+fn check(tokens: [Token], table: SymbolTable, file: str) -> CheckResult {
+    mut c := _new_checker(tokens, table, file)
+
+    // Pass 1: register type declarations
+    c = _pass1_types(c)
+
+    // Pass 2: register function signatures
+    c = _pass2_fns(c)
+
+    // Pass 3: check bodies
+    c = _pass3_bodies(c)
+
+    CheckResult{store: c.store, registry: c.registry, diagnostics: c.diagnostics}
+}

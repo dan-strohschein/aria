@@ -1,0 +1,166 @@
+mod checker
+
+// ============================================================
+// Trait Registry
+// Built-in traits, operator-to-trait mapping, impl tracking.
+// ============================================================
+
+use diagnostic
+use lexer
+
+// --- TraitDef ---
+
+struct TraitDef {
+    name: str
+    method_names: [str]
+}
+
+fn _sentinel_trait_def() -> TraitDef =
+    TraitDef{name: "", method_names: [""]}
+
+// --- ImplDef ---
+
+struct ImplDef {
+    trait_name: str
+    type_name: str
+}
+
+fn _sentinel_impl_def() -> ImplDef =
+    ImplDef{trait_name: "", type_name: ""}
+
+// --- TraitRegistry ---
+
+struct TraitRegistry {
+    trait_defs: [TraitDef]
+    impl_defs: [ImplDef]
+}
+
+fn new_trait_registry() -> TraitRegistry =
+    TraitRegistry{
+        trait_defs: [_sentinel_trait_def()],
+        impl_defs: [_sentinel_impl_def()]
+    }
+
+fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry =
+    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs}
+
+fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry =
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def)}
+
+fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.type_name == type_name && imp.trait_name == trait_name {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+// --- Populate built-in traits and impls ---
+
+fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
+    mut rr := reg
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Add", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Sub", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Mul", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Div", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Mod", type_name: type_name})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Numeric", type_name: type_name})
+    rr
+}
+
+fn populate_builtins(reg: TraitRegistry) -> TraitRegistry {
+    mut rr := reg
+    // Register built-in traits
+    rr = treg_add_trait(rr, TraitDef{name: "Eq", method_names: ["", "eq"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Ord", method_names: ["", "cmp"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Hash", method_names: ["", "hash"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Add", method_names: ["", "add"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Sub", method_names: ["", "sub"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Mul", method_names: ["", "mul"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Div", method_names: ["", "div"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Mod", method_names: ["", "mod"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Numeric", method_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Clone", method_names: ["", "clone"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Debug", method_names: ["", "debug_str"]})
+    rr = treg_add_trait(rr, TraitDef{name: "Display", method_names: ["", "to_str"]})
+
+    // Numeric types: all implement Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric
+    rr = _add_numeric_impl(rr, "i64")
+    rr = _add_numeric_impl(rr, "i32")
+    rr = _add_numeric_impl(rr, "i16")
+    rr = _add_numeric_impl(rr, "i8")
+    rr = _add_numeric_impl(rr, "u64")
+    rr = _add_numeric_impl(rr, "u32")
+    rr = _add_numeric_impl(rr, "u16")
+    rr = _add_numeric_impl(rr, "u8")
+    rr = _add_numeric_impl(rr, "f64")
+    rr = _add_numeric_impl(rr, "f32")
+
+    // Bool: Eq, Hash
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "bool"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "bool"})
+
+    // Str: Eq, Ord, Hash, Add (concatenation)
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "str"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: "str"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "str"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Add", type_name: "str"})
+
+    // Char: Eq, Ord, Hash
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "char"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: "char"})
+    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "char"})
+
+    rr
+}
+
+// --- Operator to trait mapping ---
+
+fn op_requires_trait(op: str) -> str {
+    if op == "+" { return "Add" }
+    if op == "-" { return "Sub" }
+    if op == "*" { return "Mul" }
+    if op == "/" { return "Div" }
+    if op == "%" { return "Mod" }
+    if op == "==" || op == "!=" { return "Eq" }
+    if op == "<" || op == ">" || op == "<=" || op == ">=" { return "Ord" }
+    ""
+}
+
+// Check if a type supports a given operator
+fn type_supports_op(treg: TraitRegistry, store: TypeStore, type_id: i64, op: str) -> bool {
+    // Logical operators work on bool only
+    if op == "&&" || op == "||" {
+        return type_id == TY_BOOL
+    }
+    // Bitwise operators work on integers
+    if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+        return is_integer(store, type_id)
+    }
+    // Trait-based operators
+    trait_name := op_requires_trait(op)
+    if trait_name == "" { return true }
+    type_name := format_type(store, type_id)
+    treg_has_impl(treg, type_name, trait_name)
+}
+
+// Get result type of a binary operator
+fn binary_result_type(store: TypeStore, left: i64, op: str) -> i64 {
+    // Comparison/equality always returns bool
+    if op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=" {
+        return TY_BOOL
+    }
+    // Logical operators return bool
+    if op == "&&" || op == "||" {
+        return TY_BOOL
+    }
+    // Arithmetic and bitwise return same type as operands
+    left
+}

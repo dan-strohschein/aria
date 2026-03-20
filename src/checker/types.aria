@@ -1,0 +1,376 @@
+mod checker
+
+// ============================================================
+// Type Representation
+// TypeKind enum, TypeInfo struct, TypeStore, and type utilities.
+// Types are stored as flat structs with integer IDs (indices
+// into a TypeStore array), avoiding recursive types.
+// ============================================================
+
+use diagnostic
+use lexer
+
+// --- TypeKind ---
+
+type TypeKind =
+    | TyI8
+    | TyI16
+    | TyI32
+    | TyI64
+    | TyU8
+    | TyU16
+    | TyU32
+    | TyU64
+    | TyF32
+    | TyF64
+    | TyBool
+    | TyStr
+    | TyChar
+    | TyUnit
+    | TyArray
+    | TyFunction
+    | TyNamed
+    | TyResult
+    | TyOptional
+    | TyTypeVar
+    | TyNever
+    | TyUnknown
+    | TyNone
+
+fn type_kind_name(k: TypeKind) -> str = match k {
+    TyI8 => "i8"
+    TyI16 => "i16"
+    TyI32 => "i32"
+    TyI64 => "i64"
+    TyU8 => "u8"
+    TyU16 => "u16"
+    TyU32 => "u32"
+    TyU64 => "u64"
+    TyF32 => "f32"
+    TyF64 => "f64"
+    TyBool => "bool"
+    TyStr => "str"
+    TyChar => "char"
+    TyUnit => "unit"
+    TyArray => "Array"
+    TyFunction => "Function"
+    TyNamed => "Named"
+    TyResult => "Result"
+    TyOptional => "Optional"
+    TyTypeVar => "TypeVar"
+    TyNever => "Never"
+    TyUnknown => "Unknown"
+    TyNone => "None"
+}
+
+fn tk_eq(a: TypeKind, b: TypeKind) -> bool =
+    type_kind_name(a) == type_kind_name(b)
+
+// --- TypeInfo ---
+
+struct TypeInfo {
+    kind: TypeKind
+    name: str
+    type_id: i64
+    type_id2: i64
+    param_start: i64
+    param_count: i64
+}
+
+fn _sentinel_type() -> TypeInfo =
+    TypeInfo{kind: TyNone, name: "", type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
+
+fn _mk_prim(kind: TypeKind) -> TypeInfo =
+    TypeInfo{kind: kind, name: type_kind_name(kind), type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
+
+fn mk_array_type(elem_id: i64) -> TypeInfo =
+    TypeInfo{kind: TyArray, name: "", type_id: elem_id, type_id2: 0, param_start: 0, param_count: 0}
+
+fn mk_fn_type(return_id: i64, param_start: i64, param_count: i64) -> TypeInfo =
+    TypeInfo{kind: TyFunction, name: "", type_id: return_id, type_id2: 0, param_start: param_start, param_count: param_count}
+
+fn mk_named_type(name: str) -> TypeInfo =
+    TypeInfo{kind: TyNamed, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
+
+fn mk_result_type(ok_id: i64, err_id: i64) -> TypeInfo =
+    TypeInfo{kind: TyResult, name: "", type_id: ok_id, type_id2: err_id, param_start: 0, param_count: 0}
+
+fn mk_optional_type(inner_id: i64) -> TypeInfo =
+    TypeInfo{kind: TyOptional, name: "", type_id: inner_id, type_id2: 0, param_start: 0, param_count: 0}
+
+fn mk_typevar(name: str) -> TypeInfo =
+    TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
+
+// --- TypeStore ---
+
+struct TypeStore {
+    types: [TypeInfo]
+}
+
+// Well-known type IDs (indices into the store)
+// Index 0 = sentinel (TyNone)
+// Indices 1-14 = primitive types
+const TY_NONE: i64 = 0
+const TY_I64: i64 = 1
+const TY_I32: i64 = 2
+const TY_I16: i64 = 3
+const TY_I8: i64 = 4
+const TY_U64: i64 = 5
+const TY_U32: i64 = 6
+const TY_U16: i64 = 7
+const TY_U8: i64 = 8
+const TY_F64: i64 = 9
+const TY_F32: i64 = 10
+const TY_BOOL: i64 = 11
+const TY_STR: i64 = 12
+const TY_CHAR: i64 = 13
+const TY_UNIT: i64 = 14
+const TY_NEVER: i64 = 15
+const TY_UNKNOWN: i64 = 16
+
+fn new_store() -> TypeStore {
+    mut types := [_sentinel_type()]
+    types = types.append(_mk_prim(TyI64))     // 1: i64
+    types = types.append(_mk_prim(TyI32))     // 2: i32
+    types = types.append(_mk_prim(TyI16))     // 3: i16
+    types = types.append(_mk_prim(TyI8))      // 4: i8
+    types = types.append(_mk_prim(TyU64))     // 5: u64
+    types = types.append(_mk_prim(TyU32))     // 6: u32
+    types = types.append(_mk_prim(TyU16))     // 7: u16
+    types = types.append(_mk_prim(TyU8))      // 8: u8
+    types = types.append(_mk_prim(TyF64))     // 9: f64
+    types = types.append(_mk_prim(TyF32))     // 10: f32
+    types = types.append(_mk_prim(TyBool))    // 11: bool
+    types = types.append(_mk_prim(TyStr))     // 12: str
+    types = types.append(_mk_prim(TyChar))    // 13: char
+    types = types.append(_mk_prim(TyUnit))    // 14: unit
+    types = types.append(TypeInfo{kind: TyNever, name: "Never", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+    types = types.append(TypeInfo{kind: TyUnknown, name: "Unknown", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+    TypeStore{types: types}
+}
+
+fn store_add(store: TypeStore, info: TypeInfo) -> TypeStore =
+    TypeStore{types: store.types.append(info)}
+
+fn store_get(store: TypeStore, id: i64) -> TypeInfo {
+    if id >= 0 && id < store.types.len() {
+        return store.types[id]
+    }
+    _sentinel_type()
+}
+
+fn store_last_id(store: TypeStore) -> i64 = store.types.len() - 1
+
+fn store_size(store: TypeStore) -> i64 = store.types.len()
+
+// --- Type name formatting ---
+
+fn format_type(store: TypeStore, id: i64) -> str {
+    if id <= 0 || id >= store.types.len() { return "<none>" }
+    info := store.types[id]
+    kn := type_kind_name(info.kind)
+    if kn == "i64" || kn == "i32" || kn == "i16" || kn == "i8" ||
+       kn == "u64" || kn == "u32" || kn == "u16" || kn == "u8" ||
+       kn == "f64" || kn == "f32" || kn == "bool" || kn == "str" ||
+       kn == "char" || kn == "unit" || kn == "Never" || kn == "Unknown" {
+        return kn
+    }
+    if kn == "Named" { return info.name }
+    if kn == "Array" { return "[" + format_type(store, info.type_id) + "]" }
+    if kn == "Optional" { return format_type(store, info.type_id) + "?" }
+    if kn == "Result" {
+        return format_type(store, info.type_id) + " ! " + format_type(store, info.type_id2)
+    }
+    if kn == "Function" { return "fn(...)" }
+    if kn == "TypeVar" { return info.name }
+    kn
+}
+
+// --- Type utilities ---
+
+fn is_numeric(store: TypeStore, id: i64) -> bool {
+    if id <= 0 { return false }
+    info := store.types[id]
+    kn := type_kind_name(info.kind)
+    kn == "i64" || kn == "i32" || kn == "i16" || kn == "i8" ||
+    kn == "u64" || kn == "u32" || kn == "u16" || kn == "u8" ||
+    kn == "f64" || kn == "f32"
+}
+
+fn is_integer(store: TypeStore, id: i64) -> bool {
+    if id <= 0 { return false }
+    info := store.types[id]
+    kn := type_kind_name(info.kind)
+    kn == "i64" || kn == "i32" || kn == "i16" || kn == "i8" ||
+    kn == "u64" || kn == "u32" || kn == "u16" || kn == "u8"
+}
+
+fn is_float(store: TypeStore, id: i64) -> bool {
+    if id <= 0 { return false }
+    info := store.types[id]
+    kn := type_kind_name(info.kind)
+    kn == "f64" || kn == "f32"
+}
+
+fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
+    if a == b { return true }
+    if a <= 0 || b <= 0 { return false }
+    if a >= store.types.len() || b >= store.types.len() { return false }
+    ai := store.types[a]
+    bi := store.types[b]
+    ak := type_kind_name(ai.kind)
+    bk := type_kind_name(bi.kind)
+    if ak != bk { return false }
+    if ak == "Named" { return ai.name == bi.name }
+    if ak == "Array" { return types_equal(store, ai.type_id, bi.type_id) }
+    if ak == "Result" {
+        return types_equal(store, ai.type_id, bi.type_id) &&
+               types_equal(store, ai.type_id2, bi.type_id2)
+    }
+    if ak == "Optional" { return types_equal(store, ai.type_id, bi.type_id) }
+    true
+}
+
+fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
+    if types_equal(store, src, dst) { return true }
+    if src == TY_NEVER { return true }
+    if src == TY_UNKNOWN || dst == TY_UNKNOWN { return true }
+    false
+}
+
+// --- Resolve a type name to a type ID ---
+
+fn resolve_type_name(store: TypeStore, name: str) -> i64 {
+    if name == "i64" { return TY_I64 }
+    if name == "i32" { return TY_I32 }
+    if name == "i16" { return TY_I16 }
+    if name == "i8" { return TY_I8 }
+    if name == "u64" { return TY_U64 }
+    if name == "u32" { return TY_U32 }
+    if name == "u16" { return TY_U16 }
+    if name == "u8" { return TY_U8 }
+    if name == "f64" { return TY_F64 }
+    if name == "f32" { return TY_F32 }
+    if name == "bool" { return TY_BOOL }
+    if name == "str" { return TY_STR }
+    if name == "char" { return TY_CHAR }
+    if name == "unit" { return TY_UNIT }
+    // Search for named types
+    mut i := 17  // after well-known types
+    while i < store.types.len() {
+        info := store.types[i]
+        if type_kind_name(info.kind) == "Named" && info.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    TY_UNKNOWN
+}
+
+// --- FieldInfo ---
+
+struct FieldInfo {
+    name: str
+    type_id: i64
+}
+
+fn _sentinel_field() -> FieldInfo = FieldInfo{name: "", type_id: 0}
+
+// --- StructDef ---
+
+struct StructDef {
+    name: str
+    fields: [FieldInfo]
+    is_sum: bool
+    variant_names: [str]
+}
+
+fn _sentinel_struct_def() -> StructDef =
+    StructDef{name: "", fields: [_sentinel_field()], is_sum: false, variant_names: [""]}
+
+fn new_struct_def(name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef =
+    StructDef{name: name, fields: fields, is_sum: is_sum, variant_names: variants}
+
+// --- FnSig ---
+
+struct FnSig {
+    name: str
+    param_names: [str]
+    param_types: [i64]
+    return_type: i64
+    error_type: i64
+}
+
+fn _sentinel_fn_sig() -> FnSig =
+    FnSig{name: "", param_names: [""], param_types: [0], return_type: 0, error_type: 0}
+
+fn new_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig =
+    FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err}
+
+// --- TypeRegistry ---
+
+struct TypeRegistry {
+    struct_defs: [StructDef]
+    fn_sigs: [FnSig]
+}
+
+fn new_registry() -> TypeRegistry =
+    TypeRegistry{
+        struct_defs: [_sentinel_struct_def()],
+        fn_sigs: [_sentinel_fn_sig()]
+    }
+
+fn reg_add_struct(reg: TypeRegistry, def: StructDef) -> TypeRegistry =
+    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs}
+
+fn reg_add_fn(reg: TypeRegistry, sig: FnSig) -> TypeRegistry =
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig)}
+
+fn reg_find_struct(reg: TypeRegistry, name: str) -> StructDef {
+    mut i := 1
+    while i < reg.struct_defs.len() {
+        if reg.struct_defs[i].name == name {
+            return reg.struct_defs[i]
+        }
+        i = i + 1
+    }
+    _sentinel_struct_def()
+}
+
+fn reg_find_fn(reg: TypeRegistry, name: str) -> FnSig {
+    mut i := 1
+    while i < reg.fn_sigs.len() {
+        if reg.fn_sigs[i].name == name {
+            return reg.fn_sigs[i]
+        }
+        i = i + 1
+    }
+    _sentinel_fn_sig()
+}
+
+fn reg_find_field(reg: TypeRegistry, struct_name: str, field_name: str) -> FieldInfo {
+    def := reg_find_struct(reg, struct_name)
+    if def.name == "" { return _sentinel_field() }
+    mut i := 1  // skip sentinel
+    while i < def.fields.len() {
+        if def.fields[i].name == field_name {
+            return def.fields[i]
+        }
+        i = i + 1
+    }
+    _sentinel_field()
+}
+
+fn reg_has_variant(reg: TypeRegistry, struct_name: str, variant_name: str) -> bool {
+    def := reg_find_struct(reg, struct_name)
+    if def.name == "" { return false }
+    if def.is_sum == false { return false }
+    mut i := 1
+    while i < def.variant_names.len() {
+        if def.variant_names[i] == variant_name {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}

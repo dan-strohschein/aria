@@ -1,0 +1,303 @@
+mod checker
+
+// ============================================================
+// Type Checker Tests
+// ============================================================
+
+use diagnostic
+use lexer
+use resolver
+
+// --- Helpers ---
+// NOTE: Never use variable name "t" in test blocks (shadows Go testing.T)
+
+fn _check_source(source: str) -> CheckResult {
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    check(toks, rr.table, "test.aria")
+}
+
+fn _check_has_errors(result: CheckResult) -> bool = bag_has_errors(result.diagnostics)
+
+fn _check_err_count(result: CheckResult) -> i64 = bag_error_count(result.diagnostics)
+
+fn _check_has_code(result: CheckResult, code: str) -> bool {
+    mut i := 1
+    while i < result.diagnostics.diagnostics.len() {
+        if result.diagnostics.diagnostics[i].code == code {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+// --- TypeStore tests ---
+
+test "new store has primitives" {
+    st := new_store()
+    assert store_size(st) == 17  // sentinel + 14 prims + never + unknown
+}
+
+test "store get i64" {
+    st := new_store()
+    info := store_get(st, TY_I64)
+    assert type_kind_name(info.kind) == "i64"
+}
+
+test "store get bool" {
+    st := new_store()
+    info := store_get(st, TY_BOOL)
+    assert type_kind_name(info.kind) == "bool"
+}
+
+test "format type primitives" {
+    st := new_store()
+    assert format_type(st, TY_I64) == "i64"
+    assert format_type(st, TY_BOOL) == "bool"
+    assert format_type(st, TY_STR) == "str"
+}
+
+test "types equal same id" {
+    st := new_store()
+    assert types_equal(st, TY_I64, TY_I64)
+    assert types_equal(st, TY_BOOL, TY_BOOL)
+}
+
+test "types not equal different" {
+    st := new_store()
+    assert types_equal(st, TY_I64, TY_BOOL) == false
+    assert types_equal(st, TY_I64, TY_STR) == false
+}
+
+test "is numeric" {
+    st := new_store()
+    assert is_numeric(st, TY_I64)
+    assert is_numeric(st, TY_F64)
+    assert is_numeric(st, TY_BOOL) == false
+    assert is_numeric(st, TY_STR) == false
+}
+
+test "is integer" {
+    st := new_store()
+    assert is_integer(st, TY_I64)
+    assert is_integer(st, TY_U8)
+    assert is_integer(st, TY_F64) == false
+}
+
+test "resolve type name" {
+    st := new_store()
+    assert resolve_type_name(st, "i64") == TY_I64
+    assert resolve_type_name(st, "bool") == TY_BOOL
+    assert resolve_type_name(st, "str") == TY_STR
+}
+
+test "is assignable same type" {
+    st := new_store()
+    assert is_assignable(st, TY_I64, TY_I64)
+    assert is_assignable(st, TY_BOOL, TY_BOOL)
+}
+
+test "is assignable never to anything" {
+    st := new_store()
+    assert is_assignable(st, TY_NEVER, TY_I64)
+    assert is_assignable(st, TY_NEVER, TY_STR)
+}
+
+test "is assignable different types" {
+    st := new_store()
+    assert is_assignable(st, TY_I64, TY_BOOL) == false
+}
+
+// --- TypeRegistry tests ---
+
+test "registry add and find struct" {
+    mut reg := new_registry()
+    mut fields := [FieldInfo{name: "", type_id: 0}]
+    fields = fields.append(FieldInfo{name: "x", type_id: TY_I64})
+    def := new_struct_def("Point", fields, false, [""])
+    reg = reg_add_struct(reg, def)
+    found := reg_find_struct(reg, "Point")
+    assert found.name == "Point"
+}
+
+test "registry find field" {
+    mut reg := new_registry()
+    mut fields := [FieldInfo{name: "", type_id: 0}]
+    fields = fields.append(FieldInfo{name: "x", type_id: TY_I64})
+    fields = fields.append(FieldInfo{name: "y", type_id: TY_I64})
+    def := new_struct_def("Point", fields, false, [""])
+    reg = reg_add_struct(reg, def)
+    fi := reg_find_field(reg, "Point", "x")
+    assert fi.name == "x"
+    assert fi.type_id == TY_I64
+}
+
+test "registry find fn" {
+    mut reg := new_registry()
+    sig := new_fn_sig("add", ["", "a", "b"], [0, TY_I64, TY_I64], TY_I64, 0)
+    reg = reg_add_fn(reg, sig)
+    found := reg_find_fn(reg, "add")
+    assert found.name == "add"
+    assert found.return_type == TY_I64
+}
+
+// --- TraitRegistry tests ---
+
+test "trait registry has builtin impls" {
+    treg := populate_builtins(new_trait_registry())
+    assert treg_has_impl(treg, "i64", "Eq")
+    assert treg_has_impl(treg, "i64", "Add")
+    assert treg_has_impl(treg, "str", "Eq")
+    assert treg_has_impl(treg, "bool", "Eq")
+}
+
+test "type supports arithmetic op" {
+    treg := populate_builtins(new_trait_registry())
+    st := new_store()
+    assert type_supports_op(treg, st, TY_I64, "+")
+    assert type_supports_op(treg, st, TY_I64, "==")
+    assert type_supports_op(treg, st, TY_BOOL, "&&")
+}
+
+test "binary result type" {
+    st := new_store()
+    assert binary_result_type(st, TY_I64, "+") == TY_I64
+    assert binary_result_type(st, TY_I64, "==") == TY_BOOL
+    assert binary_result_type(st, TY_BOOL, "&&") == TY_BOOL
+}
+
+// --- Checker integration tests ---
+
+test "check integer literal" {
+    result := _check_source("mod test\nfn foo() -> i64 = 42")
+    assert _check_has_errors(result) == false
+}
+
+test "check bool literal" {
+    result := _check_source("mod test\nfn foo() -> bool = true")
+    assert _check_has_errors(result) == false
+}
+
+test "check string literal" {
+    result := _check_source("mod test\nfn foo() -> str = \"hello\"")
+    assert _check_has_errors(result) == false
+}
+
+test "check arithmetic" {
+    result := _check_source("mod test\nfn foo() -> i64 = 1 + 2")
+    assert _check_has_errors(result) == false
+}
+
+test "check comparison" {
+    result := _check_source("mod test\nfn foo() -> bool = 1 < 2")
+    assert _check_has_errors(result) == false
+}
+
+test "check logical" {
+    result := _check_source("mod test\nfn foo() -> bool = true && false")
+    assert _check_has_errors(result) == false
+}
+
+test "check parameter types" {
+    result := _check_source("mod test\nfn add(a: i64, b: i64) -> i64 = a + b")
+    assert _check_has_errors(result) == false
+}
+
+test "check forward fn call" {
+    result := _check_source("mod test\nfn foo() -> i64 = bar()\nfn bar() -> i64 = 42")
+    assert _check_has_errors(result) == false
+}
+
+test "check variable binding" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    x := 42\n    x\n" + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check const declaration" {
+    result := _check_source("mod test\nconst MAX: i64 = 100\nfn foo() -> i64 = MAX")
+    assert _check_has_errors(result) == false
+}
+
+test "check struct field types registered" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nstruct Point " + lb + "\n    x: i64\n    y: i64\n" + rb + "\nfn foo() -> i64 = 42"
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+    // Verify Point is in registry
+    found := reg_find_struct(result.registry, "Point")
+    assert found.name == "Point"
+}
+
+test "check sum type registered" {
+    source := "mod test\ntype Color =\n    | Red\n    | Green\n    | Blue\nfn foo() -> i64 = 42"
+    result := _check_source(source)
+    found := reg_find_struct(result.registry, "Color")
+    assert found.name == "Color"
+    assert found.is_sum
+}
+
+test "check fn sig registered" {
+    result := _check_source("mod test\nfn add(a: i64, b: i64) -> i64 = a + b")
+    sig := reg_find_fn(result.registry, "add")
+    assert sig.name == "add"
+    assert sig.return_type == TY_I64
+}
+
+test "check entry block" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 = 42\nentry " + lb + "\n    foo()\n" + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check test block" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn add(a: i64, b: i64) -> i64 = a + b\ntest \"addition\" " + lb + "\n    assert add(1, 2) == 3\n" + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check method call len" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo(s: str) -> i64 = s.len()"
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check array literal" {
+    result := _check_source("mod test\nfn foo() -> i64 = [1, 2, 3].len()")
+    assert _check_has_errors(result) == false
+}
+
+test "check if expression" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo(x: i64) -> i64 = if x > 0 " + lb + " 1 " + rb + " else " + lb + " 0 " + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check for loop" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    mut s := 0\n    for i in [1, 2, 3] " + lb + "\n        s = s + i\n    " + rb + "\n    s\n" + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
+
+test "check while loop" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    mut x := 10\n    while x > 0 " + lb + "\n        x = x - 1\n    " + rb + "\n    x\n" + rb
+    result := _check_source(source)
+    assert _check_has_errors(result) == false
+}
