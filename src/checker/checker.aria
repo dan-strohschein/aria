@@ -724,6 +724,7 @@ fn _check_fn(c: Checker) -> Checker {
 
     if _ck2(cc) == "=" {
         cc = _cadv(cc)
+        cc = _cskip_nl(cc)
         result := _check_expr_full(cc)
         cc = result.c
         // Check return type
@@ -1011,12 +1012,14 @@ fn _check_expr_full(c: Checker) -> CE {
             }
 
             // Type check binary operation
-            if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN {
+            // Skip check when left_type is bool (precedence flattening in flat checker)
+            if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN && left_type != TY_BOOL {
                 q := _q()
                 cc = _cerror(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
             }
             // Check operand types match (for arithmetic)
-            if op != "&&" && op != "||" {
+            // Skip check for &&/|| and when left_type is bool (precedence flattening)
+            if op != "&&" && op != "||" && left_type != TY_BOOL {
                 if left_type != TY_UNKNOWN && right.type_id != TY_UNKNOWN {
                     if types_equal(cc.store, left_type, right.type_id) == false {
                         is_str_concat := left_type == TY_STR && right.type_id == TY_STR

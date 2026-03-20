@@ -555,6 +555,7 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
 
     if _lk(ll) == "=" {
         ll = _ladv(ll)
+        ll = _lskip_nl(ll)
         result := _lower_expr(ll)
         ll = result.l
         // Pass return type in type_id so emitter loads X1 for string returns

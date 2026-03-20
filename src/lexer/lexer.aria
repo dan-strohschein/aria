@@ -144,7 +144,7 @@ fn _add_error(lex: Lexer, code: str, message: str) -> Lexer {
 }
 
 fn _in_delimiters(lex: Lexer) -> bool =
-    lex.paren_depth > 0 || lex.bracket_depth > 0 || lex.brace_depth > 0
+    lex.paren_depth > 0 || lex.bracket_depth > 0
 
 fn _set_depth(lex: Lexer, paren: i64, bracket: i64, brace: i64) -> Lexer =
     Lexer{

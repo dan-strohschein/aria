@@ -172,6 +172,9 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "eprintln", SkBuiltin)
     rr = _add_builtin(rr, "assert", SkBuiltin)
     rr = _add_builtin(rr, "panic", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaReadFile", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaWriteBinaryFile", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArgs", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)
@@ -508,6 +511,7 @@ fn _resolve_fn(r: Resolver) -> Resolver {
     lb := "\{"
     if _rk(rr) == "=" {
         rr = _radv(rr)
+        rr = _rskip_nl(rr)
         rr = _resolve_expr_until_nl(rr)
     } else if _rk(rr) == lb {
         rr = _resolve_block(rr)
@@ -694,6 +698,7 @@ fn _resolve_paren_contents(r: Resolver) -> Resolver {
 
 fn _resolve_bracket_contents(r: Resolver) -> Resolver {
     mut rr := r
+    lb := "\{"
     while _rk(rr) != "]" && _rk(rr) != "EOF" {
         k := _rk(rr)
         if k == "IDENT" {
@@ -702,9 +707,19 @@ fn _resolve_bracket_contents(r: Resolver) -> Resolver {
             } else {
                 rr = _resolve_ident(rr)
             }
+        } else if k == lb {
+            // Struct literal inside array
+            if rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "IDENT" {
+                rr = _resolve_struct_lit(rr)
+            } else {
+                rr = _resolve_block(rr)
+            }
         } else if k == "[" {
             rr = _radv(rr)
             rr = _resolve_bracket_contents(rr)
+        } else if k == "(" {
+            rr = _radv(rr)
+            rr = _resolve_paren_contents(rr)
         } else {
             rr = _radv(rr)
         }

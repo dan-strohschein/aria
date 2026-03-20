@@ -199,6 +199,12 @@ fn run_build(files: [str], format: str, target: str) -> i64 {
     // Run full pipeline: lex → resolve → check → lower → emit → write
     diags := generate_from_sources(files, output)
     if bag_has_errors(diags) {
+        mut di := 1
+        while di < diags.diagnostics.len() {
+            d := diags.diagnostics[di]
+            println(format_span(d.span) + ": " + severity_to_str(d.severity) + "[" + d.code + "]: " + d.message)
+            di = di + 1
+        }
         println(format_summary(diags))
         return 1
     }
