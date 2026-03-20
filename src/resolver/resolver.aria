@@ -1,0 +1,1025 @@
+mod resolver
+
+// ============================================================
+// Name Resolution — Two-Pass Resolver over Token Stream
+// Pass 1: Collect top-level declarations into module scope
+// Pass 2: Walk bodies, create block scopes, resolve identifiers
+// ============================================================
+
+use diagnostic
+use lexer
+
+// --- Resolver state ---
+
+struct Resolver {
+    tokens: [Token]
+    pos: i64
+    table: SymbolTable
+    diagnostics: DiagnosticBag
+    current_scope: i64
+    file: str
+    is_public: bool
+}
+
+fn _new_resolver(tokens: [Token], file: str) -> Resolver =
+    Resolver{
+        tokens: tokens,
+        pos: 0,
+        table: new_table(),
+        diagnostics: new_bag(),
+        current_scope: 0,
+        file: file,
+        is_public: false
+    }
+
+// --- ResolveResult ---
+
+struct ResolveResult {
+    table: SymbolTable
+    diagnostics: DiagnosticBag
+}
+
+// --- Helpers ---
+
+fn _rcur(r: Resolver) -> Token {
+    if r.pos >= r.tokens.len() {
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+    }
+    r.tokens[r.pos]
+}
+
+fn _rk(r: Resolver) -> str = token_name(_rcur(r).kind)
+
+fn _radv(r: Resolver) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos + 1, table: r.table,
+             diagnostics: r.diagnostics, current_scope: r.current_scope,
+             file: r.file, is_public: r.is_public}
+
+fn _rset_pos(r: Resolver, pos: i64) -> Resolver =
+    Resolver{tokens: r.tokens, pos: pos, table: r.table,
+             diagnostics: r.diagnostics, current_scope: r.current_scope,
+             file: r.file, is_public: r.is_public}
+
+fn _rset_table(r: Resolver, table: SymbolTable) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos, table: table,
+             diagnostics: r.diagnostics, current_scope: r.current_scope,
+             file: r.file, is_public: r.is_public}
+
+fn _rset_diag(r: Resolver, diag: DiagnosticBag) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
+             diagnostics: diag, current_scope: r.current_scope,
+             file: r.file, is_public: r.is_public}
+
+fn _rset_scope(r: Resolver, scope_id: i64) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
+             diagnostics: r.diagnostics, current_scope: scope_id,
+             file: r.file, is_public: r.is_public}
+
+fn _rset_public(r: Resolver, is_public: bool) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
+             diagnostics: r.diagnostics, current_scope: r.current_scope,
+             file: r.file, is_public: is_public}
+
+fn _rspan(r: Resolver) -> Span {
+    tok := _rcur(r)
+    new_span(r.file, tok.line, tok.col, tok.offset, tok.text.len())
+}
+
+fn _rskip_nl(r: Resolver) -> Resolver {
+    mut rr := r
+    while _rk(rr) == "NEWLINE" { rr = _radv(rr) }
+    rr
+}
+
+fn _rerror(r: Resolver, code: str, msg: str) -> Resolver {
+    span := _rspan(r)
+    _rset_diag(r, bag_add_error(r.diagnostics, code, msg, span))
+}
+
+fn _rwarning(r: Resolver, code: str, msg: str) -> Resolver {
+    span := _rspan(r)
+    _rset_diag(r, bag_add_warning(r.diagnostics, code, msg, span))
+}
+
+// --- Add symbol with duplicate checking ---
+
+fn _add_sym(r: Resolver, name: str, kind: SymbolKind, span: Span, is_mut: bool, is_pub: bool) -> Resolver {
+    existing := lookup_local(r.table, r.current_scope, name)
+    if existing.name != "" {
+        q := _q()
+        diag := bag_add_error(r.diagnostics, E0702, "duplicate declaration of " + q + name + q, span)
+        return _rset_diag(r, diag)
+    }
+    sym := new_symbol(name, kind, span, r.current_scope, is_mut, is_pub)
+    _rset_table(r, add_symbol(r.table, sym))
+}
+
+// --- Add symbol with shadow warning ---
+
+fn _add_sym_warn_shadow(r: Resolver, name: str, kind: SymbolKind, span: Span, is_mut: bool) -> Resolver {
+    // Check if name already exists in any ancestor scope
+    existing := lookup(r.table, r.current_scope, name)
+    mut rr := r
+    if existing.name != "" && sk_eq(existing.kind, SkBuiltin) == false {
+        q := _q()
+        rr = _rwarning(rr, W0004, "variable " + q + name + q + " shadows previous declaration")
+    }
+    sym := new_symbol(name, kind, span, rr.current_scope, is_mut, false)
+    _rset_table(rr, add_symbol(rr.table, sym))
+}
+
+// --- Push/pop scope ---
+
+fn _push_scope(r: Resolver, kind: ScopeKind, name: str) -> Resolver {
+    new_t := add_scope(r.table, kind, r.current_scope, name)
+    new_id := last_scope_id(new_t)
+    rr := _rset_table(r, new_t)
+    _rset_scope(rr, new_id)
+}
+
+fn _pop_scope(r: Resolver, parent: i64) -> Resolver =
+    _rset_scope(r, parent)
+
+// --- Built-in pre-population ---
+
+fn _builtin_span() -> Span = new_span("<builtin>", 0, 0, 0, 0)
+
+fn _add_builtin(r: Resolver, name: str, kind: SymbolKind) -> Resolver {
+    sym := new_symbol(name, kind, _builtin_span(), r.current_scope, false, false)
+    _rset_table(r, add_symbol(r.table, sym))
+}
+
+fn _populate_builtins(r: Resolver) -> Resolver {
+    mut rr := r
+    // Types
+    rr = _add_builtin(rr, "i64", SkBuiltin)
+    rr = _add_builtin(rr, "i32", SkBuiltin)
+    rr = _add_builtin(rr, "i16", SkBuiltin)
+    rr = _add_builtin(rr, "i8", SkBuiltin)
+    rr = _add_builtin(rr, "u64", SkBuiltin)
+    rr = _add_builtin(rr, "u32", SkBuiltin)
+    rr = _add_builtin(rr, "u16", SkBuiltin)
+    rr = _add_builtin(rr, "u8", SkBuiltin)
+    rr = _add_builtin(rr, "f64", SkBuiltin)
+    rr = _add_builtin(rr, "f32", SkBuiltin)
+    rr = _add_builtin(rr, "bool", SkBuiltin)
+    rr = _add_builtin(rr, "str", SkBuiltin)
+    rr = _add_builtin(rr, "char", SkBuiltin)
+    rr = _add_builtin(rr, "unit", SkBuiltin)
+    // Functions
+    rr = _add_builtin(rr, "print", SkBuiltin)
+    rr = _add_builtin(rr, "println", SkBuiltin)
+    rr = _add_builtin(rr, "eprintln", SkBuiltin)
+    rr = _add_builtin(rr, "assert", SkBuiltin)
+    rr = _add_builtin(rr, "panic", SkBuiltin)
+    // Bool values
+    rr = _add_builtin(rr, "true", SkBuiltin)
+    rr = _add_builtin(rr, "false", SkBuiltin)
+    rr
+}
+
+// ============================================================
+// Pass 1: Collect top-level declarations
+// ============================================================
+
+fn _is_decl_keyword(k: str) -> bool =
+    k == "fn" || k == "type" || k == "struct" || k == "enum" ||
+    k == "trait" || k == "impl" || k == "const"
+
+fn _pass1(r: Resolver) -> Resolver {
+    mut rr := _rset_pos(r, 0)
+    rr = _rskip_nl(rr)
+
+    // Skip sentinel token at index 0
+    if rr.pos == 0 { rr = _radv(rr) }
+
+    // Skip mod declaration
+    if _rk(rr) == "mod" {
+        rr = _radv(rr)  // skip "mod"
+        rr = _radv(rr)  // skip module name
+        rr = _rskip_nl(rr)
+    }
+
+    // Skip use declarations (but register imported names)
+    while _rk(rr) == "use" {
+        rr = _radv(rr)  // skip "use"
+        if _rk(rr) == "IDENT" {
+            name := _rcur(rr).text
+            span := _rspan(rr)
+            rr = _add_sym(rr, name, SkModule, span, false, false)
+            rr = _radv(rr)
+        }
+        // Skip to end of use line (handle "as" aliases)
+        while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
+            rr = _radv(rr)
+        }
+        rr = _rskip_nl(rr)
+    }
+
+    // Scan for top-level declarations
+    while _rk(rr) != "EOF" {
+        mut is_pub := false
+        if _rk(rr) == "pub" {
+            is_pub = true
+            rr = _radv(rr)
+        }
+
+        k := _rk(rr)
+        if k == "fn" {
+            rr = _radv(rr)  // skip "fn"
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkFunction, span, false, is_pub)
+            }
+        } else if k == "type" || k == "struct" {
+            rr = _radv(rr)  // skip "type"/"struct"
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkType, span, false, is_pub)
+                rr = _radv(rr)
+                // Look for sum type variants after = |
+                rr = _pass1_collect_variants(rr)
+            }
+        } else if k == "enum" {
+            rr = _radv(rr)
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkEnum, span, false, is_pub)
+            }
+        } else if k == "trait" {
+            rr = _radv(rr)
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkTrait, span, false, is_pub)
+            }
+        } else if k == "const" {
+            rr = _radv(rr)
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkConst, span, false, is_pub)
+            }
+        }
+
+        // Advance to next token
+        rr = _radv(rr)
+        rr = _rskip_nl(rr)
+    }
+
+    rr
+}
+
+// Collect sum type variant names after type Foo = | Bar | Baz
+fn _pass1_collect_variants(r: Resolver) -> Resolver {
+    mut rr := r
+    // Skip generic params [T]
+    if _rk(rr) == "[" {
+        mut d := 1
+        rr = _radv(rr)
+        while d > 0 && _rk(rr) != "EOF" {
+            if _rk(rr) == "[" { d = d + 1 }
+            if _rk(rr) == "]" { d = d - 1 }
+            if d > 0 { rr = _radv(rr) }
+        }
+        if _rk(rr) == "]" { rr = _radv(rr) }
+    }
+    if _rk(rr) != "=" { return rr }
+    rr = _radv(rr)
+    rr = _rskip_nl(rr)
+    // Check if this is a sum type (starts with |)
+    if _rk(rr) != "|" { return rr }
+    while _rk(rr) == "|" {
+        rr = _radv(rr)  // skip |
+        rr = _rskip_nl(rr)
+        if _rk(rr) == "IDENT" {
+            name := _rcur(rr).text
+            span := _rspan(rr)
+            rr = _add_sym(rr, name, SkVariant, span, false, false)
+        }
+        rr = _radv(rr)
+        // Skip variant payload: (...) or { ... }
+        if _rk(rr) == "(" {
+            mut d := 1
+            rr = _radv(rr)
+            while d > 0 && _rk(rr) != "EOF" {
+                if _rk(rr) == "(" { d = d + 1 }
+                if _rk(rr) == ")" { d = d - 1 }
+                if d > 0 { rr = _radv(rr) }
+            }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+        lb := "\{"
+        rb := "\}"
+        if _rk(rr) == lb {
+            mut d := 1
+            rr = _radv(rr)
+            while d > 0 && _rk(rr) != "EOF" {
+                if _rk(rr) == lb { d = d + 1 }
+                if _rk(rr) == rb { d = d - 1 }
+                if d > 0 { rr = _radv(rr) }
+            }
+            if _rk(rr) == rb { rr = _radv(rr) }
+        }
+        rr = _rskip_nl(rr)
+    }
+    rr
+}
+
+// ============================================================
+// Pass 2: Resolve identifiers in bodies
+// ============================================================
+
+fn _pass2(r: Resolver) -> Resolver {
+    mut rr := _rset_pos(r, 0)
+    rr = _rskip_nl(rr)
+
+    // Skip sentinel token at index 0
+    if rr.pos == 0 { rr = _radv(rr) }
+
+    // Skip mod
+    if _rk(rr) == "mod" {
+        rr = _radv(rr)
+        rr = _radv(rr)
+        rr = _rskip_nl(rr)
+    }
+
+    // Skip use declarations
+    while _rk(rr) == "use" {
+        while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
+            rr = _radv(rr)
+        }
+        rr = _rskip_nl(rr)
+    }
+
+    // Process top-level declarations
+    while _rk(rr) != "EOF" {
+        rr = _rskip_nl(rr)
+        if _rk(rr) == "EOF" { return rr }
+
+        if _rk(rr) == "pub" { rr = _radv(rr) }
+
+        k := _rk(rr)
+        if k == "fn" {
+            rr = _resolve_fn(rr)
+        } else if k == "type" || k == "struct" {
+            rr = _skip_to_next_top(rr)
+        } else if k == "enum" {
+            rr = _skip_to_next_top(rr)
+        } else if k == "trait" {
+            rr = _skip_to_next_top(rr)
+        } else if k == "impl" {
+            rr = _resolve_impl(rr)
+        } else if k == "const" {
+            rr = _resolve_const(rr)
+        } else if k == "entry" {
+            rr = _resolve_entry(rr)
+        } else if k == "test" {
+            rr = _resolve_test(rr)
+        } else {
+            rr = _radv(rr)
+        }
+        rr = _rskip_nl(rr)
+    }
+    rr
+}
+
+// Skip past current declaration to the next top-level item
+fn _skip_to_next_top(r: Resolver) -> Resolver {
+    mut rr := _radv(r)
+    lb := "\{"
+    rb := "\}"
+    while _rk(rr) != "EOF" {
+        k := _rk(rr)
+        if k == lb {
+            // Skip balanced braces
+            mut d := 1
+            rr = _radv(rr)
+            while d > 0 && _rk(rr) != "EOF" {
+                if _rk(rr) == lb { d = d + 1 }
+                if _rk(rr) == rb { d = d - 1 }
+                if d > 0 { rr = _radv(rr) }
+            }
+            if _rk(rr) == rb { rr = _radv(rr) }
+            rr = _rskip_nl(rr)
+            // Check if next is derives
+            if _rk(rr) == "derives" {
+                while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                rr = _rskip_nl(rr)
+            }
+            return rr
+        }
+        if k == "NEWLINE" {
+            rr = _rskip_nl(rr)
+            // Check if we hit a new top-level declaration
+            nk := _rk(rr)
+            if nk == "fn" || nk == "pub" || nk == "type" || nk == "struct" ||
+               nk == "enum" || nk == "trait" || nk == "impl" || nk == "const" ||
+               nk == "entry" || nk == "test" || nk == "EOF" {
+                return rr
+            }
+        }
+        rr = _radv(rr)
+    }
+    rr
+}
+
+// --- Resolve function declaration ---
+
+fn _resolve_fn(r: Resolver) -> Resolver {
+    parent_scope := r.current_scope
+    mut rr := _radv(r)  // skip "fn"
+
+    // Get function name
+    fn_name := _rcur(rr).text
+    rr = _radv(rr)  // skip name
+
+    // Push function scope
+    rr = _push_scope(rr, ScFunction, fn_name)
+
+    // Skip generic params
+    if _rk(rr) == "[" {
+        mut d := 1
+        rr = _radv(rr)
+        while d > 0 && _rk(rr) != "EOF" {
+            if _rk(rr) == "[" { d = d + 1 }
+            if _rk(rr) == "]" { d = d - 1 }
+            if d > 0 { rr = _radv(rr) }
+        }
+        if _rk(rr) == "]" { rr = _radv(rr) }
+    }
+
+    // Parse parameters
+    if _rk(rr) == "(" {
+        rr = _radv(rr)  // skip (
+        while _rk(rr) != ")" && _rk(rr) != "EOF" {
+            if _rk(rr) == "IDENT" {
+                pname := _rcur(rr).text
+                pspan := _rspan(rr)
+                rr = _add_sym_warn_shadow(rr, pname, SkParameter, pspan, false)
+                rr = _radv(rr)  // skip param name
+                if _rk(rr) == ":" {
+                    rr = _radv(rr)  // skip :
+                    rr = _skip_type_tokens(rr)
+                }
+            }
+            if _rk(rr) == "," { rr = _radv(rr) }
+        }
+        if _rk(rr) == ")" { rr = _radv(rr) }
+    }
+
+    // Skip return type
+    if _rk(rr) == "->" {
+        rr = _radv(rr)
+        rr = _skip_type_tokens(rr)
+    }
+
+    // Skip error type
+    if _rk(rr) == "!" {
+        rr = _radv(rr)
+        rr = _skip_type_tokens(rr)
+    }
+
+    // Skip with clause
+    if _rk(rr) == "with" {
+        lb := "\{"
+        while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" && _rk(rr) != "=" && _rk(rr) != lb {
+            rr = _radv(rr)
+        }
+    }
+
+    // Resolve body
+    lb := "\{"
+    if _rk(rr) == "=" {
+        rr = _radv(rr)
+        rr = _resolve_expr_until_nl(rr)
+    } else if _rk(rr) == lb {
+        rr = _resolve_block(rr)
+    } else {
+        rr = _rskip_nl(rr)
+        if _rk(rr) == lb {
+            rr = _resolve_block(rr)
+        }
+    }
+
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Resolve impl block ---
+
+fn _resolve_impl(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "impl"
+    lb := "\{"
+    // Skip to opening brace
+    while _rk(rr) != lb && _rk(rr) != "EOF" {
+        rr = _radv(rr)
+    }
+    if _rk(rr) != lb { return rr }
+    rr = _radv(rr)  // skip {
+    rr = _rskip_nl(rr)
+    rb := "\}"
+    while _rk(rr) != rb && _rk(rr) != "EOF" {
+        rr = _rskip_nl(rr)
+        if _rk(rr) == "pub" { rr = _radv(rr) }
+        if _rk(rr) == "fn" {
+            rr = _resolve_fn(rr)
+        } else if _rk(rr) == rb || _rk(rr) == "EOF" {
+            return rr
+        } else {
+            rr = _radv(rr)
+        }
+        rr = _rskip_nl(rr)
+    }
+    if _rk(rr) == rb { rr = _radv(rr) }
+    rr
+}
+
+// --- Resolve const declaration ---
+
+fn _resolve_const(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "const"
+    // const NAME : TYPE = expr
+    if _rk(rr) == "IDENT" { rr = _radv(rr) }
+    if _rk(rr) == ":" {
+        rr = _radv(rr)
+        rr = _skip_type_tokens(rr)
+    }
+    if _rk(rr) == "=" {
+        rr = _radv(rr)
+        rr = _resolve_expr_until_nl(rr)
+    }
+    rr
+}
+
+// --- Resolve entry block ---
+
+fn _resolve_entry(r: Resolver) -> Resolver {
+    parent_scope := r.current_scope
+    mut rr := _radv(r)  // skip "entry"
+    rr = _push_scope(rr, ScFunction, "entry")
+    rr = _resolve_block(rr)
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Resolve test block ---
+
+fn _resolve_test(r: Resolver) -> Resolver {
+    parent_scope := r.current_scope
+    mut rr := _radv(r)  // skip "test"
+    // Skip test name string
+    if _rk(rr) == "STRING" || _rk(rr) == "IDENT" { rr = _radv(rr) }
+    rr = _push_scope(rr, ScFunction, "test")
+    rr = _resolve_block(rr)
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Resolve block { ... } ---
+
+fn _resolve_block(r: Resolver) -> Resolver {
+    lb := "\{"
+    rb := "\}"
+    if _rk(r) != lb { return r }
+    parent_scope := r.current_scope
+    mut rr := _push_scope(r, ScBlock, "")
+    rr = _radv(rr)  // skip {
+    rr = _rskip_nl(rr)
+
+    while _rk(rr) != rb && _rk(rr) != "EOF" {
+        rr = _resolve_stmt(rr)
+        rr = _rskip_nl(rr)
+    }
+    if _rk(rr) == rb { rr = _radv(rr) }
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Resolve statement ---
+
+fn _resolve_stmt(r: Resolver) -> Resolver {
+    k := _rk(r)
+
+    if k == "mut" { return _resolve_mut_binding(r) }
+    if k == "return" {
+        mut rr := _radv(r)
+        rb := "\}"
+        if _rk(rr) == "NEWLINE" || _rk(rr) == "EOF" || _rk(rr) == rb {
+            return rr
+        }
+        return _resolve_expr_until_nl(rr)
+    }
+    if k == "break" || k == "continue" { return _radv(r) }
+    if k == "for" { return _resolve_for(r) }
+    if k == "while" { return _resolve_while(r) }
+    if k == "loop" { return _resolve_loop(r) }
+    if k == "defer" {
+        rr := _radv(r)
+        return _resolve_expr_until_nl(rr)
+    }
+    if k == "assert" {
+        rr := _radv(r)
+        return _resolve_expr_until_nl(rr)
+    }
+    if k == "if" { return _resolve_if(r) }
+    if k == "match" { return _resolve_match(r) }
+
+    // Expression statement — may be a binding
+    _resolve_expr_or_binding(r)
+}
+
+// --- Resolve mut binding ---
+
+fn _resolve_mut_binding(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "mut"
+    if _rk(rr) == "IDENT" {
+        name := _rcur(rr).text
+        span := _rspan(rr)
+        rr = _radv(rr)  // skip name
+        if _rk(rr) == ":" {
+            rr = _radv(rr)
+            rr = _skip_type_tokens(rr)
+            if _rk(rr) == "=" { rr = _radv(rr) }
+        } else if _rk(rr) == ":=" {
+            rr = _radv(rr)
+        }
+        rr = _resolve_expr_until_nl(rr)
+        rr = _add_sym_warn_shadow(rr, name, SkVariable, span, true)
+        return rr
+    }
+    rr
+}
+
+// --- Resolve expression or binding (name := expr) ---
+
+fn _resolve_expr_or_binding(r: Resolver) -> Resolver {
+    // Check for simple binding: IDENT := expr  or  IDENT : TYPE = expr
+    if _rk(r) == "IDENT" {
+        name := _rcur(r).text
+        // Peek ahead for := or :
+        next_pos := r.pos + 1
+        if next_pos < r.tokens.len() {
+            next_k := token_name(r.tokens[next_pos].kind)
+            if next_k == ":=" {
+                span := _rspan(r)
+                mut rr := _radv(r)   // skip name
+                rr = _radv(rr)       // skip :=
+                rr = _resolve_expr_until_nl(rr)
+                rr = _add_sym_warn_shadow(rr, name, SkVariable, span, false)
+                return rr
+            }
+            if next_k == ":" {
+                // Could be typed binding: name : Type = expr
+                // Or could be expression. Check further ahead for =
+                mut rr := _radv(r)   // skip name
+                rr = _radv(rr)       // skip :
+                saved_pos := rr.pos
+                rr = _skip_type_tokens(rr)
+                if _rk(rr) == "=" {
+                    span := _rspan(r)
+                    rr = _radv(rr)  // skip =
+                    rr = _resolve_expr_until_nl(rr)
+                    rr = _add_sym_warn_shadow(rr, name, SkVariable, _rspan(_rset_pos(r, r.pos)), false)
+                    return rr
+                }
+                // Not a binding, restore and fall through to expression
+                rr = _rset_pos(rr, r.pos)
+            }
+        }
+    }
+
+    // Plain expression
+    _resolve_expr_until_nl(r)
+}
+
+// --- Check if token is an operator/postfix that continues an expression ---
+
+fn _is_expr_continuation(k: str) -> bool =
+    k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+    k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
+    k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" || k == "~" ||
+    k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
+    k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
+    k == "," || k == "=>" || k == "=" || k == "?." || k == "??"
+
+// --- Resolve expression tokens until statement boundary ---
+
+fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
+    mut rr := r
+    rb := "\}"
+    mut consumed_value := false
+    while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" && _rk(rr) != rb {
+        k := _rk(rr)
+        lb := "\{"
+
+        // If we've consumed a value and the next token is NOT a continuation,
+        // this is a new statement boundary
+        if consumed_value && _is_expr_continuation(k) == false {
+            // Check if this could be a new statement
+            if k == "IDENT" || k == "INT" || k == "FLOAT" || k == "STRING" ||
+               k == "true" || k == "false" || k == "mut" || k == "return" ||
+               k == "break" || k == "continue" || k == "for" || k == "while" ||
+               k == "loop" || k == "defer" || k == "assert" || k == "if" ||
+               k == "match" || k == "const" || k == "fn" {
+                return rr
+            }
+        }
+
+        if k == "IDENT" {
+            rr = _resolve_ident(rr)
+            consumed_value = true
+        } else if k == "if" {
+            rr = _resolve_if(rr)
+            return rr
+        } else if k == "match" {
+            rr = _resolve_match(rr)
+            return rr
+        } else if k == lb {
+            rr = _resolve_block(rr)
+            consumed_value = true
+        } else if k == "fn" {
+            rr = _resolve_closure(rr)
+            consumed_value = true
+        } else if k == "INT" || k == "FLOAT" || k == "STRING" ||
+                  k == "true" || k == "false" || k == "self" || k == "Self" {
+            rr = _radv(rr)
+            consumed_value = true
+        } else if k == ")" || k == "]" {
+            rr = _radv(rr)
+            consumed_value = true
+        } else {
+            // Operators, opening delimiters, etc.
+            rr = _radv(rr)
+            if k == "(" || k == "[" || k == "," || k == "." ||
+               k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
+               k == "==" || k == "!=" || k == "<" || k == ">" ||
+               k == "<=" || k == ">=" || k == "&&" || k == "||" ||
+               k == "&" || k == "|" || k == "^" || k == "~" ||
+               k == "<<" || k == ">>" || k == "|>" ||
+               k == "=>" || k == "=" || k == ":" || k == ":=" {
+                consumed_value = false
+            }
+        }
+    }
+    rr
+}
+
+// --- Resolve identifier reference ---
+
+fn _resolve_ident(r: Resolver) -> Resolver {
+    name := _rcur(r).text
+    found := lookup(r.table, r.current_scope, name)
+    if found.name == "" {
+        q := _q()
+        rr := _rerror(r, E0701, "unresolved name " + q + name + q)
+        return _radv(rr)
+    }
+    _radv(r)
+}
+
+// --- Resolve if expression ---
+
+fn _resolve_if(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "if"
+    // Condition
+    lb := "\{"
+    while _rk(rr) != lb && _rk(rr) != "EOF" {
+        if _rk(rr) == "IDENT" {
+            rr = _resolve_ident(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    // Then block
+    rr = _resolve_block(rr)
+    // Else
+    if _rk(rr) == "else" {
+        rr = _radv(rr)
+        if _rk(rr) == "if" {
+            rr = _resolve_if(rr)
+        } else {
+            rr = _resolve_block(rr)
+        }
+    }
+    rr
+}
+
+// --- Resolve match expression ---
+
+fn _resolve_match(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "match"
+    lb := "\{"
+    rb := "\}"
+    // Subject expression
+    while _rk(rr) != lb && _rk(rr) != "EOF" {
+        if _rk(rr) == "IDENT" {
+            rr = _resolve_ident(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    if _rk(rr) != lb { return rr }
+    rr = _radv(rr)  // skip {
+    rr = _rskip_nl(rr)
+    // Arms
+    while _rk(rr) != rb && _rk(rr) != "EOF" {
+        // Pattern — skip (variant names are checked differently)
+        while _rk(rr) != "=>" && _rk(rr) != "EOF" {
+            rr = _radv(rr)
+        }
+        if _rk(rr) == "=>" { rr = _radv(rr) }
+        // Body expression
+        rr = _rskip_nl(rr)
+        if _rk(rr) == lb {
+            rr = _resolve_block(rr)
+        } else {
+            rr = _resolve_expr_until_nl(rr)
+        }
+        rr = _rskip_nl(rr)
+    }
+    if _rk(rr) == rb { rr = _radv(rr) }
+    rr
+}
+
+// --- Resolve for loop ---
+
+fn _resolve_for(r: Resolver) -> Resolver {
+    parent_scope := r.current_scope
+    mut rr := _radv(r)  // skip "for"
+    rr = _push_scope(rr, ScBlock, "for")
+
+    // Binding variable
+    if _rk(rr) == "IDENT" {
+        name := _rcur(rr).text
+        span := _rspan(rr)
+        rr = _add_sym_warn_shadow(rr, name, SkVariable, span, false)
+        rr = _radv(rr)
+    }
+
+    // skip "in"
+    if _rk(rr) == "in" { rr = _radv(rr) }
+
+    // Iterator expression
+    lb := "\{"
+    while _rk(rr) != lb && _rk(rr) != "EOF" {
+        if _rk(rr) == "IDENT" {
+            rr = _resolve_ident(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+
+    // Body
+    rr = _resolve_block(rr)
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Resolve while loop ---
+
+fn _resolve_while(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "while"
+    lb := "\{"
+    // Condition
+    while _rk(rr) != lb && _rk(rr) != "EOF" {
+        if _rk(rr) == "IDENT" {
+            rr = _resolve_ident(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    // Body
+    _resolve_block(rr)
+}
+
+// --- Resolve loop ---
+
+fn _resolve_loop(r: Resolver) -> Resolver {
+    rr := _radv(r)  // skip "loop"
+    _resolve_block(rr)
+}
+
+// --- Resolve closure ---
+
+fn _resolve_closure(r: Resolver) -> Resolver {
+    parent_scope := r.current_scope
+    mut rr := _radv(r)  // skip "fn"
+    rr = _push_scope(rr, ScFunction, "closure")
+
+    if _rk(rr) == "(" {
+        rr = _radv(rr)  // skip (
+        while _rk(rr) != ")" && _rk(rr) != "EOF" {
+            if _rk(rr) == "IDENT" {
+                pname := _rcur(rr).text
+                pspan := _rspan(rr)
+                rr = _add_sym_warn_shadow(rr, pname, SkParameter, pspan, false)
+                rr = _radv(rr)
+                if _rk(rr) == ":" {
+                    rr = _radv(rr)
+                    rr = _skip_type_tokens(rr)
+                }
+            }
+            if _rk(rr) == "," { rr = _radv(rr) }
+        }
+        if _rk(rr) == ")" { rr = _radv(rr) }
+    }
+
+    // Return type
+    if _rk(rr) == "->" {
+        rr = _radv(rr)
+        rr = _skip_type_tokens(rr)
+    }
+
+    if _rk(rr) == "=>" {
+        rr = _radv(rr)
+        rr = _resolve_expr_until_nl(rr)
+    }
+
+    _pop_scope(rr, parent_scope)
+}
+
+// --- Skip type tokens (doesn't resolve, types checked later) ---
+
+fn _skip_type_tokens(r: Resolver) -> Resolver {
+    mut rr := r
+    k := _rk(rr)
+    if k == "IDENT" || k == "Self" {
+        rr = _radv(rr)
+        while _rk(rr) == "." { rr = _radv(_radv(rr)) }
+        if _rk(rr) == "[" {
+            mut d := 1
+            rr = _radv(rr)
+            while d > 0 && _rk(rr) != "EOF" {
+                if _rk(rr) == "[" { d = d + 1 }
+                if _rk(rr) == "]" { d = d - 1 }
+                if d > 0 { rr = _radv(rr) }
+            }
+            if _rk(rr) == "]" { rr = _radv(rr) }
+        }
+        if _rk(rr) == "?" { rr = _radv(rr) }
+        if _rk(rr) == "!" {
+            rr = _radv(rr)
+            rr = _skip_type_tokens(rr)
+        }
+        return rr
+    }
+    if k == "[" {
+        rr = _radv(rr)
+        rr = _skip_type_tokens(rr)
+        if _rk(rr) == "]" { rr = _radv(rr) }
+        return rr
+    }
+    if k == "(" {
+        rr = _radv(rr)
+        while _rk(rr) != ")" && _rk(rr) != "EOF" {
+            rr = _skip_type_tokens(rr)
+            if _rk(rr) == "," { rr = _radv(rr) }
+        }
+        if _rk(rr) == ")" { rr = _radv(rr) }
+        if _rk(rr) == "->" {
+            rr = _radv(rr)
+            rr = _skip_type_tokens(rr)
+        }
+        return rr
+    }
+    if k == "fn" {
+        rr = _radv(rr)
+        if _rk(rr) == "(" {
+            rr = _radv(rr)
+            while _rk(rr) != ")" && _rk(rr) != "EOF" {
+                rr = _skip_type_tokens(rr)
+                if _rk(rr) == "," { rr = _radv(rr) }
+            }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+        if _rk(rr) == "->" {
+            rr = _radv(rr)
+            rr = _skip_type_tokens(rr)
+        }
+        return rr
+    }
+    rr
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+fn resolve(tokens: [Token], file: str) -> ResolveResult {
+    // Create resolver
+    mut r := _new_resolver(tokens, file)
+
+    // Create universe scope (id=1) with builtins
+    r = _push_scope(r, ScUniverse, "universe")
+    r = _populate_builtins(r)
+
+    // Create module scope (id=2)
+    r = _push_scope(r, ScModule, "module")
+
+    // Pass 1: collect top-level declarations
+    r = _pass1(r)
+
+    // Pass 2: resolve identifiers
+    r = _pass2(r)
+
+    ResolveResult{table: r.table, diagnostics: r.diagnostics}
+}

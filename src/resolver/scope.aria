@@ -1,0 +1,167 @@
+mod resolver
+
+// ============================================================
+// Scope & Symbol Infrastructure
+// Data types for scope hierarchy and symbol table.
+// ============================================================
+
+use diagnostic
+use lexer
+
+// --- SymbolKind ---
+
+type SymbolKind =
+    | SkFunction
+    | SkType
+    | SkEnum
+    | SkTrait
+    | SkConst
+    | SkVariable
+    | SkParameter
+    | SkVariant
+    | SkModule
+    | SkBuiltin
+    | SkNone
+
+fn symbol_kind_name(k: SymbolKind) -> str = match k {
+    SkFunction => "Function"
+    SkType => "Type"
+    SkEnum => "Enum"
+    SkTrait => "Trait"
+    SkConst => "Const"
+    SkVariable => "Variable"
+    SkParameter => "Parameter"
+    SkVariant => "Variant"
+    SkModule => "Module"
+    SkBuiltin => "Builtin"
+    SkNone => "None"
+}
+
+fn sk_eq(a: SymbolKind, b: SymbolKind) -> bool =
+    symbol_kind_name(a) == symbol_kind_name(b)
+
+// --- Symbol ---
+
+struct Symbol {
+    name: str
+    kind: SymbolKind
+    span: Span
+    scope_id: i64
+    is_mutable: bool
+    is_public: bool
+}
+
+fn _sentinel_symbol() -> Symbol =
+    Symbol{
+        name: "",
+        kind: SkNone,
+        span: new_span("", 0, 0, 0, 0),
+        scope_id: 0,
+        is_mutable: false,
+        is_public: false
+    }
+
+fn new_symbol(name: str, kind: SymbolKind, span: Span, scope_id: i64, is_mutable: bool, is_public: bool) -> Symbol =
+    Symbol{name: name, kind: kind, span: span, scope_id: scope_id, is_mutable: is_mutable, is_public: is_public}
+
+// --- ScopeKind ---
+
+type ScopeKind =
+    | ScUniverse
+    | ScModule
+    | ScFunction
+    | ScBlock
+    | ScNone
+
+fn scope_kind_name(k: ScopeKind) -> str = match k {
+    ScUniverse => "Universe"
+    ScModule => "Module"
+    ScFunction => "Function"
+    ScBlock => "Block"
+    ScNone => "None"
+}
+
+// --- Scope ---
+
+struct Scope {
+    kind: ScopeKind
+    parent: i64
+    name: str
+    depth: i64
+}
+
+fn _sentinel_scope() -> Scope =
+    Scope{kind: ScNone, parent: 0, name: "", depth: 0}
+
+fn new_scope(kind: ScopeKind, parent: i64, name: str, depth: i64) -> Scope =
+    Scope{kind: kind, parent: parent, name: name, depth: depth}
+
+// --- SymbolTable ---
+
+struct SymbolTable {
+    scopes: [Scope]
+    symbols: [Symbol]
+}
+
+fn new_table() -> SymbolTable =
+    SymbolTable{
+        scopes: [_sentinel_scope()],
+        symbols: [_sentinel_symbol()]
+    }
+
+fn add_scope(table: SymbolTable, kind: ScopeKind, parent: i64, name: str) -> SymbolTable {
+    mut depth := 0
+    if parent > 0 && parent < table.scopes.len() {
+        depth = table.scopes[parent].depth + 1
+    }
+    s := new_scope(kind, parent, name, depth)
+    SymbolTable{
+        scopes: table.scopes.append(s),
+        symbols: table.symbols
+    }
+}
+
+fn last_scope_id(table: SymbolTable) -> i64 = table.scopes.len() - 1
+
+fn add_symbol(table: SymbolTable, sym: Symbol) -> SymbolTable =
+    SymbolTable{
+        scopes: table.scopes,
+        symbols: table.symbols.append(sym)
+    }
+
+fn scope_count(table: SymbolTable) -> i64 = table.scopes.len()
+
+fn symbol_count(table: SymbolTable) -> i64 = table.symbols.len()
+
+// --- Lookup ---
+
+// Lookup in a specific scope only (no parent walk)
+fn lookup_local(table: SymbolTable, scope_id: i64, name: str) -> Symbol {
+    mut i := 1  // skip sentinel
+    while i < table.symbols.len() {
+        sym := table.symbols[i]
+        if sym.scope_id == scope_id && sym.name == name {
+            return sym
+        }
+        i = i + 1
+    }
+    _sentinel_symbol()
+}
+
+// Lookup walking the parent chain from scope_id up to universe
+fn lookup(table: SymbolTable, scope_id: i64, name: str) -> Symbol {
+    mut cur := scope_id
+    while cur > 0 {
+        found := lookup_local(table, cur, name)
+        if found.name != "" {
+            return found
+        }
+        if cur < table.scopes.len() {
+            cur = table.scopes[cur].parent
+        } else {
+            cur = 0
+        }
+    }
+    // Also check scope 0 (shouldn't normally have symbols, but just in case)
+    _sentinel_symbol()
+}

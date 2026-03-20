@@ -1,0 +1,307 @@
+mod resolver
+
+// ============================================================
+// Resolver Tests
+// ============================================================
+
+use diagnostic
+use lexer
+
+// --- Test helpers ---
+
+fn _resolve_source(source: str) -> ResolveResult {
+    lex := tokenize(source, "test.aria")
+    resolve(get_tokens(lex), "test.aria")
+}
+
+fn _has_errors(result: ResolveResult) -> bool = bag_has_errors(result.diagnostics)
+
+fn _err_count(result: ResolveResult) -> i64 = bag_error_count(result.diagnostics)
+
+fn _warn_count(result: ResolveResult) -> i64 = bag_warning_count(result.diagnostics)
+
+fn _has_code(result: ResolveResult, code: str) -> bool {
+    mut i := 1  // skip sentinel
+    while i < result.diagnostics.diagnostics.len() {
+        if result.diagnostics.diagnostics[i].code == code {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+fn _find_sym(result: ResolveResult, name: str) -> Symbol {
+    mut i := 1
+    while i < result.table.symbols.len() {
+        if result.table.symbols[i].name == name {
+            return result.table.symbols[i]
+        }
+        i = i + 1
+    }
+    _sentinel_symbol()
+}
+
+// NOTE: Do NOT use variable name "t" in test blocks.
+// The bootstrap compiler generates Go tests with t *testing.T parameter,
+// and a local "t" variable would shadow it, causing Go compilation errors.
+
+// --- Scope and symbol infrastructure tests ---
+
+test "new table has sentinels" {
+    tbl := new_table()
+    assert scope_count(tbl) == 1
+    assert symbol_count(tbl) == 1
+}
+
+test "add scope increments count" {
+    mut tbl := new_table()
+    tbl = add_scope(tbl, ScUniverse, 0, "universe")
+    assert scope_count(tbl) == 2
+    tbl = add_scope(tbl, ScModule, 1, "module")
+    assert scope_count(tbl) == 3
+}
+
+test "add symbol and lookup local" {
+    mut tbl := new_table()
+    tbl = add_scope(tbl, ScModule, 0, "mod")
+    sym := new_symbol("foo", SkFunction, new_span("", 1, 1, 0, 3), 1, false, false)
+    tbl = add_symbol(tbl, sym)
+    found := lookup_local(tbl, 1, "foo")
+    assert found.name == "foo"
+}
+
+test "lookup local returns sentinel for missing" {
+    mut tbl := new_table()
+    tbl = add_scope(tbl, ScModule, 0, "mod")
+    found := lookup_local(tbl, 1, "bar")
+    assert found.name == ""
+}
+
+test "lookup walks parent chain" {
+    mut tbl := new_table()
+    tbl = add_scope(tbl, ScUniverse, 0, "universe")
+    tbl = add_scope(tbl, ScModule, 1, "module")
+    tbl = add_scope(tbl, ScFunction, 2, "fn_foo")
+    sym := new_symbol("i64", SkBuiltin, new_span("", 0, 0, 0, 0), 1, false, false)
+    tbl = add_symbol(tbl, sym)
+    found := lookup(tbl, 3, "i64")
+    assert found.name == "i64"
+}
+
+test "lookup stops at sentinel for unknown name" {
+    mut tbl := new_table()
+    tbl = add_scope(tbl, ScUniverse, 0, "universe")
+    tbl = add_scope(tbl, ScModule, 1, "module")
+    found := lookup(tbl, 2, "nonexistent")
+    assert found.name == ""
+}
+
+// --- Top-level declaration tests ---
+
+test "resolve finds fn declaration" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = 42")
+    assert _has_errors(result) == false
+    sym := _find_sym(result, "foo")
+    assert sym.name == "foo"
+    assert symbol_kind_name(sym.kind) == "Function"
+}
+
+test "resolve finds type declaration" {
+    result := _resolve_source("mod test\ntype Color =\n    | Red\n    | Green\n    | Blue")
+    assert _has_errors(result) == false
+    sym := _find_sym(result, "Color")
+    assert sym.name == "Color"
+    assert symbol_kind_name(sym.kind) == "Type"
+}
+
+test "resolve finds sum type variants" {
+    result := _resolve_source("mod test\ntype Color =\n    | Red\n    | Green\n    | Blue")
+    red := _find_sym(result, "Red")
+    assert red.name == "Red"
+    assert symbol_kind_name(red.kind) == "Variant"
+    green := _find_sym(result, "Green")
+    assert green.name == "Green"
+}
+
+test "resolve finds struct declaration" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nstruct Point " + lb + "\n    x: i64\n    y: i64\n" + rb
+    result := _resolve_source(source)
+    sym := _find_sym(result, "Point")
+    assert sym.name == "Point"
+    assert symbol_kind_name(sym.kind) == "Type"
+}
+
+test "resolve finds enum declaration" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nenum Direction " + lb + "\n    North\n    South\n" + rb
+    result := _resolve_source(source)
+    sym := _find_sym(result, "Direction")
+    assert sym.name == "Direction"
+    assert symbol_kind_name(sym.kind) == "Enum"
+}
+
+test "resolve finds trait declaration" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\ntrait Printable " + lb + "\n    fn to_str(self: Self) -> str\n" + rb
+    result := _resolve_source(source)
+    sym := _find_sym(result, "Printable")
+    assert sym.name == "Printable"
+    assert symbol_kind_name(sym.kind) == "Trait"
+}
+
+test "resolve finds const declaration" {
+    result := _resolve_source("mod test\nconst MAX: i64 = 100")
+    sym := _find_sym(result, "MAX")
+    assert sym.name == "MAX"
+    assert symbol_kind_name(sym.kind) == "Const"
+}
+
+// --- Duplicate declaration tests ---
+
+test "duplicate fn declaration" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = 1\nfn foo() -> i64 = 2")
+    assert _has_errors(result)
+    assert _has_code(result, "E0702")
+}
+
+test "duplicate const declaration" {
+    result := _resolve_source("mod test\nconst X: i64 = 1\nconst X: i64 = 2")
+    assert _has_errors(result)
+    assert _has_code(result, "E0702")
+}
+
+// --- Unresolved name tests ---
+
+test "unresolved name in function body" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = bar")
+    assert _has_errors(result)
+    assert _has_code(result, "E0701")
+}
+
+test "builtin names resolve" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = 42")
+    assert _has_errors(result) == false
+}
+
+test "forward reference to fn resolves" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = bar()\nfn bar() -> i64 = 42")
+    assert _has_errors(result) == false
+}
+
+// --- Variable binding tests ---
+
+test "variable binding resolves" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    x := 42\n    x\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+test "mut variable binding resolves" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    mut x := 0\n    x = 42\n    x\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+test "parameter resolves in body" {
+    source := "mod test\nfn add(a: i64, b: i64) -> i64 = a + b"
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+// --- Shadowing tests ---
+
+test "shadow warning in nested scope" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    x := 1\n    if true " + lb + "\n        x := 2\n        x\n    " + rb + " else " + lb + "\n        x\n    " + rb + "\n" + rb
+    result := _resolve_source(source)
+    assert _has_code(result, "W0004")
+}
+
+// --- Nested block scoping tests ---
+
+test "nested block scoping" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    x := 10\n    y := x + 1\n    y\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+// --- use import tests ---
+
+test "use import registers module name" {
+    result := _resolve_source("mod test\nuse diagnostic")
+    sym := _find_sym(result, "diagnostic")
+    assert sym.name == "diagnostic"
+}
+
+// --- Scope count tests ---
+
+test "scopes created for function" {
+    result := _resolve_source("mod test\nfn foo() -> i64 = 42")
+    assert scope_count(result.table) >= 3
+}
+
+test "scopes created for block" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    42\n" + rb
+    result := _resolve_source(source)
+    assert scope_count(result.table) >= 4
+}
+
+// --- For loop variable tests ---
+
+test "for loop variable resolves in body" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    mut s := 0\n    for i in [1, 2, 3] " + lb + "\n        s = s + i\n    " + rb + "\n    s\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+// --- Entry block test ---
+
+test "entry block resolves" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 = 42\nentry " + lb + "\n    foo()\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+// --- Test block test ---
+
+test "test block resolves" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn add(a: i64, b: i64) -> i64 = a + b\ntest \"addition\" " + lb + "\n    assert add(1, 2) == 3\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+// --- Built-in names ---
+
+test "builtin types resolve" {
+    source := "mod test\nfn foo(x: i64) -> bool = true"
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
+
+test "println resolves" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn foo() -> i64 " + lb + "\n    println(42)\n    0\n" + rb
+    result := _resolve_source(source)
+    assert _has_errors(result) == false
+}
