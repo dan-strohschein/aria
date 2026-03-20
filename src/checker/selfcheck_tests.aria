@@ -1,0 +1,170 @@
+mod checker
+
+// ============================================================
+// Self-Hosting Pattern Tests
+// Exercises all Aria patterns that the compiler's own source
+// code uses, verifying the pipeline can handle them.
+// ============================================================
+
+use diagnostic
+use lexer
+use resolver
+
+// --- Helper ---
+
+fn _selfcheck(source: str) -> CheckResult {
+    lex := tokenize(source, "test.aria")
+    toks := get_tokens(lex)
+    rr := resolve(toks, "test.aria")
+    check(toks, rr.table, "test.aria")
+}
+
+fn _sc_ok(result: CheckResult) -> bool = bag_has_errors(result.diagnostics) == false
+
+// --- Pattern: Sum type with match ---
+
+test "sum type and match" {
+    source := "mod test\ntype Severity =\n    | Error\n    | Warning\n    | Info\nfn sev_to_str(s: Severity) -> str = match s\n    Error => \"error\"\n    Warning => \"warning\"\n    Info => \"info\""
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Struct with multiple fields ---
+
+test "struct with fields" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nstruct Span " + lb + "\n    file: str\n    line: i64\n    col: i64\n" + rb + "\nfn new_span(file: str, line: i64, col: i64) -> Span = Span" + lb + "file: file, line: line, col: col" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Functions calling functions ---
+
+test "mutual function calls" {
+    source := "mod test\nfn foo() -> i64 = bar() + 1\nfn bar() -> i64 = 42"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: String concatenation ---
+
+test "string concat chain" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn greet(name: str) -> str = \"hello \" + name + \"!\""
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: While loop with mutation ---
+
+test "while with mut and comparison" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn count_down(n: i64) -> i64 " + lb + "\n    mut x := n\n    while x > 0 " + lb + "\n        x = x - 1\n    " + rb + "\n    x\n" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: If/else expression ---
+
+test "if else as expression" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn abs(x: i64) -> i64 = if x < 0 " + lb + " 0 - x " + rb + " else " + lb + " x " + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Method calls on str (.len, .charAt) ---
+
+test "string method calls" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn first_char(s: str) -> str " + lb + "\n    if s.len() == 0 " + lb + " return \"\" " + rb + "\n    s.charAt(0)\n" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Const declarations ---
+
+test "const string declarations" {
+    source := "mod test\nconst VERSION: str = \"1.0\"\nconst MAX: i64 = 100\nfn get_max() -> i64 = MAX"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Array literal and indexing ---
+
+test "array and indexing" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn first(items: [i64]) -> i64 = items[0]"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Return statement ---
+
+test "early return" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn check(x: i64) -> i64 " + lb + "\n    if x < 0 " + lb + " return 0 " + rb + "\n    x\n" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Nested function calls ---
+
+test "nested calls" {
+    source := "mod test\nfn double(x: i64) -> i64 = x * 2\nfn quad(x: i64) -> i64 = double(double(x))"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Boolean logic ---
+
+test "boolean operators" {
+    source := "mod test\nfn both(a: bool, b: bool) -> bool = a && b\nfn either(a: bool, b: bool) -> bool = a || b"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Large sum type (like TokenKind) ---
+
+test "large sum type" {
+    source := "mod test\ntype Kind =\n    | KA\n    | KB\n    | KC\n    | KD\n    | KE\n    | KF\n    | KG\n    | KH\nfn name(k: Kind) -> str = match k\n    KA => \"a\"\n    KB => \"b\"\n    KC => \"c\"\n    KD => \"d\"\n    KE => \"e\"\n    KF => \"f\"\n    KG => \"g\"\n    KH => \"h\""
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Entry block ---
+
+test "entry with fn call" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn run() -> i64 = 0\nentry " + lb + "\n    run()\n" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Test block ---
+
+test "test block with assert" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nfn add(a: i64, b: i64) -> i64 = a + b\ntest \"addition\" " + lb + "\n    assert add(1, 2) == 3\n" + rb
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}
+
+// --- Pattern: Multiple functions and structs together ---
+
+test "multi decl program" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod test\nstruct Point " + lb + "\n    x: i64\n    y: i64\n" + rb + "\nfn new_point(x: i64, y: i64) -> Point = Point" + lb + "x: x, y: y" + rb + "\nfn origin() -> Point = new_point(0, 0)"
+    result := _selfcheck(source)
+    assert _sc_ok(result)
+}

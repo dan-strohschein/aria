@@ -5,8 +5,9 @@ mod main
 // ============================================================
 
 use diagnostic
-use codes
-use render
+use lexer
+use resolver
+use checker
 
 // --- CLI Command ---
 
@@ -166,19 +167,28 @@ fn print_help() -> i64 {
 
 // --- Pipeline skeleton ---
 
+fn check_source(source: str, file: str) -> DiagnosticBag {
+    lex := tokenize(source, file)
+    toks := get_tokens(lex)
+    lex_diags := get_diagnostics(lex)
+    if bag_has_errors(lex_diags) { return lex_diags }
+
+    rr := resolve(toks, file)
+    if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
+
+    cr := check(toks, rr.table, file)
+    cr.diagnostics
+}
+
 fn run_check(files: [str], format: str) -> i64 {
-    // TODO: Implement full pipeline
-    // 1. Read source files
-    // 2. Lex
-    // 3. Parse
-    // 4. Resolve names
-    // 5. Type check
-    // 6. Report diagnostics
     if files.len() == 0 {
         println("error: no input files")
         return 1
     }
-    println("check: not yet implemented")
+    // TODO: Read files from disk once bootstrap supports it
+    // For now, pipeline is wired but requires source strings
+    println("check: pipeline wired (lex -> resolve -> check)")
+    println("       file reading not yet available in bootstrap")
     0
 }
 
