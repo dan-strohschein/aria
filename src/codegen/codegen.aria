@@ -2,8 +2,8 @@ mod codegen
 
 // ============================================================
 // Code Generation Public API
-// Wires: lower → emit → macho → binary
-// Full pipeline: source → IR → ARM64 → Mach-O executable
+// Wires: lower → LLVM IR → clang → native binary
+// Full pipeline: source → IR → LLVM IR text → .ll file → clang
 // ============================================================
 
 use diagnostic
@@ -11,18 +11,11 @@ use lexer
 use resolver
 use checker
 
-// --- CodegenResult ---
-
-struct CodegenResult {
-    binary: [i64]
-    diagnostics: DiagnosticBag
-}
-
 // ============================================================
 // Full pipeline: generate executable from source
 // ============================================================
 
-fn generate_from_source(source: str, file: str, output_path: str) -> DiagnosticBag {
+fn generate_from_source(source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag {
     // 1. Lex
     lex := tokenize(source, file)
     toks := get_tokens(lex)
@@ -40,342 +33,48 @@ fn generate_from_source(source: str, file: str, output_path: str) -> DiagnosticB
     // 4. Lower to IR
     m := lower(toks, cr.store, cr.registry, rr.table, file)
 
-    // 5. Emit machine code for each function
-    result := generate_from_module(m)
-
-    // 6. Write binary
-    _ariaWriteBinaryFile(output_path, result.binary)
-
-    result.diagnostics
+    // 5. Generate LLVM IR and compile with clang
+    generate_from_module(m, output_path, runtime_path)
 }
 
 // ============================================================
-// Generate binary from IR module
+// Generate binary from IR module via LLVM IR + clang
 // ============================================================
 
-fn generate_from_module(m: IrModule) -> CodegenResult {
-    mut all_code := [0]
-    mut func_offsets_names := [""]
-    mut func_offsets_vals := [0]
-    mut entry_offset := 0
+fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag {
+    // Generate LLVM IR text
+    ll_text := generate_llvm_ir(m)
 
-    // Parallel arrays for BL patching: absolute offset + target name
-    mut call_offsets := [0]
-    mut call_targets := [""]
+    // Write .ll file
+    ll_path := output_path + ".ll"
+    _ariaWriteFile(ll_path, ll_text)
 
-    // Parallel arrays for string address fixup: absolute code offset + string id
-    mut str_fixup_offsets := [0]
-    mut str_fixup_ids := [0]
+    // Compile with clang
+    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module 2>&1"
+    exit_code := _ariaExec(cmd)
 
-    // --- Phase A: Emit runtime functions (raw machine code) ---
-    rt_funcs := build_runtime_funcs()
-    mut ri := 1
-    while ri < rt_funcs.len() {
-        rf := rt_funcs[ri]
-        if rf.name != "" {
-            cur_offset := all_code.len() - 1
-            func_offsets_names = func_offsets_names.append(rf.name)
-            func_offsets_vals = func_offsets_vals.append(cur_offset)
-
-            // Append raw code
-            mut rci := 1
-            while rci < rf.code.len() {
-                all_code = all_code.append(rf.code[rci])
-                rci = rci + 1
-            }
-        }
-        ri = ri + 1
+    if exit_code != 0 {
+        bag := new_bag()
+        return bag_add_error(bag, "E9000", "clang compilation failed (exit code " + _codegen_i2s(exit_code) + ")", new_span("<codegen>", 0, 0, 0, 0))
     }
-
-    // --- Phase B: Emit user functions from IR ---
-    mut fi := 1
-    while fi < m.funcs.len() {
-        f := m.funcs[fi]
-        if f.name == "" {
-            fi = fi + 1
-            continue
-        }
-
-        // Record function offset (in instruction count)
-        cur_offset := all_code.len() - 1
-        func_offsets_names = func_offsets_names.append(f.name)
-        func_offsets_vals = func_offsets_vals.append(cur_offset)
-
-        if f.name == m.entry_func {
-            entry_offset = cur_offset
-        }
-
-        // Emit function
-        em := emit_function(f)
-        code := emitter_code(em)
-
-        // Record pending calls with absolute offsets
-        pc_offsets := emitter_call_offsets(em)
-        pc_targets := emitter_call_targets(em)
-        mut pci := 1
-        while pci < pc_offsets.len() {
-            call_offsets = call_offsets.append(cur_offset + pc_offsets[pci])
-            call_targets = call_targets.append(pc_targets[pci])
-            pci = pci + 1
-        }
-
-        // Record pending string fixups with absolute offsets
-        ps_offsets := emitter_string_code_indices(em)
-        ps_ids := emitter_string_ids(em)
-        mut psi := 1
-        while psi < ps_offsets.len() {
-            str_fixup_offsets = str_fixup_offsets.append(cur_offset + ps_offsets[psi])
-            str_fixup_ids = str_fixup_ids.append(ps_ids[psi])
-            psi = psi + 1
-        }
-
-        // Append emitted code
-        mut ci := 1
-        while ci < code.len() {
-            all_code = all_code.append(code[ci])
-            ci = ci + 1
-        }
-
-        fi = fi + 1
-    }
-
-    // Emit entry trampoline or fallback exit
-    if m.entry_func != "" {
-        // Entry trampoline: save argc/argv, init args, call _main, exit
-        // With LC_MAIN, dyld calls entry as main(argc, argv): X0=argc, X1=argv
-        entry_offset = all_code.len() - 1
-        // Save argc/argv in callee-saved registers
-        // MOV X20, X0 — save argc
-        all_code = all_code.append(enc_mov_reg(X20, X0))
-        // MOV X21, X1 — save argv
-        all_code = all_code.append(enc_mov_reg(X21, X1))
-        // Call _aria_args_init(argc, argv) — X0 and X1 already set
-        call_offsets = call_offsets.append(all_code.len() - 1)
-        call_targets = call_targets.append("_aria_args_init")
-        all_code = all_code.append(enc_bl(0))
-        // MOV X19, X0 — save args array pointer
-        all_code = all_code.append(enc_mov_reg(X19, X0))
-        // BL _main
-        call_offsets = call_offsets.append(all_code.len() - 1)
-        call_targets = call_targets.append(m.entry_func)
-        all_code = all_code.append(enc_bl(0))
-        // Exit(0)
-        all_code = all_code.append(enc_movz(X0, 0, 0))
-        all_code = all_code.append(enc_movz(X16, 1, 0))
-        all_code = all_code.append(enc_svc(0x80))
-    } else {
-        all_code = all_code.append(enc_movz(X0, 0, 0))
-        all_code = all_code.append(enc_movz(X16, 1, 0))
-        all_code = all_code.append(enc_svc(0x80))
-    }
-
-    // --- Phase C: Patch BL instructions ---
-    // Collect all patches as (index, value) pairs, then apply in single pass
-    mut patch_indices := [0]
-    mut patch_values := [0]
-
-    mut pi := 1
-    while pi < call_offsets.len() {
-        call_abs := call_offsets[pi]
-        target_name := call_targets[pi]
-
-        mut target_offset := -1
-        mut ti := 1
-        while ti < func_offsets_names.len() {
-            if func_offsets_names[ti] == target_name {
-                target_offset = func_offsets_vals[ti]
-            }
-            ti = ti + 1
-        }
-
-        if target_offset >= 0 {
-            bl_offset := target_offset - call_abs
-            code_idx := call_abs + 1
-            patch_indices = patch_indices.append(code_idx)
-            patch_values = patch_values.append(enc_bl(bl_offset))
-        }
-        pi = pi + 1
-    }
-
-    // Build string constant data
-    mut cstring_data := [0]
-    mut si := 1
-    while si < m.string_constants.len() {
-        s := m.string_constants[si]
-        mut chi := 0
-        while chi < s.len() {
-            cstring_data = cstring_data.append(_char_to_byte(s.charAt(chi)))
-            chi = chi + 1
-        }
-        cstring_data = cstring_data.append(0)  // null terminator
-        si = si + 1
-    }
-
-    // --- Phase D: Patch string constant addresses ---
-    // Use PC-relative ADR instructions for ASLR compatibility.
-    // String data is placed right after code in the __TEXT segment.
-    // ADR computes Xd = PC + offset, which is position-independent.
-    code_size := (all_code.len() - 1) * 4
-
-    // Compute per-string byte offsets within cstring data
-    mut string_byte_offsets := [0]  // sentinel
-    mut str_off := 0
-    mut ssi := 1
-    while ssi < m.string_constants.len() {
-        string_byte_offsets = string_byte_offsets.append(str_off)
-        s := m.string_constants[ssi]
-        str_off = str_off + s.len() + 1  // +1 for null terminator
-        ssi = ssi + 1
-    }
-
-    // Collect string fixup patches using ADR (PC-relative)
-    mut sfi := 1
-    while sfi < str_fixup_offsets.len() {
-        fix_abs := str_fixup_offsets[sfi]
-        str_id := str_fixup_ids[sfi]
-        if str_id > 0 && str_id < string_byte_offsets.len() {
-            str_data_off := string_byte_offsets[str_id]
-            // ADR instruction is at 0-based instruction index fix_abs,
-            // which is at byte offset fix_abs * 4 from start of code.
-            // String data starts at byte offset code_size from start of code.
-            // Target string is at code_size + str_data_off from start of code.
-            adr_byte_pos := fix_abs * 4
-            target_byte_pos := code_size + str_data_off
-            pc_offset := target_byte_pos - adr_byte_pos
-            // Patch the single NOP with ADR X0, #pc_offset
-            code_idx := fix_abs + 1  // 1-based array index
-            patch_indices = patch_indices.append(code_idx)
-            patch_values = patch_values.append(enc_adr(X0, pc_offset))
-        }
-        sfi = sfi + 1
-    }
-
-    // Apply all patches in a single pass
-    if patch_indices.len() > 1 {
-        mut new_code := [0]
-        mut ci := 1
-        while ci < all_code.len() {
-            // Check if this index needs patching (use first matching patch)
-            mut patch_val := -1
-            mut ppi := 1
-            while ppi < patch_indices.len() {
-                if patch_indices[ppi] == ci && patch_val < 0 {
-                    patch_val = patch_values[ppi]
-                }
-                ppi = ppi + 1
-            }
-            if patch_val >= 0 {
-                new_code = new_code.append(patch_val)
-            } else {
-                new_code = new_code.append(all_code[ci])
-            }
-            ci = ci + 1
-        }
-        all_code = new_code
-    }
-
-    // Build Mach-O
-    binary := build_macho(all_code, cstring_data, entry_offset)
-
-    CodegenResult{binary: binary, diagnostics: new_bag()}
+    new_bag()
 }
 
-// --- Helper: char to ASCII byte ---
-
-fn _char_to_byte(ch: str) -> i64 {
-    if ch == " " { return 32 }
-    if ch == "!" { return 33 }
-    if ch == "\"" { return 34 }
-    if ch == "#" { return 35 }
-    if ch == "%" { return 37 }
-    if ch == "&" { return 38 }
-    if ch == "'" { return 39 }
-    if ch == "(" { return 40 }
-    if ch == ")" { return 41 }
-    if ch == "*" { return 42 }
-    if ch == "+" { return 43 }
-    if ch == "," { return 44 }
-    if ch == "-" { return 45 }
-    if ch == "." { return 46 }
-    if ch == "/" { return 47 }
-    if ch == "0" { return 48 }
-    if ch == "1" { return 49 }
-    if ch == "2" { return 50 }
-    if ch == "3" { return 51 }
-    if ch == "4" { return 52 }
-    if ch == "5" { return 53 }
-    if ch == "6" { return 54 }
-    if ch == "7" { return 55 }
-    if ch == "8" { return 56 }
-    if ch == "9" { return 57 }
-    if ch == ":" { return 58 }
-    if ch == ";" { return 59 }
-    if ch == "<" { return 60 }
-    if ch == "=" { return 61 }
-    if ch == ">" { return 62 }
-    if ch == "?" { return 63 }
-    if ch == "@" { return 64 }
-    if ch == "A" { return 65 }
-    if ch == "B" { return 66 }
-    if ch == "C" { return 67 }
-    if ch == "D" { return 68 }
-    if ch == "E" { return 69 }
-    if ch == "F" { return 70 }
-    if ch == "G" { return 71 }
-    if ch == "H" { return 72 }
-    if ch == "I" { return 73 }
-    if ch == "J" { return 74 }
-    if ch == "K" { return 75 }
-    if ch == "L" { return 76 }
-    if ch == "M" { return 77 }
-    if ch == "N" { return 78 }
-    if ch == "O" { return 79 }
-    if ch == "P" { return 80 }
-    if ch == "Q" { return 81 }
-    if ch == "R" { return 82 }
-    if ch == "S" { return 83 }
-    if ch == "T" { return 84 }
-    if ch == "U" { return 85 }
-    if ch == "V" { return 86 }
-    if ch == "W" { return 87 }
-    if ch == "X" { return 88 }
-    if ch == "Y" { return 89 }
-    if ch == "Z" { return 90 }
-    if ch == "[" { return 91 }
-    if ch == "\\" { return 92 }
-    if ch == "]" { return 93 }
-    if ch == "^" { return 94 }
-    if ch == "_" { return 95 }
-    if ch == "a" { return 97 }
-    if ch == "b" { return 98 }
-    if ch == "c" { return 99 }
-    if ch == "d" { return 100 }
-    if ch == "e" { return 101 }
-    if ch == "f" { return 102 }
-    if ch == "g" { return 103 }
-    if ch == "h" { return 104 }
-    if ch == "i" { return 105 }
-    if ch == "j" { return 106 }
-    if ch == "k" { return 107 }
-    if ch == "l" { return 108 }
-    if ch == "m" { return 109 }
-    if ch == "n" { return 110 }
-    if ch == "o" { return 111 }
-    if ch == "p" { return 112 }
-    if ch == "q" { return 113 }
-    if ch == "r" { return 114 }
-    if ch == "s" { return 115 }
-    if ch == "t" { return 116 }
-    if ch == "u" { return 117 }
-    if ch == "v" { return 118 }
-    if ch == "w" { return 119 }
-    if ch == "x" { return 120 }
-    if ch == "y" { return 121 }
-    if ch == "z" { return 122 }
-    if ch == "\n" { return 10 }
-    if ch == "\t" { return 9 }
-    if ch == "\r" { return 13 }
-    63  // ?
+fn _codegen_i2s(n: i64) -> str {
+    if n < 0 { return "-" + _codegen_i2s(0 - n) }
+    if n == 0 { return "0" }
+    if n < 10 {
+        if n == 1 { return "1" }
+        if n == 2 { return "2" }
+        if n == 3 { return "3" }
+        if n == 4 { return "4" }
+        if n == 5 { return "5" }
+        if n == 6 { return "6" }
+        if n == 7 { return "7" }
+        if n == 8 { return "8" }
+        return "9"
+    }
+    _codegen_i2s(n / 10) + _codegen_i2s(n % 10)
 }
 
 // ============================================================
@@ -432,7 +131,7 @@ fn _merge_remaining(result: [Token], new_toks: [Token], start: i64) -> [Token] {
     out
 }
 
-fn generate_from_sources(files: [str], output_path: str) -> DiagnosticBag {
+fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
     // Read and lex each file, merge tokens
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true
@@ -468,37 +167,6 @@ fn generate_from_sources(files: [str], output_path: str) -> DiagnosticBag {
     // 4. Lower to IR
     m := lower(merged, cr.store, cr.registry, rr.table, file)
 
-    // 5. Emit machine code
-    result := generate_from_module(m)
-
-    // 6. Write binary
-    _ariaWriteBinaryFile(output_path, result.binary)
-
-    result.diagnostics
-}
-
-// ============================================================
-// Convenience: generate exit-only binary (for testing)
-// ============================================================
-
-fn generate_exit_binary(exit_code: i64) -> [i64] {
-    mut code := [0]
-    mut imm_insts := enc_load_imm64(X0, exit_code)
-    mut ii := 1
-    while ii < imm_insts.len() {
-        code = code.append(imm_insts[ii])
-        ii = ii + 1
-    }
-    code = code.append(enc_movz(X16, 1, 0))
-    code = code.append(enc_svc(0x80))
-    build_macho(code, [0], 0)
-}
-
-// ============================================================
-// Write binary to file
-// ============================================================
-
-fn write_binary(path: str, binary: [i64]) -> bool {
-    _ariaWriteBinaryFile(path, binary)
-    true
+    // 5. Generate LLVM IR + compile
+    generate_from_module(m, output_path, runtime_path)
 }

@@ -28,6 +28,7 @@ struct Options {
     files: [str]
     format: str
     target: str
+    runtime_path: str
 }
 
 fn default_options() -> Options =
@@ -35,7 +36,8 @@ fn default_options() -> Options =
         command: CmdHelp,
         files: [""],
         format: "text",
-        target: "native"
+        target: "native",
+        runtime_path: "runtime/runtime.c"
     }
 
 // --- Argument parsing ---
@@ -94,7 +96,8 @@ fn parse_args(args: [str]) -> Options {
                     command: opts.command,
                     files: opts.files,
                     format: _parse_flag_value(arg),
-                    target: opts.target
+                    target: opts.target,
+                    runtime_path: opts.runtime_path
                 }
             }
             if arg.startsWith("--target=") {
@@ -102,7 +105,17 @@ fn parse_args(args: [str]) -> Options {
                     command: opts.command,
                     files: opts.files,
                     format: opts.format,
-                    target: _parse_flag_value(arg)
+                    target: _parse_flag_value(arg),
+                    runtime_path: opts.runtime_path
+                }
+            }
+            if arg.startsWith("--runtime=") {
+                opts = Options{
+                    command: opts.command,
+                    files: opts.files,
+                    format: opts.format,
+                    target: opts.target,
+                    runtime_path: _parse_flag_value(arg)
                 }
             }
         } else if cmd_set == false {
@@ -110,7 +123,8 @@ fn parse_args(args: [str]) -> Options {
                 command: parse_command(arg),
                 files: opts.files,
                 format: opts.format,
-                target: opts.target
+                target: opts.target,
+                runtime_path: opts.runtime_path
             }
             cmd_set = true
         } else {
@@ -123,7 +137,8 @@ fn parse_args(args: [str]) -> Options {
         command: opts.command,
         files: files,
         format: opts.format,
-        target: opts.target
+        target: opts.target,
+        runtime_path: opts.runtime_path
     }
     opts
 }
@@ -153,6 +168,7 @@ fn print_help() -> i64 {
     println("Flags:")
     println("  --format=text|json  Output format (default: text)")
     println("  --target=TARGET     Target platform")
+    println("  --runtime=PATH      Path to runtime.c (default: runtime/runtime.c)")
     println("  --version, -v       Print version")
     println("  --help, -h          Print this help")
     0
@@ -183,7 +199,7 @@ fn run_check(files: [str], format: str) -> i64 {
     0
 }
 
-fn run_build(files: [str], format: str, target: str) -> i64 {
+fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
     if files.len() <= 1 {
         println("error: no input files")
         return 1
@@ -196,8 +212,8 @@ fn run_build(files: [str], format: str, target: str) -> i64 {
         output = file.substring(0, file.len() - 5)
     }
 
-    // Run full pipeline: lex → resolve → check → lower → emit → write
-    diags := generate_from_sources(files, output)
+    // Run full pipeline: lex → resolve → check → lower → LLVM IR → clang
+    diags := generate_from_sources(files, output, runtime_path)
     if bag_has_errors(diags) {
         mut di := 1
         while di < diags.diagnostics.len() {
@@ -232,7 +248,7 @@ entry {
         opts := parse_args(args)
         cmd := command_to_str(opts.command)
         if cmd == "build" {
-            run_build(opts.files, opts.format, opts.target)
+            run_build(opts.files, opts.format, opts.target, opts.runtime_path)
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "version" {

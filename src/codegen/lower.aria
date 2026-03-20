@@ -1152,6 +1152,33 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, path_arg.temp, 4, "_aria_write_binary_file", 0))
                 return LT{l: ll, temp: nt.temp}
             }
+            if name == "_ariaWriteFile" {
+                ll = _ladv(ll)  // skip (
+                // Two args: path (str = 2 temps), content (str = 2 temps)
+                path_arg := _lower_expr(ll)
+                ll = path_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                content_arg := _lower_expr(ll)
+                ll = content_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, path_arg.temp, 4, "_aria_write_file", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaExec" {
+                ll = _ladv(ll)  // skip (
+                // One arg: command (str = 2 temps)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // String arg = 2 regs (ptr + len), returns i64 exit code
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_exec", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
             if name == "_ariaArgs" {
                 // Skip args
                 ll = _ladv(ll)

@@ -1,0 +1,910 @@
+mod codegen
+
+// ============================================================
+// LLVM IR Generator
+// Translates IrModule → LLVM IR text (.ll file)
+// Uses alloca+load/store for all temps (LLVM mem2reg optimizes)
+//
+// Performance: uses [str] parts arrays + divide-and-conquer join
+// to avoid O(n²) string concatenation.
+// ============================================================
+
+// Brace helpers (Aria requires escaped braces in strings)
+fn _lb() -> str = "\{"
+fn _rb() -> str = "\}"
+fn _nl() -> str = "\n"
+
+// ============================================================
+// Fast string join: divide-and-conquer O(L * log N)
+// ============================================================
+
+// Join string array into one string.
+// Uses chunked approach: join groups of 64, then join the chunks.
+// This is O(L * N/64 + L * 64) ≈ O(L * N/64) instead of O(L * N).
+fn _join(parts: [str]) -> str {
+    // First pass: join chunks of 64 parts
+    mut chunks := [""]
+    mut i := 1
+    while i < parts.len() {
+        mut chunk := ""
+        mut j := 0
+        while j < 64 && (i + j) < parts.len() {
+            chunk = chunk + parts[i + j]
+            j = j + 1
+        }
+        chunks = chunks.append(chunk)
+        i = i + 64
+    }
+    // Second pass: join the chunks
+    mut result := ""
+    mut ci := 1
+    while ci < chunks.len() {
+        result = result + chunks[ci]
+        ci = ci + 1
+    }
+    return result
+}
+
+// --- String constant escaping ---
+
+fn _llvm_escape_str(s: str) -> str {
+    mut result := ""
+    mut i := 0
+    while i < s.len() {
+        ch := s.charAt(i)
+        if ch == "\\" {
+            result = result + "\\5C"
+        } else if ch == "\"" {
+            result = result + "\\22"
+        } else if ch == "\n" {
+            result = result + "\\0A"
+        } else if ch == "\r" {
+            result = result + "\\0D"
+        } else if ch == "\t" {
+            result = result + "\\09"
+        } else {
+            result = result + ch
+        }
+        i = i + 1
+    }
+    result
+}
+
+// --- LLVM IR text builder (array-based) ---
+
+struct LlvmGen {
+    parts: [str]
+    label_counter: i64
+    last_was_term: bool
+}
+
+fn _lg_new() -> LlvmGen = LlvmGen{parts: [""], label_counter: 0, last_was_term: false}
+
+fn _lg_emit(g: LlvmGen, line: str) -> LlvmGen =
+    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: false}
+
+fn _lg_emit_term(g: LlvmGen, line: str) -> LlvmGen =
+    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: true}
+
+fn _lg_emit_label(g: LlvmGen, label: str) -> LlvmGen =
+    LlvmGen{parts: g.parts.append(label + ":\n"), label_counter: g.label_counter, last_was_term: false}
+
+fn _lg_fresh_label(g: LlvmGen) -> LT_label {
+    id := g.label_counter + 1
+    LT_label{g: LlvmGen{parts: g.parts, label_counter: id, last_was_term: g.last_was_term}, id: id}
+}
+
+struct LT_label {
+    g: LlvmGen
+    id: i64
+}
+
+fn _i2s(n: i64) -> str {
+    if n < 0 { return "-" + _i2s(0 - n) }
+    if n == 0 { return "0" }
+    if n == 1 { return "1" }
+    if n == 2 { return "2" }
+    if n == 3 { return "3" }
+    if n == 4 { return "4" }
+    if n == 5 { return "5" }
+    if n == 6 { return "6" }
+    if n == 7 { return "7" }
+    if n == 8 { return "8" }
+    if n == 9 { return "9" }
+    _i2s(n / 10) + _i2s(n % 10)
+}
+
+fn _t(n: i64) -> str = "%t" + _i2s(n)
+fn _v(n: i64) -> str = "%v" + _i2s(n)
+fn _lbl(n: i64) -> str = "L" + _i2s(n)
+fn _fall(n: i64) -> str = "Lfall" + _i2s(n)
+
+fn _struct_i64_i64() -> str = _lb() + " i64, i64 " + _rb()
+
+// Collect all function names called by OpCall instructions
+fn _collect_called_names(m: IrModule) -> [str] {
+    mut names := [""]
+    mut fi := 1
+    while fi < m.funcs.len() {
+        f := m.funcs[fi]
+        mut ii := 1
+        while ii < f.insts.len() {
+            if ir_op_name(f.insts[ii].op) == "Call" {
+                cname := f.insts[ii].s1
+                if _name_in_list(cname, names) == false {
+                    names = names.append(cname)
+                }
+            }
+            ii = ii + 1
+        }
+        fi = fi + 1
+    }
+    return names
+}
+
+fn _name_in_list(name: str, list: [str]) -> bool {
+    mut i := 1
+    while i < list.len() {
+        if list[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ============================================================
+// Main entry: generate_llvm_ir
+// ============================================================
+
+fn generate_llvm_ir(m: IrModule) -> str {
+    nl := _nl()
+    si64 := _struct_i64_i64()
+    mut p := [""]
+
+    // Module header
+    p = p.append("target datalayout = \"e-m:o-i64:64-i128:128-n32:64-S128\"" + nl)
+    p = p.append("target triple = \"arm64-apple-macosx14.0.0\"" + nl + nl)
+
+    // String constants
+    mut si := 1
+    while si < m.string_constants.len() {
+        s := m.string_constants[si]
+        escaped := _llvm_escape_str(s)
+        slen := s.len()
+        p = p.append("@.str." + _i2s(si) + " = private unnamed_addr constant [" + _i2s(slen + 1) + " x i8] c\"" + escaped + "\\00\"" + nl)
+        si = si + 1
+    }
+    p = p.append(nl)
+
+    // Runtime declarations
+    p = p.append("; Runtime declarations" + nl)
+    p = p.append("declare void @_aria_exit(i64)" + nl)
+    p = p.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
+    p = p.append("declare void @_aria_println_str(i8*, i64)" + nl)
+    p = p.append("declare void @_aria_print_str(i8*, i64)" + nl)
+    p = p.append("declare void @_aria_eprintln_str(i8*, i64)" + nl)
+    p = p.append("declare i8* @_aria_alloc(i64)" + nl)
+    p = p.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
+    p = p.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare void @_aria_write_binary_file(i8*, i64, i64*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_startsWith(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_array_new(i64)" + nl)
+    p = p.append("declare i64 @_aria_array_len(i64)" + nl)
+    p = p.append("declare i64 @_aria_array_get(i64, i64)" + nl)
+    p = p.append("declare void @_aria_array_set(i64, i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_array_append(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_args_get()" + nl)
+    p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
+    p = p.append(nl)
+
+    // User functions — collect defined names for forward declarations
+    mut defined_names := [""]
+    mut fi := 1
+    while fi < m.funcs.len() {
+        f := m.funcs[fi]
+        if f.name != "" {
+            defined_names = defined_names.append(f.name)
+            fn_parts := _gen_function(m, f)
+            mut fpi := 1
+            while fpi < fn_parts.len() {
+                p = p.append(fn_parts[fpi])
+                fpi = fpi + 1
+            }
+            p = p.append(nl)
+        }
+        fi = fi + 1
+    }
+
+    // Forward-declare any called but undefined functions as i64(...)
+    // This handles functions lost during multi-file token merging
+    mut called_names := _collect_called_names(m)
+    mut ci := 1
+    while ci < called_names.len() {
+        cname := called_names[ci]
+        if _name_in_list(cname, defined_names) == false {
+            // Check it's not a runtime function (already declared above)
+            if cname.startsWith("_aria_") == false {
+                // Declare as varargs i64 return
+                p = p.append("declare i64 @" + cname + "(...)" + nl)
+            }
+        }
+        ci = ci + 1
+    }
+
+    // Entry point wrapper
+    if m.entry_func != "" {
+        lb := _lb()
+        rb := _rb()
+        p = p.append("; Entry wrapper" + nl)
+        p = p.append("define void @_aria_entry() " + lb + nl)
+        p = p.append("entry:" + nl)
+        p = p.append("  call void @" + m.entry_func + "()" + nl)
+        p = p.append("  ret void" + nl)
+        p = p.append(rb + nl + nl)
+    }
+
+    _join(p)
+}
+
+// ============================================================
+// Generate one function → returns [str] parts
+// ============================================================
+
+fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
+    nl := _nl()
+    lb := _lb()
+    rb := _rb()
+    si64 := _struct_i64_i64()
+
+    mut ret_type := "void"
+    mut is_void := true
+    if f.return_type == 12 {
+        ret_type = si64
+        is_void = false
+    } else if f.return_type > 0 {
+        ret_type = "i64"
+        is_void = false
+    }
+
+    mut has_ret := false
+    mut ii := 1
+    while ii < f.insts.len() {
+        op := ir_op_name(f.insts[ii].op)
+        if op == "Ret" { has_ret = true }
+        ii = ii + 1
+    }
+    if has_ret && is_void {
+        ret_type = "i64"
+        is_void = false
+    }
+
+    mut params := ""
+    mut pi := 0
+    while pi < f.param_count {
+        if pi > 0 { params = params + ", " }
+        params = params + "i64 %p" + _i2s(pi)
+        pi = pi + 1
+    }
+
+    mut p := [""]
+    p = p.append("define " + ret_type + " @" + f.name + "(" + params + ") " + lb + nl)
+    p = p.append("entry:" + nl)
+
+    // Allocate all temps
+    mut max_temp := f.param_count
+    mut ti := 1
+    while ti < f.insts.len() {
+        inst := f.insts[ti]
+        if inst.dest > max_temp { max_temp = inst.dest }
+        if inst.arg1 > max_temp { max_temp = inst.arg1 }
+        if inst.arg2 > max_temp { max_temp = inst.arg2 }
+        ti = ti + 1
+    }
+    max_temp = max_temp + 2
+
+    mut ai := 0
+    while ai <= max_temp {
+        p = p.append("  " + _t(ai) + " = alloca i64, align 8" + nl)
+        ai = ai + 1
+    }
+
+    // Store parameters
+    pi = 0
+    while pi < f.param_count {
+        p = p.append("  store i64 %p" + _i2s(pi) + ", i64* " + _t(pi) + nl)
+        pi = pi + 1
+    }
+
+    // Generate instructions
+    mut g := _lg_new()
+    mut idx := 1
+    while idx < f.insts.len() {
+        inst := f.insts[idx]
+        g = _gen_inst(g, m, f, inst, idx)
+        idx = idx + 1
+    }
+
+    // Default return
+    if g.last_was_term == false {
+        if is_void {
+            g = _lg_emit_term(g, "ret void")
+        } else if ret_type == si64 {
+            g = _lg_emit_term(g, "ret " + si64 + " zeroinitializer")
+        } else {
+            g = _lg_emit_term(g, "ret i64 0")
+        }
+    }
+
+    // Merge instruction parts into function parts
+    mut gi := 1
+    while gi < g.parts.len() {
+        p = p.append(g.parts[gi])
+        gi = gi + 1
+    }
+
+    p = p.append(rb + nl)
+    p
+}
+
+// ============================================================
+// Generate one IR instruction
+// ============================================================
+
+fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen {
+    op := ir_op_name(inst.op)
+
+    if op == "Nop" { return g }
+
+    if op == "Const" {
+        return _lg_emit(g, "store i64 " + _i2s(inst.arg1) + ", i64* " + _t(inst.dest))
+    }
+
+    if op == "ConstStr" {
+        str_id := inst.arg1
+        str_len := inst.arg2
+        mut gg := g
+        lbl := _lg_fresh_label(gg)
+        gg = lbl.g
+        tmp_name := "%str_ptr_" + _i2s(lbl.id)
+        gg = _lg_emit(gg, tmp_name + " = getelementptr [" + _i2s(str_len + 1) + " x i8], [" + _i2s(str_len + 1) + " x i8]* @.str." + _i2s(str_id) + ", i64 0, i64 0")
+        tmp_int := "%str_int_" + _i2s(lbl.id)
+        gg = _lg_emit(gg, tmp_int + " = ptrtoint i8* " + tmp_name + " to i64")
+        gg = _lg_emit(gg, "store i64 " + tmp_int + ", i64* " + _t(inst.dest))
+        gg = _lg_emit(gg, "store i64 " + _i2s(str_len) + ", i64* " + _t(inst.dest + 1))
+        return gg
+    }
+
+    if op == "Add" { return _gen_binop(g, "add", inst) }
+    if op == "Sub" { return _gen_binop(g, "sub", inst) }
+    if op == "Mul" { return _gen_binop(g, "mul", inst) }
+    if op == "Div" { return _gen_binop(g, "sdiv", inst) }
+    if op == "Mod" { return _gen_binop(g, "srem", inst) }
+
+    if op == "Neg" {
+        mut gg := g
+        v := _v(inst.arg1)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%neg_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = sub i64 0, " + v)
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "Eq" { return _gen_cmp(g, "eq", inst, idx) }
+    if op == "Neq" { return _gen_cmp(g, "ne", inst, idx) }
+    if op == "Lt" { return _gen_cmp(g, "slt", inst, idx) }
+    if op == "Gt" { return _gen_cmp(g, "sgt", inst, idx) }
+    if op == "Lte" { return _gen_cmp(g, "sle", inst, idx) }
+    if op == "Gte" { return _gen_cmp(g, "sge", inst, idx) }
+
+    if op == "And" { return _gen_binop(g, "and", inst) }
+    if op == "Or" { return _gen_binop(g, "or", inst) }
+
+    if op == "Not" {
+        mut gg := g
+        v := _v(inst.arg1)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        cmp := "%not_cmp_" + _i2s(idx)
+        gg = _lg_emit(gg, cmp + " = icmp eq i64 " + v + ", 0")
+        res := "%not_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = zext i1 " + cmp + " to i64")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "BitAnd" { return _gen_binop(g, "and", inst) }
+    if op == "BitOr" { return _gen_binop(g, "or", inst) }
+    if op == "BitXor" { return _gen_binop(g, "xor", inst) }
+    if op == "Shl" { return _gen_binop(g, "shl", inst) }
+    if op == "Shr" { return _gen_binop(g, "ashr", inst) }
+
+    if op == "Jump" {
+        mut gg := g
+        if gg.last_was_term == false {
+            gg = _lg_emit_term(gg, "br label %" + _lbl(inst.arg1))
+        }
+        return gg
+    }
+
+    if op == "BranchTrue" {
+        mut gg := g
+        v := "%br_val_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        cmp := "%br_cmp_" + _i2s(idx)
+        gg = _lg_emit(gg, cmp + " = icmp ne i64 " + v + ", 0")
+        lbl := _lg_fresh_label(gg)
+        gg = lbl.g
+        fall := _fall(lbl.id)
+        gg = _lg_emit_term(gg, "br i1 " + cmp + ", label %" + _lbl(inst.arg2) + ", label %" + fall)
+        gg = _lg_emit_label(gg, fall)
+        return gg
+    }
+
+    if op == "BranchFalse" {
+        mut gg := g
+        v := "%br_val_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        cmp := "%br_cmp_" + _i2s(idx)
+        gg = _lg_emit(gg, cmp + " = icmp eq i64 " + v + ", 0")
+        lbl := _lg_fresh_label(gg)
+        gg = lbl.g
+        fall := _fall(lbl.id)
+        gg = _lg_emit_term(gg, "br i1 " + cmp + ", label %" + _lbl(inst.arg2) + ", label %" + fall)
+        gg = _lg_emit_label(gg, fall)
+        return gg
+    }
+
+    if op == "Label" {
+        mut gg := g
+        if gg.last_was_term == false {
+            gg = _lg_emit_term(gg, "br label %" + _lbl(inst.arg1))
+        }
+        gg = _lg_emit_label(gg, _lbl(inst.arg1))
+        return gg
+    }
+
+    if op == "Ret" {
+        mut gg := g
+        si64 := _struct_i64_i64()
+        if f.return_type == 12 {
+            ptr_v := "%ret_ptr_" + _i2s(idx)
+            len_v := "%ret_len_" + _i2s(idx)
+            gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+            gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+            r1 := "%ret_s1_" + _i2s(idx)
+            r2 := "%ret_s2_" + _i2s(idx)
+            gg = _lg_emit(gg, r1 + " = insertvalue " + si64 + " undef, i64 " + ptr_v + ", 0")
+            gg = _lg_emit(gg, r2 + " = insertvalue " + si64 + " " + r1 + ", i64 " + len_v + ", 1")
+            gg = _lg_emit_term(gg, "ret " + si64 + " " + r2)
+        } else {
+            v := "%ret_v_" + _i2s(idx)
+            gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+            gg = _lg_emit_term(gg, "ret i64 " + v)
+        }
+        return gg
+    }
+
+    if op == "RetVoid" { return _lg_emit_term(g, "ret void") }
+    if op == "Arg" { return g }
+    if op == "Local" { return g }
+
+    if op == "Store" {
+        mut gg := g
+        v := "%store_v_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "Load" {
+        mut gg := g
+        v := "%load_v_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "Call" { return _gen_call(g, m, f, inst, idx) }
+
+    if op == "Alloc" {
+        mut gg := g
+        size := inst.arg1 * 8
+        raw := "%alloc_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + _i2s(size) + ")")
+        ptr := "%alloc_ptr_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
+        gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "FieldGet" {
+        mut gg := g
+        base := "%fg_base_" + _i2s(idx)
+        gg = _lg_emit(gg, base + " = load i64, i64* " + _t(inst.arg1))
+        raw := "%fg_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = inttoptr i64 " + base + " to i64*")
+        gep := "%fg_gep_" + _i2s(idx)
+        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + _i2s(inst.arg2))
+        val := "%fg_val_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = load i64, i64* " + gep)
+        gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "FieldSet" {
+        mut gg := g
+        base := "%fs_base_" + _i2s(idx)
+        gg = _lg_emit(gg, base + " = load i64, i64* " + _t(inst.dest))
+        raw := "%fs_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = inttoptr i64 " + base + " to i64*")
+        gep := "%fs_gep_" + _i2s(idx)
+        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + _i2s(inst.arg2))
+        val := "%fs_val_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "store i64 " + val + ", i64* " + gep)
+        return gg
+    }
+
+    if op == "ArrayNew" {
+        mut gg := g
+        arr := "%anew_" + _i2s(idx)
+        gg = _lg_emit(gg, arr + " = call i64 @_aria_array_new(i64 8)")
+        gg = _lg_emit(gg, "store i64 " + arr + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "ArrayLen" {
+        mut gg := g
+        arr_v := "%alen_arr_" + _i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
+        len_v := "%alen_" + _i2s(idx)
+        gg = _lg_emit(gg, len_v + " = call i64 @_aria_array_len(i64 " + arr_v + ")")
+        gg = _lg_emit(gg, "store i64 " + len_v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "ArrayGet" {
+        mut gg := g
+        arr_v := "%aget_arr_" + _i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
+        idx_v := "%aget_idx_" + _i2s(idx)
+        gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg2))
+        val := "%aget_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = call i64 @_aria_array_get(i64 " + arr_v + ", i64 " + idx_v + ")")
+        gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "ArraySet" {
+        mut gg := g
+        arr_v := "%aset_arr_" + _i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.dest))
+        idx_v := "%aset_idx_" + _i2s(idx)
+        gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg1))
+        val := "%aset_val_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, "call void @_aria_array_set(i64 " + arr_v + ", i64 " + idx_v + ", i64 " + val + ")")
+        return gg
+    }
+
+    if op == "ArrayAppend" {
+        mut gg := g
+        arr_v := "%aapp_arr_" + _i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
+        val := "%aapp_val_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
+        res := "%aapp_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + val + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "StrLen" {
+        mut gg := g
+        v := "%slen_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "StrConcat" { return _gen_str_binop_returning_str(g, "@_aria_str_concat", inst, idx) }
+    if op == "StrEq" { return _gen_str_binop_returning_i64(g, "@_aria_str_eq", inst, idx) }
+
+    if op == "StrCharAt" {
+        mut gg := g
+        s_ptr := "%sca_sp_" + _i2s(idx)
+        s_len := "%sca_sl_" + _i2s(idx)
+        gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+        idx_v := "%sca_idx_" + _i2s(idx)
+        gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg2))
+        s_p := "%sca_spi_" + _i2s(idx)
+        gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
+        srt := _str_ret_type()
+        res := "%sca_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_charAt(i8* " + s_p + ", i64 " + s_len + ", i64 " + idx_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "sca")
+        return gg
+    }
+
+    if op == "StrSubstring" {
+        mut gg := g
+        s_ptr := "%ssub_sp_" + _i2s(idx)
+        s_len := "%ssub_sl_" + _i2s(idx)
+        gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+        start_v := "%ssub_st_" + _i2s(idx)
+        gg = _lg_emit(gg, start_v + " = load i64, i64* " + _t(inst.arg2))
+        end_v := "%ssub_en_" + _i2s(idx)
+        gg = _lg_emit(gg, end_v + " = load i64, i64* " + _t(inst.type_id))
+        s_p := "%ssub_spi_" + _i2s(idx)
+        gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
+        srt := _str_ret_type()
+        res := "%ssub_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_substring(i8* " + s_p + ", i64 " + s_len + ", i64 " + start_v + ", i64 " + end_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "ssub")
+        return gg
+    }
+
+    if op == "StrContains" { return _gen_str_binop_returning_i64(g, "@_aria_str_contains", inst, idx) }
+
+    if op == "IntToStr" {
+        mut gg := g
+        v := "%its_v_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        srt := _str_ret_type()
+        res := "%its_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_int_to_str(i64 " + v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "its")
+        return gg
+    }
+
+    g
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+fn _str_ret_type() -> str = _lb() + " i8*, i64 " + _rb()
+
+fn _extract_str_result(g: LlvmGen, res_name: str, dest: i64, idx: i64, prefix: str) -> LlvmGen {
+    srt := _str_ret_type()
+    mut gg := g
+    r_ptr := "%" + prefix + "_rp_" + _i2s(idx)
+    r_len := "%" + prefix + "_rl_" + _i2s(idx)
+    gg = _lg_emit(gg, r_ptr + " = extractvalue " + srt + " " + res_name + ", 0")
+    gg = _lg_emit(gg, r_len + " = extractvalue " + srt + " " + res_name + ", 1")
+    rpi := "%" + prefix + "_rpi_" + _i2s(idx)
+    gg = _lg_emit(gg, rpi + " = ptrtoint i8* " + r_ptr + " to i64")
+    gg = _lg_emit(gg, "store i64 " + rpi + ", i64* " + _t(dest))
+    gg = _lg_emit(gg, "store i64 " + r_len + ", i64* " + _t(dest + 1))
+    gg
+}
+
+fn _gen_binop(g: LlvmGen, llvm_op: str, inst: IrInst) -> LlvmGen {
+    mut gg := g
+    a := "%binop_a_" + _i2s(inst.dest)
+    b := "%binop_b_" + _i2s(inst.dest)
+    gg = _lg_emit(gg, a + " = load i64, i64* " + _t(inst.arg1))
+    gg = _lg_emit(gg, b + " = load i64, i64* " + _t(inst.arg2))
+    res := "%binop_r_" + _i2s(inst.dest)
+    gg = _lg_emit(gg, res + " = " + llvm_op + " i64 " + a + ", " + b)
+    gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+    gg
+}
+
+fn _gen_cmp(g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen {
+    mut gg := g
+    a := "%cmp_a_" + _i2s(idx)
+    b := "%cmp_b_" + _i2s(idx)
+    gg = _lg_emit(gg, a + " = load i64, i64* " + _t(inst.arg1))
+    gg = _lg_emit(gg, b + " = load i64, i64* " + _t(inst.arg2))
+    cmp := "%cmp_c_" + _i2s(idx)
+    gg = _lg_emit(gg, cmp + " = icmp " + cmp_op + " i64 " + a + ", " + b)
+    res := "%cmp_r_" + _i2s(idx)
+    gg = _lg_emit(gg, res + " = zext i1 " + cmp + " to i64")
+    gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+    gg
+}
+
+fn _gen_str_binop_returning_str(g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen {
+    mut gg := g
+    a_ptr := "%sbr_ap_" + _i2s(idx)
+    a_len := "%sbr_al_" + _i2s(idx)
+    b_ptr := "%sbr_bp_" + _i2s(idx)
+    b_len := "%sbr_bl_" + _i2s(idx)
+    gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
+    gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+    gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
+    gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
+    a_p := "%sbr_api_" + _i2s(idx)
+    b_p := "%sbr_bpi_" + _i2s(idx)
+    gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
+    gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
+    srt := _str_ret_type()
+    res := "%sbr_res_" + _i2s(idx)
+    gg = _lg_emit(gg, res + " = call " + srt + " " + func_name + "(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
+    gg = _extract_str_result(gg, res, inst.dest, idx, "sbr")
+    gg
+}
+
+fn _gen_str_binop_returning_i64(g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen {
+    mut gg := g
+    a_ptr := "%sbi_ap_" + _i2s(idx)
+    a_len := "%sbi_al_" + _i2s(idx)
+    b_ptr := "%sbi_bp_" + _i2s(idx)
+    b_len := "%sbi_bl_" + _i2s(idx)
+    gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
+    gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+    gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
+    gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
+    a_p := "%sbi_api_" + _i2s(idx)
+    b_p := "%sbi_bpi_" + _i2s(idx)
+    gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
+    gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
+    res := "%sbi_res_" + _i2s(idx)
+    gg = _lg_emit(gg, res + " = call i64 " + func_name + "(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
+    gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+    gg
+}
+
+// ============================================================
+// Generate function call
+// ============================================================
+
+fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen {
+    name := inst.s1
+    mut gg := g
+
+    if name == "_aria_println_str" || name == "_aria_print_str" || name == "_aria_eprintln_str" {
+        ptr_v := "%call_p_" + _i2s(idx)
+        len_v := "%call_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%call_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        gg = _lg_emit(gg, "call void @" + name + "(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        return gg
+    }
+
+    if name == "_aria_exit" {
+        v := "%call_exit_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_exit(i64 " + v + ")")
+        return gg
+    }
+
+    if name == "_aria_alloc" {
+        v := "%call_alloc_sz_" + _i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        raw := "%call_alloc_r_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + v + ")")
+        res := "%call_alloc_i_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = ptrtoint i8* " + raw + " to i64")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_read_file" {
+        ptr_v := "%call_rf_p_" + _i2s(idx)
+        len_v := "%call_rf_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%call_rf_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        srt := _str_ret_type()
+        res := "%call_rf_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_read_file(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_rf")
+        return gg
+    }
+
+    if name == "_aria_write_file" {
+        pp := "%call_wf_pp_" + _i2s(idx)
+        pl := "%call_wf_pl_" + _i2s(idx)
+        cp := "%call_wf_cp_" + _i2s(idx)
+        cl := "%call_wf_cl_" + _i2s(idx)
+        gg = _lg_emit(gg, pp + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, pl + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, cp + " = load i64, i64* " + _t(inst.arg1 + 2))
+        gg = _lg_emit(gg, cl + " = load i64, i64* " + _t(inst.arg1 + 3))
+        pp_c := "%call_wf_ppc_" + _i2s(idx)
+        cp_c := "%call_wf_cpc_" + _i2s(idx)
+        gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
+        gg = _lg_emit(gg, cp_c + " = inttoptr i64 " + cp + " to i8*")
+        gg = _lg_emit(gg, "call void @_aria_write_file(i8* " + pp_c + ", i64 " + pl + ", i8* " + cp_c + ", i64 " + cl + ")")
+        return gg
+    }
+
+    if name == "_aria_write_binary_file" {
+        pp := "%call_wbf_pp_" + _i2s(idx)
+        pl := "%call_wbf_pl_" + _i2s(idx)
+        dp := "%call_wbf_dp_" + _i2s(idx)
+        dl := "%call_wbf_dl_" + _i2s(idx)
+        gg = _lg_emit(gg, pp + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, pl + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, dp + " = load i64, i64* " + _t(inst.arg1 + 2))
+        gg = _lg_emit(gg, dl + " = load i64, i64* " + _t(inst.arg1 + 3))
+        pp_c := "%call_wbf_ppc_" + _i2s(idx)
+        dp_c := "%call_wbf_dpc_" + _i2s(idx)
+        gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
+        gg = _lg_emit(gg, dp_c + " = inttoptr i64 " + dp + " to i64*")
+        gg = _lg_emit(gg, "call void @_aria_write_binary_file(i8* " + pp_c + ", i64 " + pl + ", i64* " + dp_c + ", i64 " + dl + ")")
+        return gg
+    }
+
+    if name == "_aria_args" {
+        res := "%call_args_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_args_get()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_exec" {
+        ptr_v := "%call_exec_p_" + _i2s(idx)
+        len_v := "%call_exec_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%call_exec_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        res := "%call_exec_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_exec(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    // Generic user function call
+    mut args := ""
+    mut ai := 0
+    while ai < inst.arg2 {
+        if ai > 0 { args = args + ", " }
+        av := "%call_a" + _i2s(ai) + "_" + _i2s(idx)
+        gg = _lg_emit(gg, av + " = load i64, i64* " + _t(inst.arg1 + ai))
+        args = args + "i64 " + av
+        ai = ai + 1
+    }
+
+    si64 := _struct_i64_i64()
+
+    target_func := mod_find_func(m, name)
+    if target_func.name != "" && target_func.return_type == 12 {
+        res := "%call_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + si64 + " @" + name + "(" + args + ")")
+        r0 := "%call_r0_" + _i2s(idx)
+        r1 := "%call_r1_" + _i2s(idx)
+        gg = _lg_emit(gg, r0 + " = extractvalue " + si64 + " " + res + ", 0")
+        gg = _lg_emit(gg, r1 + " = extractvalue " + si64 + " " + res + ", 1")
+        gg = _lg_emit(gg, "store i64 " + r0 + ", i64* " + _t(inst.dest))
+        gg = _lg_emit(gg, "store i64 " + r1 + ", i64* " + _t(inst.dest + 1))
+        return gg
+    }
+
+    if inst.type_id == 12 {
+        res := "%call_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + si64 + " @" + name + "(" + args + ")")
+        r0 := "%call_r0_" + _i2s(idx)
+        r1 := "%call_r1_" + _i2s(idx)
+        gg = _lg_emit(gg, r0 + " = extractvalue " + si64 + " " + res + ", 0")
+        gg = _lg_emit(gg, r1 + " = extractvalue " + si64 + " " + res + ", 1")
+        gg = _lg_emit(gg, "store i64 " + r0 + ", i64* " + _t(inst.dest))
+        gg = _lg_emit(gg, "store i64 " + r1 + ", i64* " + _t(inst.dest + 1))
+        return gg
+    }
+
+    if target_func.name != "" && target_func.return_type == 0 {
+        gg = _lg_emit(gg, "call void @" + name + "(" + args + ")")
+        return gg
+    }
+
+    res := "%call_r_" + _i2s(idx)
+    gg = _lg_emit(gg, res + " = call i64 @" + name + "(" + args + ")")
+    gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+    gg
+}
