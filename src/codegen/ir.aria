@@ -182,7 +182,7 @@ fn mod_find_string(m: IrModule, s: str) -> i64 {
         if m.string_constants[i] == s { return i }
         i = i + 1
     }
-    0  // not found
+    return 0  // not found
 }
 
 fn mod_func_count(m: IrModule) -> i64 = m.funcs.len() - 1
@@ -193,5 +193,5 @@ fn mod_find_func(m: IrModule, name: str) -> IrFunc {
         if m.funcs[i].name == name { return m.funcs[i] }
         i = i + 1
     }
-    _sentinel_func()
+    return _sentinel_func()
 }

@@ -131,7 +131,7 @@ fn op_requires_trait(op: str) -> str {
     if op == "%" { return "Mod" }
     if op == "==" || op == "!=" { return "Eq" }
     if op == "<" || op == ">" || op == "<=" || op == ">=" { return "Ord" }
-    ""
+    return ""
 }
 
 // Check if a type supports a given operator
@@ -148,7 +148,7 @@ fn type_supports_op(treg: TraitRegistry, store: TypeStore, type_id: i64, op: str
     trait_name := op_requires_trait(op)
     if trait_name == "" { return true }
     type_name := format_type(store, type_id)
-    treg_has_impl(treg, type_name, trait_name)
+    return treg_has_impl(treg, type_name, trait_name)
 }
 
 // Get result type of a binary operator

@@ -53,7 +53,7 @@ fn parse_command(arg: str) -> Command {
     if arg == "version" { return CmdVersion }
     if arg == "--version" { return CmdVersion }
     if arg == "-v" { return CmdVersion }
-    CmdUnknown
+    return CmdUnknown
 }
 
 fn command_to_str(cmd: Command) -> str = match cmd {
@@ -186,7 +186,7 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
     cr := check(toks, rr.table, file)
-    cr.diagnostics
+    return cr.diagnostics
 }
 
 fn run_check(files: [str], format: str) -> i64 {

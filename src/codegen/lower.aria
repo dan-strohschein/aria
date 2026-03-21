@@ -68,7 +68,7 @@ fn _lcur(l: Lowerer) -> Token {
     if l.pos >= l.tokens.len() {
         return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
     }
-    l.tokens[l.pos]
+    return l.tokens[l.pos]
 }
 
 fn _lk(l: Lowerer) -> str = token_name(_lcur(l).kind)
@@ -184,7 +184,7 @@ fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
         if l.env_names[i] == name { return l.env_slots[i] }
         i = i - 1
     }
-    -1
+    return -1
 }
 
 // Helper: allocate 2 consecutive temp slots for a string fat pointer (ptr + len)
@@ -202,7 +202,7 @@ fn _lconst_lookup(l: Lowerer, name: str) -> i64 {
         if l.const_names[i] == name { return l.const_vals[i] }
         i = i + 1
     }
-    -9999999  // sentinel: not found
+    return -9999999  // sentinel: not found
 }
 
 fn _lconst_str_lookup(l: Lowerer, name: str) -> str {
@@ -211,7 +211,7 @@ fn _lconst_str_lookup(l: Lowerer, name: str) -> str {
         if l.const_str_names[i] == name { return l.const_str_vals[i] }
         i = i + 1
     }
-    ""  // not found
+    return ""  // not found
 }
 
 fn _lconst_has(l: Lowerer, name: str) -> bool {
@@ -220,7 +220,7 @@ fn _lconst_has(l: Lowerer, name: str) -> bool {
         if l.const_names[i] == name { return true }
         i = i + 1
     }
-    false
+    return false
 }
 
 fn _lconst_str_has(l: Lowerer, name: str) -> bool {
@@ -229,7 +229,7 @@ fn _lconst_str_has(l: Lowerer, name: str) -> bool {
         if l.const_str_names[i] == name { return true }
         i = i + 1
     }
-    false
+    return false
 }
 
 // Get the element type of an array type. Returns the element's type_id, or 0 if unknown.
@@ -242,7 +242,7 @@ fn _array_elem_type(store: TypeStore, arr_type: i64) -> i64 {
     if type_kind_name(info.kind) == "Array" {
         return info.type_id
     }
-    0
+    return 0
 }
 
 // Check if a type_id from the store represents [str] (array of strings)
@@ -251,7 +251,7 @@ fn _is_str_array_type(store: TypeStore, tid: i64) -> bool {
     if type_kind_name(info.kind) == "Array" && info.type_id == 12 {
         return true
     }
-    false
+    return false
 }
 
 // Check if a type_id represents a named/struct type (not a builtin)
@@ -260,7 +260,7 @@ fn _is_named_type(store: TypeStore, tid: i64) -> bool {
     if tid <= 16 { return false }
     info := store_get(store, tid)
     if type_kind_name(info.kind) == "Named" { return true }
-    false
+    return false
 }
 
 // Get struct name for a type_id using the store + registry
@@ -276,7 +276,7 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
     if type_kind_name(info.kind) == "Named" {
         return info.name
     }
-    ""
+    return ""
 }
 
 // --- Type tracking helpers ---
@@ -315,7 +315,7 @@ fn _lget_type(l: Lowerer, temp: i64) -> i64 {
     if idx >= 0 && idx < l.temp_types.len() {
         return l.temp_types[idx]
     }
-    0
+    return 0
 }
 
 // --- Op selection helpers (avoid mut reassignment of sum types) ---
@@ -326,7 +326,7 @@ fn _arith_op(k: str) -> IrOp {
     if k == "*" { return OpMul }
     if k == "/" { return OpDiv }
     if k == "%" { return OpMod }
-    OpAdd
+    return OpAdd
 }
 
 fn _cmp_op(k: str) -> IrOp {
@@ -336,12 +336,12 @@ fn _cmp_op(k: str) -> IrOp {
     if k == ">" { return OpGt }
     if k == "<=" { return OpLte }
     if k == ">=" { return OpGte }
-    OpEq
+    return OpEq
 }
 
 fn _unary_op(k: str) -> IrOp {
     if k == "!" { return OpNot }
-    OpNeg
+    return OpNeg
 }
 
 fn _cmp_or_logic_op(k: str) -> IrOp {
@@ -353,7 +353,7 @@ fn _cmp_or_logic_op(k: str) -> IrOp {
     if k == ">=" { return OpGte }
     if k == "&&" { return OpAnd }
     if k == "||" { return OpOr }
-    OpEq
+    return OpEq
 }
 
 // Expression continuation check
@@ -685,7 +685,7 @@ fn _lower_impl(l: Lowerer) -> Lowerer {
         ll = _lskip_nl(ll)
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
-    ll
+    return ll
 }
 
 // --- Lower function body block { ... } with implicit return ---
@@ -1715,7 +1715,7 @@ fn _lower_call_args(l: Lowerer, callee: i64) -> LT {
         if _lk(ll) == "," { ll = _ladv(ll) }
     }
     if _lk(ll) == ")" { ll = _ladv(ll) }
-    LT{l: ll, temp: callee}
+    return LT{l: ll, temp: callee}
 }
 
 // --- Field index lookup ---
@@ -1768,7 +1768,7 @@ fn _struct_name_from_type(reg: TypeRegistry, type_id: i64) -> str {
     if idx >= 1 && idx < reg.struct_defs.len() {
         return reg.struct_defs[idx].name
     }
-    ""
+    return ""
 }
 
 fn _struct_type_id(reg: TypeRegistry, struct_name: str) -> i64 {
@@ -2547,7 +2547,7 @@ fn _skip_braces_l(l: Lowerer) -> Lowerer {
         if d > 0 { ll = _ladv(ll) }
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
-    ll
+    return ll
 }
 
 // --- Lower assert ---

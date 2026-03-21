@@ -45,7 +45,7 @@ fn _rcur(r: Resolver) -> Token {
     if r.pos >= r.tokens.len() {
         return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
     }
-    r.tokens[r.pos]
+    return r.tokens[r.pos]
 }
 
 fn _rk(r: Resolver) -> str = token_name(_rcur(r).kind)
@@ -592,7 +592,7 @@ fn _resolve_test(r: Resolver) -> Resolver {
     if _rk(rr) == "STRING" || _rk(rr) == "IDENT" { rr = _radv(rr) }
     rr = _push_scope(rr, ScFunction, "test")
     rr = _resolve_block(rr)
-    _pop_scope(rr, parent_scope)
+    return _pop_scope(rr, parent_scope)
 }
 
 // --- Resolve block { ... } ---
@@ -642,7 +642,7 @@ fn _resolve_struct_lit(r: Resolver) -> Resolver {
         }
     }
     if _rk(rr) == rb { rr = _radv(rr) }
-    rr
+    return rr
 }
 
 fn _resolve_struct_field_value(r: Resolver) -> Resolver {
@@ -695,7 +695,7 @@ fn _resolve_paren_contents(r: Resolver) -> Resolver {
         }
     }
     if _rk(rr) == ")" { rr = _radv(rr) }
-    rr
+    return rr
 }
 
 fn _resolve_bracket_contents(r: Resolver) -> Resolver {
@@ -727,7 +727,7 @@ fn _resolve_bracket_contents(r: Resolver) -> Resolver {
         }
     }
     if _rk(rr) == "]" { rr = _radv(rr) }
-    rr
+    return rr
 }
 
 // --- Resolve statement ---
@@ -760,7 +760,7 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
     if k == "match" { return _resolve_match(r) }
 
     // Expression statement — may be a binding
-    _resolve_expr_or_binding(r)
+    return _resolve_expr_or_binding(r)
 }
 
 // --- Resolve mut binding ---

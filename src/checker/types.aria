@@ -156,7 +156,7 @@ fn store_get(store: TypeStore, id: i64) -> TypeInfo {
     if id >= 0 && id < store.types.len() {
         return store.types[id]
     }
-    _sentinel_type()
+    return _sentinel_type()
 }
 
 fn store_last_id(store: TypeStore) -> i64 = store.types.len() - 1
@@ -183,7 +183,7 @@ fn format_type(store: TypeStore, id: i64) -> str {
     }
     if kn == "Function" { return "fn(...)" }
     if kn == "TypeVar" { return info.name }
-    kn
+    return kn
 }
 
 // --- Type utilities ---
@@ -209,7 +209,7 @@ fn is_float(store: TypeStore, id: i64) -> bool {
     if id <= 0 { return false }
     info := store.types[id]
     kn := type_kind_name(info.kind)
-    kn == "f64" || kn == "f32"
+    return kn == "f64" || kn == "f32"
 }
 
 fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
@@ -228,14 +228,14 @@ fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
                types_equal(store, ai.type_id2, bi.type_id2)
     }
     if ak == "Optional" { return types_equal(store, ai.type_id, bi.type_id) }
-    true
+    return true
 }
 
 fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
     if types_equal(store, src, dst) { return true }
     if src == TY_NEVER { return true }
     if src == TY_UNKNOWN || dst == TY_UNKNOWN { return true }
-    false
+    return false
 }
 
 // --- Resolve a type name to a type ID ---

@@ -73,7 +73,7 @@ fn _span_i2s(n: i64) -> str {
         if n == 8 { return "8" }
         return "9"
     }
-    _span_i2s(n / 10) + _span_i2s(n % 10)
+    return _span_i2s(n / 10) + _span_i2s(n % 10)
 }
 
 fn format_span(s: Span) -> str = s.file + ":" + _span_i2s(s.line) + ":" + _span_i2s(s.col)
@@ -318,7 +318,7 @@ fn describe_code(code: str) -> str {
     if code == W0003 { return "unused import" }
     if code == W0004 { return "shadowed variable" }
     if code == W0100 { return "unreachable code" }
-    "unknown error code"
+    return "unknown error code"
 }
 
 // ============================================================
@@ -341,7 +341,7 @@ fn _get_source_line(source: str, target_line: i64) -> str {
     if idx >= 0 && idx < lines.len() {
         return lines[idx]
     }
-    ""
+    return ""
 }
 
 fn _line_number_width(line: i64) -> i64 {
@@ -349,7 +349,7 @@ fn _line_number_width(line: i64) -> i64 {
     if line < 100 { return 2 }
     if line < 1000 { return 3 }
     if line < 10000 { return 4 }
-    5
+    return 5
 }
 
 fn _pad_left(s: str, width: i64) -> str {
@@ -357,7 +357,7 @@ fn _pad_left(s: str, width: i64) -> str {
     if padding <= 0 {
         return s
     }
-    _repeat_char(" ", padding) + s
+    return _repeat_char(" ", padding) + s
 }
 
 fn render_text(diag: Diagnostic, source: str) -> str {

@@ -246,7 +246,7 @@ fn lookup_keyword(text: str) -> TokenKind {
     if text == "Self" { return TkSelfType }
     if text == "true" { return TkBoolTrue }
     if text == "false" { return TkBoolFalse }
-    TkIdent
+    return TkIdent
 }
 
 fn is_keyword(kind: TokenKind) -> bool {

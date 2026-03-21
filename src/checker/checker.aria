@@ -75,7 +75,7 @@ fn _ccur(c: Checker) -> Token {
     if c.pos >= c.tokens.len() {
         return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
     }
-    c.tokens[c.pos]
+    return c.tokens[c.pos]
 }
 
 fn _ck2(c: Checker) -> str = token_name(_ccur(c).kind)
@@ -253,7 +253,7 @@ fn _parse_type_ann(c: Checker) -> CE {
         if _ck2(cc) == ")" { cc = _cadv(cc) }
         return CE{c: cc, type_id: TY_UNKNOWN}
     }
-    CE{c: c, type_id: TY_UNKNOWN}
+    return CE{c: c, type_id: TY_UNKNOWN}
 }
 
 // --- Skip type tokens (without computing type) ---
@@ -467,7 +467,7 @@ fn _skip_braces2(c: Checker) -> Checker {
         if d > 0 { cc = _cadv(cc) }
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
-    cc
+    return cc
 }
 
 // ============================================================
@@ -783,7 +783,7 @@ fn _check_test(c: Checker) -> Checker {
     if _ck2(cc) == "STRING" || _ck2(cc) == "IDENT" { cc = _cadv(cc) }
     cc = _cset_fn_ctx(cc, TY_UNIT, 0)
     result := _check_block(cc)
-    result.c
+    return result.c
 }
 
 // ============================================================
@@ -864,7 +864,7 @@ fn _check_mut_binding(c: Checker) -> CE {
     mut final_type := result.type_id
     if ann_type != TY_UNKNOWN { final_type = ann_type }
     cc = _env_add(cc, name, final_type, 0)
-    CE{c: cc, type_id: TY_UNIT}
+    return CE{c: cc, type_id: TY_UNIT}
 }
 
 fn _check_return(c: Checker) -> CE {
@@ -1251,7 +1251,7 @@ fn _check_call_args(c: Checker, callee_type: i64) -> CE {
         if _ck2(cc) == "," { cc = _cadv(cc) }
     }
     if _ck2(cc) == ")" { cc = _cadv(cc) }
-    CE{c: cc, type_id: callee_type}
+    return CE{c: cc, type_id: callee_type}
 }
 
 // --- Check method call ---

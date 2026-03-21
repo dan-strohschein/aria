@@ -80,7 +80,7 @@ fn _peek(lex: Lexer) -> str {
     if lex.pos >= lex.source.len() {
         return ""
     }
-    lex.source.charAt(lex.pos)
+    return lex.source.charAt(lex.pos)
 }
 
 fn _peek_next(lex: Lexer) -> str {
@@ -88,7 +88,7 @@ fn _peek_next(lex: Lexer) -> str {
     if next >= lex.source.len() {
         return ""
     }
-    lex.source.charAt(next)
+    return lex.source.charAt(next)
 }
 
 fn _at_end(lex: Lexer) -> bool = lex.pos >= lex.source.len()
@@ -197,7 +197,7 @@ fn _last_token_kind(lex: Lexer) -> TokenKind {
     if lex.tokens.len() <= 1 {
         return TkEof
     }
-    lex.tokens[lex.tokens.len() - 1].kind
+    return lex.tokens[lex.tokens.len() - 1].kind
 }
 
 // --- Scan identifier/keyword ---

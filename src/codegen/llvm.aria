@@ -111,7 +111,7 @@ fn _i2s(n: i64) -> str {
     if n == 7 { return "7" }
     if n == 8 { return "8" }
     if n == 9 { return "9" }
-    _i2s(n / 10) + _i2s(n % 10)
+    return _i2s(n / 10) + _i2s(n % 10)
 }
 
 fn _t(n: i64) -> str = "%t" + _i2s(n)
