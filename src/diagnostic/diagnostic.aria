@@ -59,7 +59,24 @@ fn new_span(file: str, line: i64, col: i64, offset: i64, length: i64) -> Span =
 
 fn span_end_offset(s: Span) -> i64 = s.offset + s.length
 
-fn format_span(s: Span) -> str = "{s.file}:{s.line}:{s.col}"
+fn _span_i2s(n: i64) -> str {
+    if n < 0 { return "-" + _span_i2s(0 - n) }
+    if n == 0 { return "0" }
+    if n < 10 {
+        if n == 1 { return "1" }
+        if n == 2 { return "2" }
+        if n == 3 { return "3" }
+        if n == 4 { return "4" }
+        if n == 5 { return "5" }
+        if n == 6 { return "6" }
+        if n == 7 { return "7" }
+        if n == 8 { return "8" }
+        return "9"
+    }
+    _span_i2s(n / 10) + _span_i2s(n % 10)
+}
+
+fn format_span(s: Span) -> str = s.file + ":" + _span_i2s(s.line) + ":" + _span_i2s(s.col)
 
 // --- Label ---
 
@@ -177,7 +194,7 @@ fn bag_merge(a: DiagnosticBag, b: DiagnosticBag) -> DiagnosticBag {
 }
 
 fn format_summary(bag: DiagnosticBag) -> str =
-    "{bag.error_count} error(s), {bag.warning_count} warning(s)"
+    _span_i2s(bag.error_count) + " error(s), " + _span_i2s(bag.warning_count) + " warning(s)"
 
 // ============================================================
 // Error Code Constants

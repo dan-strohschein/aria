@@ -927,6 +927,41 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
     return result.l
 }
 
+// --- Lower comparison (atom [cmp atom]) ---
+// Used as right-hand side of && and || to get correct precedence
+
+fn _lower_comparison(l: Lowerer) -> LT {
+    result := _lower_atom(l)
+    mut ll := result.l
+    mut left := result.temp
+    k := _lk(ll)
+    if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
+        ll = _ladv(ll)
+        right := _lower_atom(ll)
+        ll = right.l
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        left_type := _lget_type(ll, left)
+        if (k == "==" || k == "!=") && left_type == 12 {
+            ll = _lemit(ll, new_inst(OpStrEq, nt.temp, left, right.temp, "", 0))
+            if k == "!=" {
+                not_nt := _lnew_temp(ll)
+                ll = not_nt.l
+                ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                left = not_nt.temp
+                ll = _lset_type(ll, not_nt.temp, 1)
+            } else {
+                left = nt.temp
+            }
+        } else {
+            ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
+            left = nt.temp
+        }
+        ll = _lset_type(ll, nt.temp, 1)
+    }
+    LT{l: ll, temp: left}
+}
+
 // --- Lower expression ---
 
 fn _lower_expr(l: Lowerer) -> LT {
@@ -984,7 +1019,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = _lset_type(ll, nt.temp, 1)
         } else if k == "&&" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_comparison(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -992,7 +1027,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "||" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_comparison(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1975,7 +2010,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             }
         } else if k == "&&" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_comparison(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1983,7 +2018,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "||" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_comparison(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
