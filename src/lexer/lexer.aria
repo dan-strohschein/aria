@@ -286,10 +286,9 @@ fn _scan_number(lex: Lexer) -> Lexer {
 
     text := l.source.substring(start, l.pos)
     if is_float {
-        _add_token(l, TkFloatLit, text, start_line, start_col, start)
-    } else {
-        _add_token(l, TkIntLit, text, start_line, start_col, start)
+        return _add_token(l, TkFloatLit, text, start_line, start_col, start)
     }
+    return _add_token(l, TkIntLit, text, start_line, start_col, start)
 }
 
 // --- Scan string literal ---
