@@ -284,12 +284,18 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 // Type IDs: 0=unknown, 1=i64, 12=str, 13=[str], 100+=struct types
 
 fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
-    // Grow temp_types if needed
+    // Bounds check to prevent infinite loops from corrupted temp values
+    if temp < 0 || temp > 10000 {
+        
+        return l
+    }
+    
+    // Grow temp_types if needed (bounded)
     mut types := l.temp_types
     while types.len() <= temp + 1 {
         types = types.append(0)
     }
-    // Rebuild array with updated value
+    // Rebuild array with updated value (bounded by types.len which is at most temp+2)
     mut new_types := [0]
     mut i := 1
     while i < types.len() {
@@ -300,7 +306,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
         }
         i = i + 1
     }
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry,
+    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -2628,5 +2634,5 @@ fn lower(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTabl
     mut l := _new_lowerer(tokens, store, reg, table, file)
     l = _scan_consts(l)
     l = _lower_bodies(l)
-    l.module
+    return l.module
 }
