@@ -296,14 +296,26 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     p = p.append("define " + ret_type + " @" + f.name + "(" + params + ") " + lb + nl)
     p = p.append("entry:" + nl)
 
-    // Allocate all temps
+    // Allocate all temps — only count fields that are temp references
+    // Skip: OpConst (arg1 = value), OpConstStr (arg1 = str_id, arg2 = str_len),
+    //        OpFieldGet/Set (arg2 = field index), OpLabel/Jump/Branch (arg1/arg2 = label)
     mut max_temp := f.param_count
     mut ti := 1
     while ti < f.insts.len() {
         inst := f.insts[ti]
+        op := ir_op_name(inst.op)
         if inst.dest > max_temp { max_temp = inst.dest }
-        if inst.arg1 > max_temp { max_temp = inst.arg1 }
-        if inst.arg2 > max_temp { max_temp = inst.arg2 }
+        // arg1 is a temp for most ops except Const, ConstStr, Jump, Label
+        if op != "Const" && op != "ConstStr" && op != "Jump" && op != "Label" && op != "Nop" {
+            if inst.arg1 > max_temp { max_temp = inst.arg1 }
+        }
+        // arg2 is a temp for binary ops and ArrayGet, but NOT for FieldGet/Set (field index),
+        // ConstStr (length), Call (reg count), Branch (label)
+        if op != "FieldGet" && op != "FieldSet" && op != "ConstStr" && op != "Call" &&
+           op != "BranchTrue" && op != "BranchFalse" && op != "Nop" && op != "Const" &&
+           op != "Alloc" && op != "Jump" && op != "Label" {
+            if inst.arg2 > max_temp { max_temp = inst.arg2 }
+        }
         ti = ti + 1
     }
     max_temp = max_temp + 2
@@ -577,7 +589,22 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg2))
         val := "%aget_" + _i2s(idx)
         gg = _lg_emit(gg, val + " = call i64 @_aria_array_get(i64 " + arr_v + ", i64 " + idx_v + ")")
-        gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        if inst.type_id == 12 {
+            // String array element: val is a pointer to a 2-word struct {ptr, len}
+            // Dereference to load both components into dest and dest+1
+            sp := "%aget_sp_" + _i2s(idx)
+            gg = _lg_emit(gg, sp + " = inttoptr i64 " + val + " to i64*")
+            sv0 := "%aget_s0_" + _i2s(idx)
+            gg = _lg_emit(gg, sv0 + " = load i64, i64* " + sp)
+            gg = _lg_emit(gg, "store i64 " + sv0 + ", i64* " + _t(inst.dest))
+            sv1g := "%aget_s1g_" + _i2s(idx)
+            gg = _lg_emit(gg, sv1g + " = getelementptr i64, i64* " + sp + ", i64 1")
+            sv1 := "%aget_s1_" + _i2s(idx)
+            gg = _lg_emit(gg, sv1 + " = load i64, i64* " + sv1g)
+            gg = _lg_emit(gg, "store i64 " + sv1 + ", i64* " + _t(inst.dest + 1))
+        } else {
+            gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        }
         return gg
     }
 
@@ -597,11 +624,32 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         mut gg := g
         arr_v := "%aapp_arr_" + _i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
-        val := "%aapp_val_" + _i2s(idx)
-        gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
-        res := "%aapp_res_" + _i2s(idx)
-        gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + val + ")")
-        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        if inst.type_id == 12 {
+            // String element: allocate a 2-word struct, store ptr+len, append struct pointer
+            sp := "%aapp_sp_" + _i2s(idx)
+            gg = _lg_emit(gg, sp + " = call i8* @_aria_alloc(i64 16)")
+            spi := "%aapp_spi_" + _i2s(idx)
+            gg = _lg_emit(gg, spi + " = bitcast i8* " + sp + " to i64*")
+            sv0 := "%aapp_sv0_" + _i2s(idx)
+            gg = _lg_emit(gg, sv0 + " = load i64, i64* " + _t(inst.arg2))
+            gg = _lg_emit(gg, "store i64 " + sv0 + ", i64* " + spi)
+            sg1 := "%aapp_sg1_" + _i2s(idx)
+            gg = _lg_emit(gg, sg1 + " = getelementptr i64, i64* " + spi + ", i64 1")
+            sv1 := "%aapp_sv1_" + _i2s(idx)
+            gg = _lg_emit(gg, sv1 + " = load i64, i64* " + _t(inst.arg2 + 1))
+            gg = _lg_emit(gg, "store i64 " + sv1 + ", i64* " + sg1)
+            spp := "%aapp_spp_" + _i2s(idx)
+            gg = _lg_emit(gg, spp + " = ptrtoint i64* " + spi + " to i64")
+            res := "%aapp_res_" + _i2s(idx)
+            gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + spp + ")")
+            gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        } else {
+            val := "%aapp_val_" + _i2s(idx)
+            gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
+            res := "%aapp_res_" + _i2s(idx)
+            gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + val + ")")
+            gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        }
         return gg
     }
 
@@ -751,6 +799,50 @@ fn _gen_str_binop_returning_i64(g: LlvmGen, func_name: str, inst: IrInst, idx: i
     gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
     res := "%sbi_res_" + _i2s(idx)
     gg = _lg_emit(gg, res + " = call i64 " + func_name + "(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
+    gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+    gg
+}
+
+// Inline StrEq: length-first check avoids memcmp call for most comparisons
+fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
+    mut gg := g
+    a_ptr := "%seq_ap_" + _i2s(idx)
+    a_len := "%seq_al_" + _i2s(idx)
+    b_ptr := "%seq_bp_" + _i2s(idx)
+    b_len := "%seq_bl_" + _i2s(idx)
+    gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
+    gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+    gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
+    gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
+    // Fast path: if lengths differ, not equal
+    len_eq := "%seq_leq_" + _i2s(idx)
+    gg = _lg_emit(gg, len_eq + " = icmp eq i64 " + a_len + ", " + b_len)
+    lbl1 := _lg_fresh_label(gg)
+    gg = lbl1.g
+    lbl2 := _lg_fresh_label(gg)
+    gg = lbl2.g
+    lbl3 := _lg_fresh_label(gg)
+    gg = lbl3.g
+    do_cmp_lbl := "Lseq_cmp_" + _i2s(lbl1.id)
+    not_eq_lbl := "Lseq_ne_" + _i2s(lbl2.id)
+    done_lbl := "Lseq_done_" + _i2s(lbl3.id)
+    gg = _lg_emit_term(gg, "br i1 " + len_eq + ", label %" + do_cmp_lbl + ", label %" + not_eq_lbl)
+    // Lengths match: call memcmp via _aria_str_eq
+    gg = _lg_emit_label(gg, do_cmp_lbl)
+    a_p := "%seq_api_" + _i2s(idx)
+    b_p := "%seq_bpi_" + _i2s(idx)
+    gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
+    gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
+    res_cmp := "%seq_rc_" + _i2s(idx)
+    gg = _lg_emit(gg, res_cmp + " = call i64 @_aria_str_eq(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
+    gg = _lg_emit_term(gg, "br label %" + done_lbl)
+    // Lengths differ: result is 0 (false)
+    gg = _lg_emit_label(gg, not_eq_lbl)
+    gg = _lg_emit_term(gg, "br label %" + done_lbl)
+    // Merge with phi
+    gg = _lg_emit_label(gg, done_lbl)
+    res := "%seq_res_" + _i2s(idx)
+    gg = _lg_emit(gg, res + " = phi i64 [ " + res_cmp + ", %" + do_cmp_lbl + " ], [ 0, %" + not_eq_lbl + " ]")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
 }

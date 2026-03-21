@@ -118,7 +118,7 @@ fn _merge_file_tokens(base: [Token], new_toks: [Token]) -> [Token] {
     }
     // Append EOF
     result = result.append(Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0})
-    result
+    return result
 }
 
 fn _merge_remaining(result: [Token], new_toks: [Token], start: i64) -> [Token] {
@@ -128,7 +128,7 @@ fn _merge_remaining(result: [Token], new_toks: [Token], start: i64) -> [Token] {
         out = out.append(new_toks[j])
         j = j + 1
     }
-    out
+    return out
 }
 
 fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {

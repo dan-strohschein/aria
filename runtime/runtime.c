@@ -42,6 +42,10 @@ char *_aria_alloc(long size) {
 }
 
 void _aria_memcpy(char *dst, char *src, long len) {
+    if (dst == NULL || src == NULL || len < 0 || len > 1000000000) {
+        fprintf(stderr, "FATAL memcpy: dst=%p src=%p len=%ld\n", (void*)dst, (void*)src, len);
+        exit(99);
+    }
     memcpy(dst, src, (size_t)len);
 }
 
@@ -54,6 +58,10 @@ struct _aria_str {
 };
 
 struct _aria_str _aria_read_file(char *path_ptr, long path_len) {
+    if (path_ptr == NULL || path_len <= 0 || path_len > 10000) {
+        fprintf(stderr, "FATAL read_file: path=%p len=%ld\n", (void*)path_ptr, path_len);
+        exit(98);
+    }
     // Null-terminate the path
     char *path = (char *)malloc((size_t)(path_len + 1));
     memcpy(path, path_ptr, (size_t)path_len);
@@ -125,6 +133,16 @@ struct _aria_str _aria_int_to_str(long value) {
 // --- String operations ---
 
 struct _aria_str _aria_str_concat(char *a_ptr, long a_len, char *b_ptr, long b_len) {
+    if ((a_ptr == NULL && a_len > 0) || (b_ptr == NULL && b_len > 0)) {
+        fprintf(stderr, "FATAL str_concat: a=%p(%ld) b=%p(%ld)\n", (void*)a_ptr, a_len, (void*)b_ptr, b_len);
+        void *ra = __builtin_return_address(0);
+        fprintf(stderr, "  caller: %p\n", ra);
+        // Print the valid string for context
+        if (a_ptr != NULL && a_len > 0 && a_len < 200) {
+            fprintf(stderr, "  a_str: \"%.*s\"\n", (int)a_len, a_ptr);
+        }
+        exit(99);
+    }
     long total = a_len + b_len;
     char *result = (char *)malloc((size_t)(total + 1));
     memcpy(result, a_ptr, (size_t)a_len);
@@ -136,6 +154,11 @@ struct _aria_str _aria_str_concat(char *a_ptr, long a_len, char *b_ptr, long b_l
 
 long _aria_str_eq(char *a_ptr, long a_len, char *b_ptr, long b_len) {
     if (a_len != b_len) return 0;
+    if (a_len == 0) return 1;
+    if (a_ptr == NULL || b_ptr == NULL) {
+        fprintf(stderr, "FATAL str_eq: a=%p(%ld) b=%p(%ld)\n", (void*)a_ptr, a_len, (void*)b_ptr, b_len);
+        exit(99);
+    }
     return memcmp(a_ptr, b_ptr, (size_t)a_len) == 0 ? 1 : 0;
 }
 
@@ -143,6 +166,10 @@ struct _aria_str _aria_str_charAt(char *ptr, long len, long index) {
     if (index < 0 || index >= len) {
         struct _aria_str s = {"", 0};
         return s;
+    }
+    if (ptr == NULL) {
+        fprintf(stderr, "FATAL charAt: ptr=NULL len=%ld idx=%ld\n", len, index);
+        exit(97);
     }
     char *result = (char *)malloc(2);
     result[0] = ptr[index];
@@ -170,6 +197,10 @@ long _aria_str_contains(char *haystack_ptr, long haystack_len,
                         char *needle_ptr, long needle_len) {
     if (needle_len == 0) return 1;
     if (needle_len > haystack_len) return 0;
+    if (haystack_ptr == NULL || needle_ptr == NULL) {
+        fprintf(stderr, "BUG str_contains: h=%p(%ld) n=%p(%ld)\n", (void*)haystack_ptr, haystack_len, (void*)needle_ptr, needle_len);
+        return 0;
+    }
     for (long i = 0; i <= haystack_len - needle_len; i++) {
         if (memcmp(haystack_ptr + i, needle_ptr, (size_t)needle_len) == 0) {
             return 1;
@@ -181,6 +212,10 @@ long _aria_str_contains(char *haystack_ptr, long haystack_len,
 long _aria_str_startsWith(char *str_ptr, long str_len,
                           char *prefix_ptr, long prefix_len) {
     if (prefix_len > str_len) return 0;
+    if (str_ptr == NULL || prefix_ptr == NULL) {
+        fprintf(stderr, "BUG str_startsWith: s=%p(%ld) p=%p(%ld)\n", (void*)str_ptr, str_len, (void*)prefix_ptr, prefix_len);
+        return 0;
+    }
     return memcmp(str_ptr, prefix_ptr, (size_t)prefix_len) == 0 ? 1 : 0;
 }
 
@@ -208,7 +243,15 @@ long _aria_array_len(long arr_ptr) {
 }
 
 long _aria_array_get(long arr_ptr, long index) {
+    if (arr_ptr == 0) {
+        fprintf(stderr, "FATAL array_get: arr=NULL idx=%ld\n", index);
+        exit(96);
+    }
     long *header = (long *)arr_ptr;
+    if (header[2] == 0) {
+        fprintf(stderr, "FATAL array_get: data=NULL arr=%p idx=%ld len=%ld\n", (void*)arr_ptr, index, header[0]);
+        exit(96);
+    }
     long *data = (long *)header[2];
     return data[index];
 }
@@ -219,8 +262,13 @@ void _aria_array_set(long arr_ptr, long index, long value) {
     data[index] = value;
 }
 
-// Append returns the array pointer (may reallocate data)
+// Debug guard for array_append
+static int _aapp_dbg = 0;
 long _aria_array_append(long arr_ptr, long value) {
+    if (arr_ptr == 0) {
+        fprintf(stderr, "FATAL array_append: arr=NULL val=%ld\n", value);
+        exit(87);
+    }
     long *header = (long *)arr_ptr;
     long length = header[0];
     long capacity = header[1];
@@ -260,8 +308,8 @@ void _aria_args_init(int argc, char **argv) {
     // is a pair of i64 values (ptr, len) stored in the array's data
     long arr = _aria_array_new(argc * 2 + 2);
 
-    // Sentinel element (index 0) - empty string
-    _aria_array_set(arr, 0, 0);  // sentinel
+    // Sentinel element (index 0) - empty string (use append to update length)
+    _aria_array_append(arr, 0);  // sentinel
 
     // For each argv entry, store two elements: ptr and len
     // Actually, looking at how the bootstrap handles _ariaArgs:
