@@ -283,39 +283,10 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 // --- Type tracking helpers ---
 // Type IDs: 0=unknown, 1=i64, 12=str, 13=[str], 100+=struct types
 
-fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
-    // Bounds check to prevent infinite loops from corrupted temp values
-    if temp < 0 || temp > 10000 {
-        
-        return l
-    }
-    
-    // Grow temp_types if needed (bounded)
-    mut types := l.temp_types
-    while types.len() <= temp + 1 {
-        types = types.append(0)
-    }
-    // Rebuild array with updated value (bounded by types.len which is at most temp+2)
-    mut new_types := [0]
-    mut i := 1
-    while i < types.len() {
-        if i == temp + 1 {
-            new_types = new_types.append(type_id)
-        } else {
-            new_types = new_types.append(types[i])
-        }
-        i = i + 1
-    }
-    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry,
-            table: l.table, file: l.file, module: l.module,
-            current_func: l.current_func,
-            temp_counter: l.temp_counter, label_counter: l.label_counter,
-            env_names: l.env_names, env_slots: l.env_slots,
-            loop_start: l.loop_start, loop_end: l.loop_end,
-            const_names: l.const_names, const_vals: l.const_vals,
-            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: new_types}
-}
+// NOTE: _lset_type is temporarily a no-op to avoid gen-2 hang.
+// The gen-2 binary reads a corrupted temp_counter from the Lowerer struct,
+// causing the grow loop to run forever. This will be fixed after gen-2 bootstraps.
+fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer = l
 
 fn _lget_type(l: Lowerer, temp: i64) -> i64 {
     idx := temp + 1
@@ -2101,14 +2072,12 @@ fn _lower_if(l: Lowerer) -> LT {
             ll = _lskip_nl(ll)
         }
         if _lk(ll) == rb { ll = _ladv(ll) }
-        // Store last expression to result temp
+        // Store last expression to result temp (always copy both ptr+len slots)
         if then_last >= 0 {
             ll = _lemit(ll, new_inst(OpStore, result_nt.temp, then_last, 0, "", 0))
-            then_type := _lget_type(ll, then_last)
-            if then_type == 12 {
-                ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, then_last + 1, 0, "", 0))
-            }
-            if then_type > 0 { ll = _lset_type(ll, result_nt.temp, then_type) }
+            then_len_dst := result_nt.temp + 1
+            then_len_src := then_last + 1
+            ll = _lemit(ll, new_inst(OpStore, then_len_dst, then_len_src, 0, "", 0))
         }
     }
     ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
@@ -2123,11 +2092,9 @@ fn _lower_if(l: Lowerer) -> LT {
             else_result := _lower_if(ll)
             ll = else_result.l
             ll = _lemit(ll, new_inst(OpStore, result_nt.temp, else_result.temp, 0, "", 0))
-            else_type := _lget_type(ll, else_result.temp)
-            if else_type == 12 {
-                ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, else_result.temp + 1, 0, "", 0))
-            }
-            if else_type > 0 { ll = _lset_type(ll, result_nt.temp, else_type) }
+            eif_len_dst := result_nt.temp + 1
+            eif_len_src := else_result.temp + 1
+            ll = _lemit(ll, new_inst(OpStore, eif_len_dst, eif_len_src, 0, "", 0))
         } else if _lk(ll) == lb {
             ll = _ladv(ll)
             ll = _lskip_nl(ll)
@@ -2150,11 +2117,9 @@ fn _lower_if(l: Lowerer) -> LT {
             if _lk(ll) == rb { ll = _ladv(ll) }
             if else_last >= 0 {
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, else_last, 0, "", 0))
-                else_type := _lget_type(ll, else_last)
-                if else_type == 12 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, else_last + 1, 0, "", 0))
-                }
-                if else_type > 0 { ll = _lset_type(ll, result_nt.temp, else_type) }
+                else_len_dst := result_nt.temp + 1
+                else_len_src := else_last + 1
+                ll = _lemit(ll, new_inst(OpStore, else_len_dst, else_len_src, 0, "", 0))
             }
         }
     }
@@ -2485,11 +2450,10 @@ fn _lower_match(l: Lowerer) -> LT {
                 arm_result := _lower_expr(ll)
                 ll = arm_result.l
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
-                arm_type := _lget_type(ll, arm_result.temp)
-                if arm_type == 12 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, arm_result.temp + 1, 0, "", 0))
-                }
-                if arm_type > 0 { ll = _lset_type(ll, result_nt.temp, arm_type) }
+                // Always copy len slot too (harmless for non-strings, required for strings without type tracking)
+                result_len := result_nt.temp + 1
+                arm_len := arm_result.temp + 1
+                ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
             }
             ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         } else {
@@ -2519,11 +2483,10 @@ fn _lower_match(l: Lowerer) -> LT {
                 arm_result := _lower_expr(ll)
                 ll = arm_result.l
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
-                arm_type := _lget_type(ll, arm_result.temp)
-                if arm_type == 12 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, arm_result.temp + 1, 0, "", 0))
-                }
-                if arm_type > 0 { ll = _lset_type(ll, result_nt.temp, arm_type) }
+                // Always copy len slot too (harmless for non-strings, required for strings without type tracking)
+                result_len := result_nt.temp + 1
+                arm_len := arm_result.temp + 1
+                ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
             }
 
             ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
