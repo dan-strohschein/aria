@@ -283,10 +283,37 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 // --- Type tracking helpers ---
 // Type IDs: 0=unknown, 1=i64, 12=str, 13=[str], 100+=struct types
 
-// NOTE: _lset_type is temporarily a no-op to avoid gen-2 hang.
-// The gen-2 binary reads a corrupted temp_counter from the Lowerer struct,
-// causing the grow loop to run forever. This will be fixed after gen-2 bootstraps.
-fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer = l
+fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
+    // Bounds check: temp should never exceed a few thousand in any function
+    if temp < 0 { return l }
+    if temp > 5000 { return l }
+    // Grow temp_types if needed
+    mut types := l.temp_types
+    while types.len() <= temp + 1 {
+        types = types.append(0)
+    }
+    // Rebuild array with updated value
+    mut new_types := [0]
+    mut idx := 1
+    while idx < types.len() {
+        target := temp + 1
+        if idx == target {
+            new_types = new_types.append(type_id)
+        } else {
+            new_types = new_types.append(types[idx])
+        }
+        idx = idx + 1
+    }
+    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: new_types}
+}
 
 fn _lget_type(l: Lowerer, temp: i64) -> i64 {
     idx := temp + 1
