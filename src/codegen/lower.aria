@@ -922,6 +922,10 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
                     if result_type == 12 {
                         ll = _lemit(ll, new_inst(OpStore, slot + 1, result.temp + 1, 0, "", 0))
                     }
+                    // Propagate type to variable slot (critical for arrays that change type)
+                    if result_type > 0 {
+                        ll = _lset_type(ll, slot, result_type)
+                    }
                 }
                 return ll
             }
@@ -932,17 +936,52 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
     return result.l
 }
 
-// --- Lower comparison (atom [cmp atom]) ---
+// --- Lower additive (atom [+|-|*|/|% atom]*) ---
+// Handles arithmetic operators which bind tighter than comparison
+
+fn _lower_additive(l: Lowerer) -> LT {
+    result := _lower_atom(l)
+    mut ll := result.l
+    mut left := result.temp
+    mut running := true
+    while running {
+        k := _lk(ll)
+        if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
+            ll = _ladv(ll)
+            right := _lower_atom(ll)
+            ll = right.l
+            left_type := _lget_type(ll, left)
+            if k == "+" && left_type == 12 {
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpStrConcat, nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, nt.temp, 1)
+                left = nt.temp
+            }
+        } else {
+            running = false
+        }
+    }
+    LT{l: ll, temp: left}
+}
+
+// --- Lower comparison (additive [cmp additive]) ---
 // Used as right-hand side of && and || to get correct precedence
 
 fn _lower_comparison(l: Lowerer) -> LT {
-    result := _lower_atom(l)
+    result := _lower_additive(l)
     mut ll := result.l
     mut left := result.temp
     k := _lk(ll)
     if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
         ll = _ladv(ll)
-        right := _lower_atom(ll)
+        right := _lower_additive(ll)
         ll = right.l
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -1000,7 +1039,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             }
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_additive(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
@@ -1994,7 +2033,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             running = false
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_additive(ll)
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
