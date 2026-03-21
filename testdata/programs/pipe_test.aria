@@ -1,0 +1,20 @@
+// Test pipe operator |>
+fn double(n: i64) -> i64 = n * 2
+fn add_one(n: i64) -> i64 = n + 1
+fn negate(n: i64) -> i64 = 0 - n
+
+entry {
+    // Basic pipe
+    x := 5 |> double
+    assert x == 10
+
+    // Chained pipes
+    y := 3 |> double |> add_one
+    assert y == 7
+
+    // Triple chain
+    z := 2 |> double |> double |> add_one
+    assert z == 9
+
+    println("pipe_test passed")
+}

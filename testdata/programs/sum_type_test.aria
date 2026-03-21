@@ -1,0 +1,52 @@
+// Test sum types (enums) with match expressions
+type Color =
+    | Red
+    | Green
+    | Blue
+
+fn color_name(c: Color) -> str = match c {
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
+    _ => "unknown"
+}
+
+fn is_primary(c: Color) -> bool = match c {
+    Red => true
+    Blue => true
+    _ => false
+}
+
+type Shape =
+    | Circle
+    | Square
+    | Triangle
+
+fn sides(s: Shape) -> i64 = match s {
+    Circle => 0
+    Square => 4
+    Triangle => 3
+    _ => 0
+}
+
+entry {
+    // Test variant construction and match
+    r := Red
+    g := Green
+    b := Blue
+
+    assert color_name(r) == "red"
+    assert color_name(g) == "green"
+    assert color_name(b) == "blue"
+
+    assert is_primary(r) == true
+    assert is_primary(g) == false
+    assert is_primary(b) == true
+
+    // Test second sum type
+    assert sides(Circle) == 0
+    assert sides(Square) == 4
+    assert sides(Triangle) == 3
+
+    println("sum_type_test passed")
+}

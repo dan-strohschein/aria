@@ -1,0 +1,50 @@
+// Test while loops, break, continue, and nested loops
+entry {
+    // Basic while with break
+    mut sum := 0
+    mut i := 1
+    while i <= 100 {
+        sum = sum + i
+        i = i + 1
+    }
+    assert sum == 5050
+
+    // While with early break
+    mut found := 0
+    i = 0
+    while i < 1000 {
+        if i * i > 100 {
+            found = i
+            break
+        }
+        i = i + 1
+    }
+    assert found == 11
+
+    // While with continue (skip evens, sum odds)
+    mut odd_sum := 0
+    i = 0
+    while i < 10 {
+        i = i + 1
+        if i % 2 == 0 {
+            continue
+        }
+        odd_sum = odd_sum + i
+    }
+    assert odd_sum == 25
+
+    // Nested loops
+    mut product := 0
+    mut row := 1
+    while row <= 3 {
+        mut col := 1
+        while col <= 3 {
+            product = product + row * col
+            col = col + 1
+        }
+        row = row + 1
+    }
+    assert product == 36
+
+    println("while_loop_test passed")
+}

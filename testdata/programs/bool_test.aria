@@ -1,0 +1,51 @@
+// Test boolean values, comparisons, and logical operators
+fn negate(b: bool) -> bool {
+    if b {
+        return false
+    }
+    return true
+}
+
+fn both(a: bool, b: bool) -> bool {
+    if a && b {
+        return true
+    }
+    return false
+}
+
+fn either(a: bool, b: bool) -> bool {
+    if a || b {
+        return true
+    }
+    return false
+}
+
+entry {
+    // Boolean literals
+    assert true
+    assert negate(false)
+
+    // Boolean from comparison
+    x := 5
+    big := x > 3
+    assert big == true
+
+    small := x < 2
+    assert small == false
+
+    // Logical operators
+    assert both(true, true) == true
+    assert both(true, false) == false
+    assert both(false, true) == false
+    assert both(false, false) == false
+
+    assert either(true, false) == true
+    assert either(false, true) == true
+    assert either(false, false) == false
+
+    // Negation
+    assert negate(true) == false
+    assert negate(false) == true
+
+    println("bool_test passed")
+}

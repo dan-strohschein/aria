@@ -1,0 +1,52 @@
+// Test negative numbers and arithmetic edge cases
+fn abs(n: i64) -> i64 {
+    if n < 0 {
+        return 0 - n
+    }
+    return n
+}
+
+fn min(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn max(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+entry {
+    // Negative literals via subtraction
+    x := 0 - 42
+    assert x + 42 == 0
+
+    // Abs
+    assert abs(0 - 10) == 10
+    assert abs(10) == 10
+    assert abs(0) == 0
+
+    // Min/max
+    assert min(3, 7) == 3
+    assert min(7, 3) == 3
+    assert max(3, 7) == 7
+    assert max(7, 3) == 7
+
+    // Arithmetic with negatives
+    a := 0 - 10
+    b := 0 - 20
+    assert a + b == 0 - 30
+    assert a - b == 10
+    assert a * b == 200
+
+    // Modulo
+    assert 10 % 3 == 1
+    assert 7 % 2 == 1
+    assert 8 % 4 == 0
+
+    println("negative_num_test passed")
+}

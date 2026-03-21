@@ -1,0 +1,50 @@
+// Test string equality and inequality in various contexts
+fn find_in_list(names: [str], target: str) -> i64 {
+    mut i := 1
+    while i < names.len() {
+        if names[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+entry {
+    // Literal equality
+    assert "hello" == "hello"
+    assert "hello" != "world"
+    assert "" == ""
+    assert "" != "x"
+
+    // Variable equality
+    a := "test"
+    b := "test"
+    c := "other"
+    assert a == b
+    assert a != c
+
+    // Equality after concat
+    x := "hel" + "lo"
+    assert x == "hello"
+    assert x != "world"
+
+    // Inequality operator
+    if "abc" != "def" {
+        assert true
+    } else {
+        assert false
+    }
+
+    // String search in array
+    mut fruits := [""]
+    fruits = fruits.append("apple")
+    fruits = fruits.append("banana")
+    fruits = fruits.append("cherry")
+
+    assert find_in_list(fruits, "banana") == 2
+    assert find_in_list(fruits, "cherry") == 3
+    assert find_in_list(fruits, "grape") == 0
+
+    println("string_equality_test passed")
+}

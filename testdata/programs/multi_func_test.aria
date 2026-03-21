@@ -1,0 +1,53 @@
+// Test many functions calling each other, higher-order patterns
+fn double(n: i64) -> i64 = n * 2
+fn triple(n: i64) -> i64 = n * 3
+fn square(n: i64) -> i64 = n * n
+
+fn apply_twice(x: i64) -> i64 = double(double(x))
+
+fn chain(x: i64) -> i64 {
+    a := double(x)
+    b := triple(a)
+    c := square(b)
+    return c
+}
+
+fn fib(n: i64) -> i64 {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn is_even(n: i64) -> bool {
+    if n == 0 { return true }
+    return is_odd(n - 1)
+}
+
+fn is_odd(n: i64) -> bool {
+    if n == 0 { return false }
+    return is_even(n - 1)
+}
+
+entry {
+    assert double(5) == 10
+    assert triple(5) == 15
+    assert square(5) == 25
+    assert apply_twice(3) == 12
+
+    // chain(2) = square(triple(double(2))) = square(triple(4)) = square(12) = 144
+    assert chain(2) == 144
+
+    // Fibonacci
+    assert fib(0) == 0
+    assert fib(1) == 1
+    assert fib(10) == 55
+
+    // Mutual recursion
+    assert is_even(0) == true
+    assert is_even(4) == true
+    assert is_even(7) == false
+    assert is_odd(3) == true
+    assert is_odd(6) == false
+
+    println("multi_func_test passed")
+}

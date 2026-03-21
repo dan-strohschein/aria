@@ -1,0 +1,31 @@
+// Test string methods: charAt, substring, startsWith, contains, len
+entry {
+    s := "hello world"
+
+    // charAt
+    assert s.charAt(0) == "h"
+    assert s.charAt(4) == "o"
+    assert s.charAt(6) == "w"
+
+    // substring
+    sub := s.substring(0, 5)
+    assert sub == "hello"
+
+    sub2 := s.substring(6, 11)
+    assert sub2 == "world"
+
+    // startsWith
+    assert s.startsWith("hello") == true
+    assert s.startsWith("world") == false
+
+    // contains
+    assert s.contains("world") == true
+    assert s.contains("xyz") == false
+
+    // len
+    assert s.len() == 11
+    assert "".len() == 0
+    assert "a".len() == 1
+
+    println("string_methods_test passed")
+}

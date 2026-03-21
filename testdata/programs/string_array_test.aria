@@ -1,0 +1,28 @@
+// Test string array operations: append, index, iterate
+entry {
+    mut names := [""]
+    names = names.append("alice")
+    names = names.append("bob")
+    names = names.append("charlie")
+
+    assert names.len() == 4
+
+    // Index access on string array
+    assert names[1] == "alice"
+    assert names[2] == "bob"
+    assert names[3] == "charlie"
+
+    // Iterate and concatenate
+    mut result := ""
+    mut i := 1
+    while i < names.len() {
+        if i > 1 {
+            result = result + ","
+        }
+        result = result + names[i]
+        i = i + 1
+    }
+    assert result == "alice,bob,charlie"
+
+    println("string_array_test passed")
+}

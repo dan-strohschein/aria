@@ -1,0 +1,36 @@
+// Test mutable variable reassignment including structs and strings
+struct Counter {
+    value: i64
+    name: str
+}
+
+fn inc(c: Counter) -> Counter =
+    Counter{value: c.value + 1, name: c.name}
+
+entry {
+    // Mutable integer reassignment
+    mut x := 10
+    x = x + 5
+    x = x * 2
+    assert x == 30
+
+    // Mutable string reassignment
+    mut msg := "hello"
+    msg = msg + " world"
+    assert msg == "hello world"
+
+    // Mutable struct reassignment
+    mut c := Counter{value: 0, name: "hits"}
+    c = inc(c)
+    c = inc(c)
+    c = inc(c)
+    assert c.value == 3
+    assert c.name == "hits"
+
+    // Mutable bool
+    mut flag := false
+    flag = true
+    assert flag == true
+
+    println("mut_reassign_test passed")
+}

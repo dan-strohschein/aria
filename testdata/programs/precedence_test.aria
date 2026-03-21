@@ -1,0 +1,57 @@
+// Test operator precedence: arithmetic binds tighter than comparison
+entry {
+    // a + b == c should be (a + b) == c
+    assert 2 + 3 == 5
+    assert 10 - 3 == 7
+
+    // a < b + c should be a < (b + c)
+    x := 5
+    if x < 3 + 4 {
+        assert true
+    } else {
+        assert false
+    }
+
+    // a <= b + c
+    if x <= 4 + 1 {
+        assert true
+    } else {
+        assert false
+    }
+
+    // a > b - c should be a > (b - c)
+    if x > 10 - 6 {
+        assert true
+    } else {
+        assert false
+    }
+
+    // a >= b * c should be a >= (b * c)
+    y := 12
+    if y >= 3 * 4 {
+        assert true
+    } else {
+        assert false
+    }
+
+    // a != b + c should be a != (b + c)
+    if x != 2 + 2 {
+        assert true
+    } else {
+        assert false
+    }
+
+    // Chained arithmetic before comparison
+    // a * b + c == d
+    assert 3 * 4 + 2 == 14
+
+    // Comparison with arithmetic on both sides
+    // a + b > c + d
+    if 5 + 3 > 2 + 4 {
+        assert true
+    } else {
+        assert false
+    }
+
+    println("precedence_test passed")
+}

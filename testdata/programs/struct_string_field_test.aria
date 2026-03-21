@@ -1,0 +1,42 @@
+// Test structs with string fields
+struct Person {
+    name: str
+    age: i64
+}
+
+struct Pair {
+    first: str
+    second: str
+}
+
+fn greet_person(p: Person) -> str =
+    "Hello, " + p.name + "! You are " + p.age.toString() + " years old."
+
+fn swap(p: Pair) -> Pair =
+    Pair{first: p.second, second: p.first}
+
+entry {
+    // Struct with string field
+    alice := Person{name: "Alice", age: 30}
+    assert alice.name == "Alice"
+    assert alice.age == 30
+
+    bob := Person{name: "Bob", age: 25}
+    assert bob.name == "Bob"
+
+    // String field in function
+    msg := greet_person(alice)
+    println(msg)
+
+    // Struct with two string fields
+    p := Pair{first: "hello", second: "world"}
+    assert p.first == "hello"
+    assert p.second == "world"
+
+    // Swap
+    q := swap(p)
+    assert q.first == "world"
+    assert q.second == "hello"
+
+    println("struct_string_field_test passed")
+}

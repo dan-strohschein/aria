@@ -1,0 +1,30 @@
+// Test nested structs: struct fields that are structs
+struct Point {
+    x: i64
+    y: i64
+}
+
+struct Rect {
+    origin: Point
+    width: i64
+    height: i64
+}
+
+fn area(r: Rect) -> i64 = r.width * r.height
+
+fn make_rect(x: i64, y: i64, w: i64, h: i64) -> Rect =
+    Rect{origin: Point{x: x, y: y}, width: w, height: h}
+
+entry {
+    r := make_rect(10, 20, 30, 40)
+    assert area(r) == 1200
+    assert r.width == 30
+    assert r.height == 40
+
+    // Access nested struct fields
+    p := r.origin
+    assert p.x == 10
+    assert p.y == 20
+
+    println("nested_struct_test passed")
+}

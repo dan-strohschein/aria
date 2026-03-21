@@ -1,0 +1,36 @@
+// Test const declarations for integers and strings
+const MAX_SIZE: i64 = 1024
+const PI_APPROX: i64 = 3
+const GREETING: str = "hello"
+const APP_NAME: str = "aria"
+
+fn within_limit(n: i64) -> bool {
+    if n <= MAX_SIZE {
+        return true
+    }
+    return false
+}
+
+entry {
+    // Integer constants
+    assert MAX_SIZE == 1024
+    assert PI_APPROX == 3
+
+    // String constants
+    assert GREETING == "hello"
+    assert APP_NAME == "aria"
+
+    // Constants in expressions
+    half := MAX_SIZE / 2
+    assert half == 512
+
+    // Constants in function calls
+    assert within_limit(500) == true
+    assert within_limit(2000) == false
+
+    // Constant string concat
+    msg := GREETING + " " + APP_NAME
+    assert msg == "hello aria"
+
+    println("const_test passed")
+}

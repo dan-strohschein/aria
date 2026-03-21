@@ -1,0 +1,23 @@
+// Test integer to string conversion
+entry {
+    // Basic toString
+    assert 42.toString() == "42"
+    assert 0.toString() == "0"
+    assert 1.toString() == "1"
+    assert 100.toString() == "100"
+    assert 9999.toString() == "9999"
+
+    // Concat integer with string via toString
+    count := 5
+    msg := "count=" + count.toString()
+    assert msg == "count=5"
+
+    // println with integer conversion
+    println("value: " + 42.toString())
+
+    // Multi-digit
+    x := 12345
+    assert x.toString() == "12345"
+
+    println("int_to_str_test passed")
+}
