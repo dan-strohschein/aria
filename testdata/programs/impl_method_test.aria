@@ -1,0 +1,43 @@
+// Test impl blocks with methods
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+impl Point {
+    fn sum(self) -> i64 = self.x + self.y
+
+    fn scale(self, factor: i64) -> Point =
+        Point{x: self.x * factor, y: self.y * factor}
+}
+
+struct Counter {
+    count: i64
+}
+
+impl Counter {
+    fn value(self) -> i64 = self.count
+
+    fn add(self, n: i64) -> Counter =
+        Counter{count: self.count + n}
+}
+
+entry {
+    p := Point{x: 3, y: 4}
+    assert p.sum() == 7
+
+    p2 := p.scale(2)
+    assert p2.x == 6
+    assert p2.y == 8
+    assert p2.sum() == 14
+
+    c := Counter{count: 0}
+    c2 := c.add(5)
+    assert c2.value() == 5
+
+    c3 := c2.add(3)
+    assert c3.value() == 8
+
+    println("impl_method_test passed")
+}

@@ -688,6 +688,21 @@ fn _register_fn_sig(c: Checker) -> Checker {
 
 fn _register_impl_fns(c: Checker) -> Checker {
     mut cc := _cadv(c)  // skip impl
+    // Capture the type name after "impl"
+    mut impl_type := ""
+    // Could be "impl TypeName {" or "impl TraitName for TypeName {"
+    if _ck2(cc) == "IDENT" {
+        impl_type = _ccur(cc).text
+        cc = _cadv(cc)
+    }
+    // Check for "for TypeName" pattern (impl Trait for Type)
+    if _ck2(cc) == "for" {
+        cc = _cadv(cc)
+        if _ck2(cc) == "IDENT" {
+            impl_type = _ccur(cc).text
+            cc = _cadv(cc)
+        }
+    }
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
     if _ck2(cc) != lb { return cc }
@@ -698,7 +713,7 @@ fn _register_impl_fns(c: Checker) -> Checker {
         cc = _cskip_nl(cc)
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
         if _ck2(cc) == "fn" {
-            cc = _register_fn_sig(cc)
+            cc = _register_impl_fn_sig(cc, impl_type)
         } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
             return cc
         } else {
@@ -707,6 +722,90 @@ fn _register_impl_fns(c: Checker) -> Checker {
         cc = _cskip_nl(cc)
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
+// Register a function signature from inside an impl block.
+// Handles `self` parameter by injecting the impl type.
+fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
+    mut cc := _cadv(c)  // skip fn
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+
+    // Skip generic params
+    if _ck2(cc) == "[" {
+        mut d := 1
+        cc = _cadv(cc)
+        while d > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { d = d + 1 }
+            if _ck2(cc) == "]" { d = d - 1 }
+            if d > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    // Parse parameters, handling self
+    mut pnames := [""]
+    mut ptypes := [0]
+    if _ck2(cc) == "(" {
+        cc = _cadv(cc)
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "self" {
+                // self parameter — resolve to impl type
+                pnames = pnames.append("self")
+                self_type := resolve_type_name(cc.store, impl_type)
+                ptypes = ptypes.append(self_type)
+                cc = _cadv(cc)
+            } else if _ck2(cc) == "IDENT" {
+                pn := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    pt := _parse_type_ann(cc)
+                    cc = pt.c
+                    pnames = pnames.append(pn)
+                    ptypes = ptypes.append(pt.type_id)
+                }
+            } else {
+                cc = _cadv(cc)
+            }
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == ")" { cc = _cadv(cc) }
+    }
+
+    // Return type
+    mut ret := TY_UNIT
+    if _ck2(cc) == "->" {
+        cc = _cadv(cc)
+        rt := _parse_type_ann(cc)
+        cc = rt.c
+        ret = rt.type_id
+    }
+
+    // Error type
+    mut err := 0
+    if _ck2(cc) == "!" {
+        cc = _cadv(cc)
+        et := _parse_type_ann(cc)
+        cc = et.c
+        err = et.type_id
+    }
+
+    sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
+
+    // Skip rest of function (body)
+    lb := "\{"
+    while _ck2(cc) != "EOF" {
+        if _ck2(cc) == lb {
+            cc = _skip_braces2(cc)
+            return cc
+        }
+        if _ck2(cc) == "NEWLINE" { return cc }
+        cc = _cadv(cc)
+    }
     cc
 }
 

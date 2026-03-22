@@ -1308,6 +1308,20 @@ fn _lower_primary(l: Lowerer) -> LT {
     if k == "if" { return _lower_if(l) }
     if k == "match" { return _lower_match(l) }
 
+    // self keyword — treat as variable reference
+    if k == "self" {
+        mut ll := _ladv(l)
+        slot := _lenv_lookup(ll, "self")
+        if slot >= 0 {
+            src_type := _lget_type(ll, slot)
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpLoad, nt.temp, slot, 0, "", 0))
+            if src_type != 0 { ll = _lset_type(ll, nt.temp, src_type) }
+            return LT{l: ll, temp: nt.temp}
+        }
+    }
+
     if k == "IDENT" {
         name := _lcur(l).text
         mut ll := _ladv(l)

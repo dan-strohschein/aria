@@ -474,7 +474,12 @@ fn _resolve_fn(r: Resolver) -> Resolver {
     if _rk(rr) == "(" {
         rr = _radv(rr)  // skip (
         while _rk(rr) != ")" && _rk(rr) != "EOF" {
-            if _rk(rr) == "IDENT" {
+            if _rk(rr) == "self" {
+                // self parameter in impl method
+                pspan := _rspan(rr)
+                rr = _add_sym_warn_shadow(rr, "self", SkParameter, pspan, false)
+                rr = _radv(rr)
+            } else if _rk(rr) == "IDENT" {
                 pname := _rcur(rr).text
                 pspan := _rspan(rr)
                 rr = _add_sym_warn_shadow(rr, pname, SkParameter, pspan, false)
