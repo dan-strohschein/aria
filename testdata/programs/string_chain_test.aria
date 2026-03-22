@@ -1,0 +1,41 @@
+// Test strings returned through chains of function calls
+fn wrap(s: str, before: str, after: str) -> str =
+    before + s + after
+
+fn quote(s: str) -> str = wrap(s, "\"", "\"")
+
+fn bracket(s: str) -> str = wrap(s, "[", "]")
+
+fn build_label(name: str, id: i64) -> str =
+    name + "#" + id.toString()
+
+fn format_item(name: str, value: i64) -> str =
+    bracket(name) + "=" + quote(value.toString())
+
+entry {
+    // Simple chain
+    assert quote("hello") == "\"hello\""
+    assert bracket("x") == "[x]"
+
+    // Nested calls
+    assert bracket(quote("hi")) == "[\"hi\"]"
+
+    // Chain through multiple functions
+    label := build_label("item", 42)
+    assert label == "item#42"
+
+    // Complex chain with string returns
+    result := format_item("count", 5)
+    assert result == "[count]=\"5\""
+
+    // Build up a string through many calls
+    mut s := ""
+    mut i := 1
+    while i <= 5 {
+        s = s + build_label("n", i) + " "
+        i = i + 1
+    }
+    assert s == "n#1 n#2 n#3 n#4 n#5 "
+
+    println("string_chain_test passed")
+}

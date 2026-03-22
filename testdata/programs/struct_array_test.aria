@@ -1,0 +1,60 @@
+// Test arrays of structs: append, index, field access on elements
+struct Item {
+    name: str
+    value: i64
+}
+
+fn make_item(n: str, v: i64) -> Item =
+    Item{name: n, value: v}
+
+fn total_value(items: [Item]) -> i64 {
+    mut sum := 0
+    mut i := 1
+    while i < items.len() {
+        item := items[i]
+        sum = sum + item.value
+        i = i + 1
+    }
+    return sum
+}
+
+fn find_by_name(items: [Item], target: str) -> i64 {
+    mut i := 1
+    while i < items.len() {
+        item := items[i]
+        if item.name == target {
+            return item.value
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+entry {
+    // Build array of structs
+    mut items := [Item{name: "", value: 0}]
+    items = items.append(make_item("apple", 10))
+    items = items.append(make_item("banana", 20))
+    items = items.append(make_item("cherry", 30))
+
+    assert items.len() == 4
+
+    // Access elements and their fields
+    first := items[1]
+    assert first.name == "apple"
+    assert first.value == 10
+
+    second := items[2]
+    assert second.name == "banana"
+    assert second.value == 20
+
+    // Sum values
+    assert total_value(items) == 60
+
+    // Find by name
+    assert find_by_name(items, "banana") == 20
+    assert find_by_name(items, "cherry") == 30
+    assert find_by_name(items, "grape") == 0
+
+    println("struct_array_test passed")
+}

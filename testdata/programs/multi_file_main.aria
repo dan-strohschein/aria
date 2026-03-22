@@ -1,0 +1,35 @@
+mod multi_file
+
+// Tests multi-file compilation: structs, sum types, and functions from another file
+
+entry {
+    // Use struct from lib
+    a := Vec2{x: 3, y: 4}
+    b := Vec2{x: 1, y: 2}
+    c := vec2_add(a, b)
+    assert c.x == 4
+    assert c.y == 6
+
+    // Use function from lib
+    mag := vec2_magnitude_squared(a)
+    assert mag == 25
+
+    // Use sum type from lib
+    assert direction_name(North) == "north"
+    assert direction_name(East) == "east"
+
+    // Use match-returning struct from lib
+    step := make_step(East)
+    assert step.x == 1
+    assert step.y == 0
+
+    // Compose: walk a path
+    mut pos := Vec2{x: 0, y: 0}
+    pos = vec2_add(pos, make_step(North))
+    pos = vec2_add(pos, make_step(North))
+    pos = vec2_add(pos, make_step(East))
+    assert pos.x == 1
+    assert pos.y == 2
+
+    println("multi_file_test passed")
+}

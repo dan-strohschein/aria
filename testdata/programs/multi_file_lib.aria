@@ -1,0 +1,36 @@
+mod multi_file
+
+// Shared struct across files
+struct Vec2 {
+    x: i64
+    y: i64
+}
+
+// Shared sum type across files
+type Direction =
+    | North
+    | South
+    | East
+    | West
+
+fn vec2_add(a: Vec2, b: Vec2) -> Vec2 =
+    Vec2{x: a.x + b.x, y: a.y + b.y}
+
+fn vec2_magnitude_squared(v: Vec2) -> i64 =
+    v.x * v.x + v.y * v.y
+
+fn direction_name(d: Direction) -> str = match d {
+    North => "north"
+    South => "south"
+    East => "east"
+    West => "west"
+    _ => "unknown"
+}
+
+fn make_step(d: Direction) -> Vec2 = match d {
+    North => Vec2{x: 0, y: 1}
+    South => Vec2{x: 0, y: 0 - 1}
+    East => Vec2{x: 1, y: 0}
+    West => Vec2{x: 0 - 1, y: 0}
+    _ => Vec2{x: 0, y: 0}
+}

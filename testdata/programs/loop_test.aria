@@ -1,0 +1,44 @@
+// Test infinite loop with break
+entry {
+    // Basic loop + break
+    mut count := 0
+    loop {
+        count = count + 1
+        if count == 10 {
+            break
+        }
+    }
+    assert count == 10
+
+    // Loop to find first power of 2 above 1000
+    mut n := 1
+    loop {
+        n = n * 2
+        if n > 1000 {
+            break
+        }
+    }
+    assert n == 1024
+
+    // Nested loop with break
+    mut outer := 0
+    mut inner_total := 0
+    loop {
+        outer = outer + 1
+        mut j := 0
+        loop {
+            j = j + 1
+            inner_total = inner_total + 1
+            if j >= 3 {
+                break
+            }
+        }
+        if outer >= 4 {
+            break
+        }
+    }
+    assert outer == 4
+    assert inner_total == 12
+
+    println("loop_test passed")
+}
