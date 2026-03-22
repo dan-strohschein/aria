@@ -1,0 +1,63 @@
+// Test complex match patterns
+
+type Expr =
+    | Num(i64)
+    | Add(i64, i64)
+    | Neg(i64)
+    | Zero
+
+fn eval(e: Expr) -> i64 = match e {
+    Num(n) => n
+    Add(a, b) => a + b
+    Neg(n) => 0 - n
+    Zero => 0
+}
+
+type Result2 =
+    | Success(i64)
+    | Failure(str)
+
+fn describe(r: Result2) -> str = match r {
+    Success(v) => "ok: " + v.toStr()
+    Failure(msg) => "err: " + msg
+}
+
+type Direction =
+    | North
+    | South
+    | East
+    | West
+
+fn opposite(d: Direction) -> Direction = match d {
+    North => South
+    South => North
+    East => West
+    West => East
+}
+
+fn is_vertical(d: Direction) -> bool = match d {
+    North | South => true
+    _ => false
+}
+
+entry {
+    // Variant with data
+    assert eval(Num(42)) == 42
+    assert eval(Add(10, 20)) == 30
+    assert eval(Neg(5)) == -5
+    assert eval(Zero) == 0
+
+    // Match returning string
+    assert describe(Success(42)) == "ok: 42"
+    assert describe(Failure("oops")) == "err: oops"
+
+    // Match returning sum type
+    assert is_vertical(North) == true
+    assert is_vertical(East) == false
+
+    // Or-patterns
+    assert is_vertical(South) == true
+    assert is_vertical(West) == false
+
+    println("match_complex_test passed")
+}

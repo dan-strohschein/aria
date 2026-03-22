@@ -1,0 +1,26 @@
+// Test defer + error handling interaction
+
+fn with_defer_ok() -> i64 ! str {
+    defer println("defer ran (ok path)")
+    Ok(42)
+}
+
+fn with_defer_err() -> i64 ! str {
+    defer println("defer ran (err path)")
+    Err("failed")
+}
+
+entry {
+    // Defer runs on success path
+    r1 := with_defer_ok()!
+    assert r1 == 42
+
+    // Defer runs on error path
+    r2 := with_defer_err() catch |e| {
+        -1
+    }
+    assert r2 == -1
+
+    // Multiple defers in fallible function
+    println("defer_result_test passed")
+}

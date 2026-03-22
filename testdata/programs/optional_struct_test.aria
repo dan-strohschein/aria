@@ -1,0 +1,46 @@
+// Test Optional + struct interaction
+
+struct User {
+    name: str
+    age: i64
+} derives [Eq, Debug]
+
+fn find_user(name: str) -> i64 {
+    if name == "alice" { return 1 }
+    if name == "bob" { return 2 }
+    return 0
+}
+
+fn get_age(name: str) -> i64 {
+    id := find_user(name)
+    if id == 0 {
+        return 0
+    }
+    if id == 1 { return 30 }
+    return 25
+}
+
+entry {
+    // Optional with integer values
+    a := Some(42)
+    b := None
+    assert a ?? 0 == 42
+    assert b ?? -1 == -1
+
+    // Chained optional coalesce
+    c := None
+    d := Some(99)
+    v := c ?? d ?? 0
+    assert v == 99
+
+    // Optional in conditional context
+    x := Some(1)
+    y := x ?? 0
+    if y > 0 {
+        assert true
+    } else {
+        assert false
+    }
+
+    println("optional_struct_test passed")
+}

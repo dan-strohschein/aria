@@ -1,0 +1,41 @@
+// Test higher-order function patterns
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 = f(x)
+fn compose(f: fn(i64) -> i64, g: fn(i64) -> i64, x: i64) -> i64 = f(g(x))
+fn twice(f: fn(i64) -> i64, x: i64) -> i64 = f(f(x))
+
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    return fn(x: i64) -> i64 => x + n
+}
+
+fn make_multiplier(n: i64) -> fn(i64) -> i64 {
+    return fn(x: i64) -> i64 => x * n
+}
+
+entry {
+    double := fn(x: i64) -> i64 => x * 2
+    inc := fn(x: i64) -> i64 => x + 1
+
+    // apply
+    assert apply(double, 21) == 42
+    assert apply(inc, 41) == 42
+
+    // compose: f(g(x))
+    assert compose(double, inc, 20) == 42  // double(inc(20)) = double(21) = 42
+
+    // twice: f(f(x))
+    assert twice(double, 3) == 12  // double(double(3)) = double(6) = 12
+    assert twice(inc, 0) == 2      // inc(inc(0)) = inc(1) = 2
+
+    // Returned closures
+    add5 := make_adder(5)
+    mul3 := make_multiplier(3)
+
+    assert apply(add5, 10) == 15
+    assert apply(mul3, 7) == 21
+
+    // Compose returned closures
+    assert compose(add5, mul3, 4) == 17  // add5(mul3(4)) = add5(12) = 17
+
+    println("higher_order_test passed")
+}

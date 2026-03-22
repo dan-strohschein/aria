@@ -1,0 +1,39 @@
+// Test generics and error handling used together (non-interacting paths)
+
+fn identity[T](x: T) -> T = x
+fn double[T: Add](x: T) -> T = x + x
+
+fn safe_div(a: i64, b: i64) -> i64 ! str {
+    if b == 0 { return Err("divide by zero") }
+    Ok(a / b)
+}
+
+fn chain_op(x: i64) -> i64 ! str {
+    r := safe_div(x, 2)?
+    Ok(r + 1)
+}
+
+entry {
+    // Generics work
+    assert identity(42) == 42
+    assert double(21) == 42
+
+    // Error handling works
+    r1 := safe_div(10, 2)!
+    assert r1 == 5
+
+    // Chain propagation works
+    r2 := chain_op(10)!
+    assert r2 == 6
+
+    // Catch works
+    r3 := safe_div(10, 0) catch |e| { -1 }
+    assert r3 == -1
+
+    // Both features in same program
+    g := identity(100)
+    r4 := safe_div(g, 4)!
+    assert r4 == 25
+
+    println("generic_result_test passed")
+}

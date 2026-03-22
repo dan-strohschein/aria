@@ -1,0 +1,55 @@
+// Test struct methods (impl blocks) with various patterns
+
+struct Counter {
+    count: i64
+}
+
+impl Counter {
+    fn get_count(self) -> i64 = self.count
+    fn increment(self) -> Counter = Counter{count: self.count + 1}
+    fn add_n(self, n: i64) -> Counter = Counter{count: self.count + n}
+    fn is_zero(self) -> bool = self.count == 0
+}
+
+struct Pair {
+    first: i64
+    second: i64
+} derives [Eq, Debug]
+
+impl Pair {
+    fn sum(self) -> i64 = self.first + self.second
+    fn swap(self) -> Pair = Pair{first: self.second, second: self.first}
+}
+
+entry {
+    // Counter methods
+    c := Counter{count: 0}
+    assert c.get_count() == 0
+    assert c.is_zero() == true
+
+    c2 := c.increment()
+    assert c2.get_count() == 1
+    assert c2.is_zero() == false
+
+    c3 := c2.add_n(9)
+    assert c3.get_count() == 10
+
+    // Pair methods
+    p := Pair{first: 3, second: 7}
+    assert p.sum() == 10
+
+    p2 := p.swap()
+    assert p2.first == 7
+    assert p2.second == 3
+
+    // Struct equality
+    a := Pair{first: 1, second: 2}
+    b := Pair{first: 1, second: 2}
+    assert a == b
+
+    // Debug string
+    s := a.debug_str()
+    assert s.contains("1") == true
+
+    println("struct_methods_test passed")
+}

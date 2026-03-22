@@ -1,0 +1,96 @@
+// Comprehensive test exercising many features together
+
+fn safe_div(a: i64, b: i64) -> i64 ! str {
+    if b == 0 { return Err("division by zero") }
+    Ok(a / b)
+}
+
+fn identity[T](x: T) -> T = x
+
+struct Point {
+    x: i64
+    y: i64
+} derives [Eq, Debug]
+
+impl Point {
+    fn add(self, other: Point) -> Point = Point{x: self.x + other.x, y: self.y + other.y}
+    fn scale(self, f: i64) -> Point = Point{x: self.x * f, y: self.y * f}
+}
+
+type Shape =
+    | Circle(i64)
+    | Rect(i64, i64)
+    | Empty
+
+fn area(s: Shape) -> i64 = match s {
+    Circle(r) => r * r * 3
+    Rect(w, h) => w * h
+    Empty => 0
+}
+
+fn log_area(s: Shape) with [Io] {
+    a := area(s)
+    println("area: " + a.toStr())
+}
+
+test "arithmetic and generics" {
+    assert identity(42) == 42
+    assert identity(7) + 3 == 10
+}
+
+test "error handling" {
+    r := safe_div(10, 2)!
+    assert r == 5
+
+    r2 := safe_div(10, 0) catch |e| { -1 }
+    assert r2 == -1
+}
+
+test "structs and methods" {
+    a := Point{x: 1, y: 2}
+    b := Point{x: 3, y: 4}
+    c := a.add(b)
+    assert c.x == 4
+    assert c.y == 6
+
+    d := a.scale(3)
+    assert d == Point{x: 3, y: 6}
+}
+
+test "sum types and matching" {
+    assert area(Circle(5)) == 75
+    assert area(Rect(4, 6)) == 24
+    assert area(Empty) == 0
+}
+
+test "optional values" {
+    x := Some(42)
+    assert x ?? 0 == 42
+    y := None
+    assert y ?? -1 == -1
+}
+
+test "collections" {
+    m := Map()
+    m.set("a", 1)
+    m.set("b", 2)
+    assert m.len() == 2
+    assert m.get("a") == 1
+}
+
+test "string operations" {
+    s := "hello world"
+    assert s.len() == 11
+    assert s.contains("world") == true
+    assert s.startsWith("hello") == true
+    n := 42
+    assert n.toStr() == "42"
+}
+
+test "for loops" {
+    mut sum := 0
+    for i in 0..5 {
+        sum = sum + i
+    }
+    assert sum == 10
+}

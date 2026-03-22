@@ -1,0 +1,50 @@
+// Test string edge cases
+
+entry {
+    // Empty string
+    empty := ""
+    assert empty.len() == 0
+    assert empty == ""
+
+    // Single character
+    single := "x"
+    assert single.len() == 1
+    assert single.charAt(0) == "x"
+
+    // String equality edge cases
+    a := "hello"
+    b := "hello"
+    assert a == b
+    assert a != "world"
+
+    // Substring edge cases
+    s := "abcdef"
+    assert s.substring(0, 0) == ""
+    assert s.substring(0, 1) == "a"
+    assert s.substring(0, 6) == "abcdef"
+    assert s.substring(3, 6) == "def"
+
+    // startsWith and contains
+    assert "hello world".startsWith("hello") == true
+    assert "hello world".startsWith("world") == false
+    assert "hello world".contains("world") == true
+    assert "hello world".contains("xyz") == false
+    assert "".contains("a") == false
+
+    // String concatenation
+    assert "a" + "b" + "c" == "abc"
+    assert "" + "hello" == "hello"
+    assert "hello" + "" == "hello"
+
+    // toStr on numbers
+    assert 0.toStr() == "0"
+    assert 42.toStr() == "42"
+    assert (-1).toStr() == "-1"
+
+    // String interpolation with expressions
+    x := 42
+    msg := "value is {x}"
+    assert msg.contains("42") == true
+
+    println("string_edge_test passed")
+}

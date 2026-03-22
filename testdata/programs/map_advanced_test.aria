@@ -1,0 +1,21 @@
+// Test Map with various usage patterns
+
+entry {
+    // Map update pattern
+    m := Map()
+    m.set("score", 0)
+    old := m.get("score")
+    m.set("score", old + 1)
+    assert m.get("score") == 1
+
+    // Multiple maps
+    a := Map()
+    b := Map()
+    a.set("x", 1)
+    b.set("x", 2)
+    assert a.get("x") == 1
+    assert b.get("x") == 2
+    assert a.has("y") == false
+
+    println("map_advanced_test passed")
+}

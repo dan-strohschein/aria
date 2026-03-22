@@ -1,0 +1,57 @@
+// Test edge cases: empty collections, boundary values, nested expressions
+
+fn identity(x: i64) -> i64 = x
+fn negate(x: i64) -> i64 = 0 - x
+
+entry {
+    // Deeply nested function calls
+    r1 := identity(identity(identity(identity(42))))
+    assert r1 == 42
+
+    // Nested arithmetic
+    r2 := (1 + 2) * (3 + 4) - (5 - 6)
+    assert r2 == 22
+
+    // Chained method calls on strings
+    s := "  hello  "
+    assert s.len() == 9
+    sub := s.substring(2, 7)
+    assert sub == "hello"
+
+    // Empty string operations
+    empty := ""
+    assert empty.len() == 0
+
+    // Zero and negative values
+    assert 0 == 0
+    assert negate(42) == -42
+    assert negate(-1) == 1
+    assert negate(0) == 0
+
+    // Large numbers
+    big := 1000000
+    assert big * 1000 == 1000000000
+
+    // Boolean edge cases
+    assert true == true
+    assert false == false
+    assert true != false
+    assert (1 > 0) == true
+    assert (0 > 1) == false
+
+    // Multiple assignments
+    mut x := 0
+    x = 1
+    x = 2
+    x = 3
+    assert x == 3
+
+    // Compound assignment chains
+    mut y := 10
+    y += 5
+    y -= 3
+    y *= 2
+    assert y == 24
+
+    println("edge_cases_test passed")
+}

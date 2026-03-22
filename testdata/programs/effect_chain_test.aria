@@ -1,0 +1,31 @@
+// Test effect propagation through call chains
+
+fn pure_add(a: i64, b: i64) -> i64 = a + b
+
+fn log_value(label: str, v: i64) with [Io] {
+    println(label + ": " + v.toStr())
+}
+
+fn compute_and_log(a: i64, b: i64) with [Io] {
+    result := pure_add(a, b)
+    log_value("sum", result)
+}
+
+fn multi_effect_fn() with [Io, Fs] {
+    // Can call Io functions since Fs implies Io
+    println("from multi_effect_fn")
+}
+
+entry {
+    // Pure function called from effectful context
+    r := pure_add(10, 20)
+    assert r == 30
+
+    // Effectful chain
+    compute_and_log(3, 4)
+
+    // Multiple effects
+    multi_effect_fn()
+
+    println("effect_chain_test passed")
+}
