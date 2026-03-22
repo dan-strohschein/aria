@@ -243,13 +243,29 @@ fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
     0
 }
 
-fn run_test(files: [str], format: str) -> i64 {
-    // TODO: Implement test runner
-    if files.len() == 0 {
+fn run_test(files: [str], format: str, runtime_path: str) -> i64 {
+    if files.len() <= 1 {
         println("error: no input files")
         return 1
     }
-    println("test: not yet implemented")
+    file := files[1]
+
+    // Build test binary to temp path
+    mut output := file
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+    output = output + "_test_runner"
+
+    // Compile with test runner
+    diags := generate_tests_from_sources(files, output, runtime_path)
+    if bag_has_errors(diags) {
+        _print_diagnostics(diags, format)
+        return 1
+    }
+
+    // Run the test binary
+    _ariaExec(output)
     0
 }
 
@@ -266,6 +282,8 @@ entry {
             run_build(opts.files, opts.format, opts.target, opts.runtime_path)
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
+        } else if cmd == "test" {
+            run_test(opts.files, opts.format, opts.runtime_path)
         } else if cmd == "version" {
             print_version()
         } else {

@@ -170,19 +170,24 @@ struct IrModule {
     funcs: [IrFunc]
     string_constants: [str]
     entry_func: str
+    test_count: i64
+    test_names: [str]
 }
 
 fn new_ir_module() -> IrModule =
-    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: ""}
+    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""]}
 
 fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule =
-    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func}
+    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names}
 
 fn mod_add_string(m: IrModule, s: str) -> IrModule =
-    IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func}
+    IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names}
 
 fn mod_set_entry(m: IrModule, name: str) -> IrModule =
-    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name}
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name, test_count: m.test_count, test_names: m.test_names}
+
+fn mod_add_test(m: IrModule, name: str) -> IrModule =
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count + 1, test_names: m.test_names.append(name)}
 
 fn mod_find_string(m: IrModule, s: str) -> i64 {
     mut i := 1

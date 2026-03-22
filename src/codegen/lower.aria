@@ -539,7 +539,7 @@ fn _lower_bodies(l: Lowerer) -> Lowerer {
         } else if k == "entry" {
             ll = _lower_entry(ll)
         } else if k == "test" {
-            ll = _skip_to_next_l(ll)
+            ll = _lower_test(ll)
         } else if k == "impl" {
             ll = _lower_impl(ll)
         } else if k == "const" {
@@ -732,6 +732,71 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+}
+
+// --- Lower test block ---
+
+fn _lower_test(l: Lowerer) -> Lowerer {
+    mut ll := _ladv(l)  // skip test
+
+    // Get test name from string literal or identifier
+    mut test_name := "_test_" + _i2s_lower(ll.module.test_count)
+    mut test_label := "test " + _i2s_lower(ll.module.test_count)
+    if _lk(ll) == "STRING" {
+        test_label = _lcur(ll).text
+        ll = _ladv(ll)
+    } else if _lk(ll) == "IDENT" {
+        test_label = _lcur(ll).text
+        ll = _ladv(ll)
+    }
+
+    // Create IR function for this test
+    ll = _lset_func(ll, new_ir_func(test_name, 0, 0))
+
+    lb := "\{"
+    if _lk(ll) == lb {
+        ll = _lower_block(ll)
+    }
+
+    // Return void at end
+    ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    ll = _lfinish_func(ll)
+
+    // Register test in module
+    mut new_mod := mod_add_test(ll.module, test_label)
+    // Also add the string constant for the test name for printing
+    new_mod = mod_add_string(new_mod, test_label)
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+            table: ll.table, file: ll.file, module: new_mod,
+            current_func: ll.current_func,
+            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+            env_names: ll.env_names, env_slots: ll.env_slots,
+            loop_start: ll.loop_start, loop_end: ll.loop_end,
+            const_names: ll.const_names, const_vals: ll.const_vals,
+            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+            temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+}
+
+fn _i2s_lower(n: i64) -> str {
+    if n == 0 { return "0" }
+    mut result := ""
+    mut v := n
+    while v > 0 {
+        d := v % 10
+        v = v / 10
+        if d == 0 { result = "0" + result }
+        if d == 1 { result = "1" + result }
+        if d == 2 { result = "2" + result }
+        if d == 3 { result = "3" + result }
+        if d == 4 { result = "4" + result }
+        if d == 5 { result = "5" + result }
+        if d == 6 { result = "6" + result }
+        if d == 7 { result = "7" + result }
+        if d == 8 { result = "8" + result }
+        if d == 9 { result = "9" + result }
+    }
+    result
 }
 
 // --- Lower impl block ---
@@ -4625,6 +4690,159 @@ fn lower(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTabl
     l = _lower_bodies(l)
     l = _lower_mono_pass(l)
     return l.module
+}
+
+// Lower for test mode: compile test blocks and generate a test runner _main
+fn lower_for_tests(tokens: [Token], store: TypeStore, reg: TypeRegistry, table: SymbolTable, file: str) -> IrModule {
+    mut l := _new_lowerer(tokens, store, reg, table, file)
+    l = _scan_consts(l)
+    l = _lower_bodies(l)
+    l = _lower_mono_pass(l)
+    // Generate test runner _main that calls each _test_N function
+    l = _generate_test_runner(l)
+    return l.module
+}
+
+fn _generate_test_runner(l: Lowerer) -> Lowerer {
+    mut ll := l
+    test_count := ll.module.test_count
+    if test_count == 0 {
+        // No tests — generate empty _main that prints "no tests found"
+        ll = _lset_func(ll, new_ir_func("_main", 0, 0))
+        mut no_tests_idx := mod_find_string(ll.module, "no tests found")
+        if no_tests_idx == 0 {
+            new_mod := mod_add_string(ll.module, "no tests found")
+            no_tests_idx = new_mod.string_constants.len() - 1
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                         table: ll.table, file: ll.file, module: new_mod,
+                         current_func: ll.current_func,
+                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                         env_names: ll.env_names, env_slots: ll.env_slots,
+                         loop_start: ll.loop_start, loop_end: ll.loop_end,
+                         const_names: ll.const_names, const_vals: ll.const_vals,
+                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                         temp_types: ll.temp_types,
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+        }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, nt.temp, no_tests_idx, 14, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, nt.temp, 2, "_aria_println_str", 0))
+        exit_nt := _lnew_temp(ll)
+        ll = exit_nt.l
+        ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+        ll = _lfinish_func(ll)
+        mut new_mod2 := mod_set_entry(ll.module, "_main")
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                     table: ll.table, file: ll.file, module: new_mod2,
+                     current_func: ll.current_func,
+                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                     env_names: ll.env_names, env_slots: ll.env_slots,
+                     loop_start: ll.loop_start, loop_end: ll.loop_end,
+                     const_names: ll.const_names, const_vals: ll.const_vals,
+                     const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                     temp_types: ll.temp_types,
+                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+        return ll
+    }
+
+    // Generate _main that calls each test, prints results
+    ll = _lset_func(ll, new_ir_func("_main", 0, 0))
+
+    // For each test, call it and print pass
+    mut ti := 0
+    while ti < test_count {
+        test_fn_name := "_test_" + _i2s_lower(ti)
+        // 1-based index into test_names (0 is sentinel)
+        test_label_idx := ti + 1
+
+        // Print test name
+        mut label_str_idx := 0
+        if test_label_idx < ll.module.test_names.len() {
+            label_text := ll.module.test_names[test_label_idx]
+            label_str_idx = mod_find_string(ll.module, label_text)
+        }
+
+        // Call the test function
+        ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, test_fn_name, 0))
+
+        // Print "PASS: <test name>"
+        // Add "PASS: " string
+        mut pass_idx := mod_find_string(ll.module, "PASS: ")
+        if pass_idx == 0 {
+            new_mod := mod_add_string(ll.module, "PASS: ")
+            pass_idx = new_mod.string_constants.len() - 1
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                         table: ll.table, file: ll.file, module: new_mod,
+                         current_func: ll.current_func,
+                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                         env_names: ll.env_names, env_slots: ll.env_slots,
+                         loop_start: ll.loop_start, loop_end: ll.loop_end,
+                         const_names: ll.const_names, const_vals: ll.const_vals,
+                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                         temp_types: ll.temp_types,
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+        }
+        // Print "PASS: " + test name by concatenating
+        pass_nt := _lnew_str_temp(ll)
+        ll = pass_nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, pass_nt.temp, pass_idx, 6, "", 0))
+        if label_str_idx > 0 {
+            label_nt := _lnew_str_temp(ll)
+            ll = label_nt.l
+            label_text := ll.module.test_names[test_label_idx]
+            ll = _lemit(ll, new_inst(OpConstStr, label_nt.temp, label_str_idx, label_text.len(), "", 0))
+            concat_nt := _lnew_str_temp(ll)
+            ll = concat_nt.l
+            ll = _lemit(ll, new_inst(OpStrConcat, concat_nt.temp, pass_nt.temp, label_nt.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpCall, 0, concat_nt.temp, 2, "_aria_println_str", 0))
+        } else {
+            ll = _lemit(ll, new_inst(OpCall, 0, pass_nt.temp, 2, "_aria_println_str", 0))
+        }
+
+        ti = ti + 1
+    }
+
+    // Print summary
+    mut done_idx := mod_find_string(ll.module, "all tests passed")
+    if done_idx == 0 {
+        new_mod := mod_add_string(ll.module, "all tests passed")
+        done_idx = new_mod.string_constants.len() - 1
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                     table: ll.table, file: ll.file, module: new_mod,
+                     current_func: ll.current_func,
+                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                     env_names: ll.env_names, env_slots: ll.env_slots,
+                     loop_start: ll.loop_start, loop_end: ll.loop_end,
+                     const_names: ll.const_names, const_vals: ll.const_vals,
+                     const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                     temp_types: ll.temp_types,
+                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+    }
+    done_nt := _lnew_str_temp(ll)
+    ll = done_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, 16, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, done_nt.temp, 2, "_aria_println_str", 0))
+
+    // Exit 0
+    exit_nt := _lnew_temp(ll)
+    ll = exit_nt.l
+    ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+
+    ll = _lfinish_func(ll)
+    mut new_mod := mod_set_entry(ll.module, "_main")
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+            table: ll.table, file: ll.file, module: new_mod,
+            current_func: ll.current_func,
+            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+            env_names: ll.env_names, env_slots: ll.env_slots,
+            loop_start: ll.loop_start, loop_end: ll.loop_end,
+            const_names: ll.const_names, const_vals: ll.const_vals,
+            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+            temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
 }
 
 // Monomorphization pass: generate specialized copies of generic functions
