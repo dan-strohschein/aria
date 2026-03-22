@@ -57,6 +57,7 @@ struct Lexer {
     bracket_depth: i64
     brace_depth: i64
     interp_depth: i64
+    interp_brace_depth: i64
 }
 
 fn new_lexer(source: str, file: str) -> Lexer =
@@ -71,7 +72,8 @@ fn new_lexer(source: str, file: str) -> Lexer =
         paren_depth: 0,
         bracket_depth: 0,
         brace_depth: 0,
-        interp_depth: 0
+        interp_depth: 0,
+        interp_brace_depth: 0
     }
 
 // --- Lexer helpers ---
@@ -105,7 +107,8 @@ fn _advance(lex: Lexer) -> Lexer {
         paren_depth: lex.paren_depth,
         bracket_depth: lex.bracket_depth,
         brace_depth: lex.brace_depth,
-        interp_depth: lex.interp_depth
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: lex.interp_brace_depth
     }
 }
 
@@ -122,7 +125,8 @@ fn _add_token(lex: Lexer, kind: TokenKind, text: str, start_line: i64, start_col
         paren_depth: lex.paren_depth,
         bracket_depth: lex.bracket_depth,
         brace_depth: lex.brace_depth,
-        interp_depth: lex.interp_depth
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: lex.interp_brace_depth
     }
 }
 
@@ -139,7 +143,8 @@ fn _add_error(lex: Lexer, code: str, message: str) -> Lexer {
         paren_depth: lex.paren_depth,
         bracket_depth: lex.bracket_depth,
         brace_depth: lex.brace_depth,
-        interp_depth: lex.interp_depth
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: lex.interp_brace_depth
     }
 }
 
@@ -158,7 +163,24 @@ fn _set_depth(lex: Lexer, paren: i64, bracket: i64, brace: i64) -> Lexer =
         paren_depth: paren,
         bracket_depth: bracket,
         brace_depth: brace,
-        interp_depth: lex.interp_depth
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: lex.interp_brace_depth
+    }
+
+fn _set_interp_brace(lex: Lexer, bd: i64) -> Lexer =
+    Lexer{
+        source: lex.source,
+        file: lex.file,
+        pos: lex.pos,
+        line: lex.line,
+        col: lex.col,
+        tokens: lex.tokens,
+        diagnostics: lex.diagnostics,
+        paren_depth: lex.paren_depth,
+        bracket_depth: lex.bracket_depth,
+        brace_depth: lex.brace_depth,
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: bd
     }
 
 fn _set_interp(lex: Lexer, depth: i64) -> Lexer =
@@ -173,7 +195,8 @@ fn _set_interp(lex: Lexer, depth: i64) -> Lexer =
         paren_depth: lex.paren_depth,
         bracket_depth: lex.bracket_depth,
         brace_depth: lex.brace_depth,
-        interp_depth: depth
+        interp_depth: depth,
+        interp_brace_depth: lex.interp_brace_depth
     }
 
 fn _newline(lex: Lexer) -> Lexer =
@@ -188,7 +211,8 @@ fn _newline(lex: Lexer) -> Lexer =
         paren_depth: lex.paren_depth,
         bracket_depth: lex.bracket_depth,
         brace_depth: lex.brace_depth,
-        interp_depth: lex.interp_depth
+        interp_depth: lex.interp_depth,
+        interp_brace_depth: lex.interp_brace_depth
     }
 
 // --- Last real token kind ---
@@ -347,8 +371,9 @@ fn _scan_string_impl(lex: Lexer, is_continuation: bool) -> Lexer {
                 l = _add_token(l, TkStringStart, text, start_line, start_col, start)
             }
             l = _advance(l)  // consume {
-            // Set interp_depth so main loop knows to call continuation on }
+            // Set interp_depth and save brace_depth for matching }
             l = _set_interp(l, l.interp_depth + 1)
+            l = _set_interp_brace(l, l.brace_depth)
             return l
         } else if c == "\n" {
             l = _add_error(l, E0002, "unterminated string literal")
@@ -560,8 +585,8 @@ fn tokenize(source: str, file: str) -> Lexer {
             lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth + 1)
             lex = _advance(lex)
         } else if c == "\}" {
-            if lex.interp_depth > 0 {
-                // End of interpolation expression — advance past } and continue scanning string
+            if lex.interp_depth > 0 && lex.brace_depth == lex.interp_brace_depth {
+                // End of interpolation expression — brace depth matches entry depth
                 lex = _advance(lex)
                 lex = _set_interp(lex, lex.interp_depth - 1)
                 lex = _scan_string_impl(lex, true)
