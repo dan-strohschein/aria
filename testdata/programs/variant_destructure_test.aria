@@ -1,0 +1,53 @@
+// #7: Match on variant data — destructuring tuple and struct variants
+
+type Expr =
+    | Lit(i64)
+    | Add(i64, i64)
+    | Neg(i64)
+
+fn eval(e: Expr) -> i64 = match e {
+    Lit(n) => n
+    Add(a, b) => a + b
+    Neg(n) => 0 - n
+}
+
+type Option2 =
+    | Val(i64)
+    | Empty
+
+fn unwrap_or(o: Option2, default: i64) -> i64 = match o {
+    Val(v) => v
+    Empty => default
+}
+
+type Tagged =
+    | IntVal(i64)
+    | StrVal(str)
+    | Pair(i64, i64)
+
+fn tag_name(t: Tagged) -> str = match t {
+    IntVal(n) => "int"
+    StrVal(s) => "str"
+    Pair(a, b) => "pair"
+}
+
+entry {
+    // Single-field variant destructuring
+    assert eval(Lit(42)) == 42
+    assert eval(Neg(5)) == -5
+
+    // Two-field variant destructuring
+    assert eval(Add(10, 20)) == 30
+    assert eval(Add(0, 0)) == 0
+
+    // Custom Option-like type
+    assert unwrap_or(Val(42), 0) == 42
+    assert unwrap_or(Empty, -1) == -1
+
+    // Different data types in variants
+    assert tag_name(IntVal(1)) == "int"
+    assert tag_name(StrVal("hi")) == "str"
+    assert tag_name(Pair(1, 2)) == "pair"
+
+    println("variant_destructure_test passed")
+}

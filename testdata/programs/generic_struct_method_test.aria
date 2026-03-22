@@ -1,0 +1,27 @@
+// #3: Generic struct with different instantiations
+
+struct Holder[T] {
+    data: T
+}
+
+entry {
+    // Integer holder
+    h1 := Holder[i64]{data: 42}
+    assert h1.data == 42
+
+    // Another integer holder
+    h2 := Holder[i64]{data: 99}
+    assert h2.data == 99
+    assert h1.data != h2.data
+
+    // Boolean-like using i64
+    h3 := Holder[i64]{data: 1}
+    assert h3.data == 1
+
+    // Multiple generic structs coexist
+    a := Holder[i64]{data: 10}
+    b := Holder[i64]{data: 20}
+    assert a.data + b.data == 30
+
+    println("generic_struct_method_test passed")
+}

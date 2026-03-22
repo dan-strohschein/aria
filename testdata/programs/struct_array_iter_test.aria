@@ -1,0 +1,51 @@
+// #8: Array of structs — iteration + field access
+
+struct Item {
+    name: str
+    price: i64
+}
+
+fn total_price(items: [Item]) -> i64 {
+    mut total := 0
+    mut i := 1  // skip sentinel
+    while i < items.len() {
+        total = total + items[i].price
+        i = i + 1
+    }
+    total
+}
+
+fn find_expensive(items: [Item], threshold: i64) -> i64 {
+    mut count := 0
+    mut i := 1
+    while i < items.len() {
+        if items[i].price > threshold {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    count
+}
+
+entry {
+    items := [Item{name: "", price: 0}]
+    items = items.append(Item{name: "apple", price: 3})
+    items = items.append(Item{name: "book", price: 15})
+    items = items.append(Item{name: "pen", price: 2})
+    items = items.append(Item{name: "laptop", price: 999})
+
+    assert items.len() == 5  // sentinel + 4 items
+
+    // Access fields through array index
+    assert items[1].price == 3
+    assert items[2].name == "book"
+    assert items[4].price == 999
+
+    // Iterate and sum
+    assert total_price(items) == 1019
+
+    // Filter-like iteration
+    assert find_expensive(items, 10) == 2  // book and laptop
+
+    println("struct_array_iter_test passed")
+}

@@ -1,0 +1,14 @@
+// NEGATIVE TEST: effect violation — pure function calling effectful function
+
+fn effectful() with [Io] {
+    println("side effect")
+}
+
+fn pure_fn() -> i64 {
+    effectful()
+    42
+}
+
+entry {
+    pure_fn()
+}

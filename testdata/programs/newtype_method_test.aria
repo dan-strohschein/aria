@@ -1,0 +1,38 @@
+// #14: Newtype with methods via impl block
+
+type UserId = i64
+
+impl UserId {
+    fn is_valid(self) -> bool = self.value > 0
+    fn display(self) -> str = "User#" + self.value.toStr()
+}
+
+type Temperature = i64
+
+impl Temperature {
+    fn is_freezing(self) -> bool = self.value <= 0
+    fn to_str(self) -> str = self.value.toStr() + "C"
+}
+
+entry {
+    // Newtype construction
+    uid := UserId(42)
+    assert uid.value == 42
+    assert uid.is_valid() == true
+
+    invalid := UserId(0)
+    assert invalid.is_valid() == false
+
+    // Newtype method returning string
+    assert uid.display() == "User#42"
+
+    // Another newtype
+    temp := Temperature(25)
+    assert temp.is_freezing() == false
+    assert temp.to_str() == "25C"
+
+    cold := Temperature(-5)
+    assert cold.is_freezing() == true
+
+    println("newtype_method_test passed")
+}

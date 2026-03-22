@@ -1,0 +1,32 @@
+// #10: String interpolation with complex expressions
+
+fn double(x: i64) -> i64 = x * 2
+
+entry {
+    // Simple variable interpolation
+    name := "Aria"
+    assert "Hello, {name}" == "Hello, Aria"
+
+    // Numeric expression in interpolation
+    x := 21
+    msg := "answer: {x * 2}"
+    assert msg == "answer: 42"
+
+    // Function call in interpolation
+    r := "doubled: {double(21)}"
+    assert r == "doubled: 42"
+
+    // Multiple interpolations
+    a := 10
+    b := 20
+    multi := "{a} + {b} = {a + b}"
+    assert multi == "10 + 20 = 30"
+
+    // Nested string in interpolation context
+    label := "value"
+    val := 42
+    full := "{label}: {val}"
+    assert full == "value: 42"
+
+    println("interp_complex_test passed")
+}

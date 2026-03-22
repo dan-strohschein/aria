@@ -1,0 +1,13 @@
+// NEGATIVE TEST: trait bound violation
+
+struct Opaque {
+    data: i64
+}
+
+fn need_add[T: Add](a: T, b: T) -> T = a + b
+
+entry {
+    x := Opaque{data: 1}
+    y := Opaque{data: 2}
+    need_add(x, y)
+}

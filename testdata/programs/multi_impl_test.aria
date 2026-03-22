@@ -1,0 +1,42 @@
+// #11: Multiple impl blocks — same type implementing multiple traits
+
+trait Printable {
+    fn to_display(self) -> str
+}
+
+trait Measurable {
+    fn measure(self) -> i64
+}
+
+struct Box {
+    width: i64
+    height: i64
+    label: str
+}
+
+impl Box {
+    fn area(self) -> i64 = self.width * self.height
+    fn perimeter(self) -> i64 = 2 * (self.width + self.height)
+}
+
+impl Printable for Box {
+    fn to_display(self) -> str = self.label
+}
+
+impl Measurable for Box {
+    fn measure(self) -> i64 = self.width * self.height
+}
+
+entry {
+    b := Box{width: 5, height: 3, label: "my box"}
+
+    // Own methods
+    assert b.area() == 15
+    assert b.perimeter() == 16
+
+    // Trait implementations
+    assert b.to_display() == "my box"
+    assert b.measure() == 15
+
+    println("multi_impl_test passed")
+}

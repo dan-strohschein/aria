@@ -1,0 +1,16 @@
+// #2: Multi-type parameter generics [T, U]
+
+fn pair_first[T](a: T, b: i64) -> T = a
+fn pair_second[T](a: i64, b: T) -> T = b
+
+fn swap_types(a: i64, b: str) -> str = b
+
+entry {
+    // Two different types inferred
+    assert pair_first(42, 99) == 42
+    assert pair_first("hello", 99) == "hello"
+    assert pair_second(99, "world") == "world"
+    assert pair_second(99, 7) == 7
+
+    println("multi_type_generic_test passed")
+}

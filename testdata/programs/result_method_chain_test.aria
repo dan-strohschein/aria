@@ -1,0 +1,50 @@
+// #17: Result chaining — multiple ? and method calls on results
+
+fn parse(s: str) -> i64 ! str = s.to[i64]()
+
+fn parse_and_double(s: str) -> i64 ! str {
+    n := parse(s)?
+    Ok(n * 2)
+}
+
+fn parse_add(a: str, b: str) -> i64 ! str {
+    x := parse(a)?
+    y := parse(b)?
+    Ok(x + y)
+}
+
+fn pipeline(input: str) -> i64 ! str {
+    n := parse(input)?
+    doubled := n * 2
+    final_val := doubled + 1
+    Ok(final_val)
+}
+
+entry {
+    // Simple chain
+    assert parse("42")! == 42
+    assert parse_and_double("21")! == 42
+
+    // Multiple ? in sequence
+    assert parse_add("10", "32")! == 42
+
+    // Pipeline with multiple steps
+    assert pipeline("20")! == 41
+
+    // Error in chain — propagates
+    r1 := parse_and_double("abc") catch |e| { -1 }
+    assert r1 == -1
+
+    r2 := parse_add("10", "xyz") catch |e| { -1 }
+    assert r2 == -1
+
+    // Catch with recovery
+    r3 := parse("bad") catch |e| { 0 }
+    assert r3 == 0
+
+    // Successful catch (no error)
+    r4 := parse("99") catch |e| { 0 }
+    assert r4 == 99
+
+    println("result_method_chain_test passed")
+}

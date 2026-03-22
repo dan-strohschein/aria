@@ -1,0 +1,50 @@
+// #6: Error propagation chains — ? used 3+ levels deep
+
+fn parse_num(s: str) -> i64 ! str {
+    s.to[i64]()
+}
+
+fn double_parsed(s: str) -> i64 ! str {
+    n := parse_num(s)?
+    Ok(n * 2)
+}
+
+fn add_parsed(a: str, b: str) -> i64 ! str {
+    x := parse_num(a)?
+    y := parse_num(b)?
+    Ok(x + y)
+}
+
+fn complex_chain(a: str, b: str) -> i64 ! str {
+    sum := add_parsed(a, b)?
+    doubled := double_parsed(sum.toStr())?
+    Ok(doubled + 1)
+}
+
+entry {
+    // Single level
+    r1 := parse_num("42")!
+    assert r1 == 42
+
+    // Two levels deep
+    r2 := double_parsed("21")!
+    assert r2 == 42
+
+    // Two ? in one function
+    r3 := add_parsed("10", "20")!
+    assert r3 == 30
+
+    // Error at first level
+    r4 := parse_num("abc") catch |e| { -1 }
+    assert r4 == -1
+
+    // Error propagates through chain
+    r5 := double_parsed("xyz") catch |e| { -1 }
+    assert r5 == -1
+
+    // Error in second arg of add
+    r6 := add_parsed("10", "bad") catch |e| { -1 }
+    assert r6 == -1
+
+    println("result_chain_test passed")
+}

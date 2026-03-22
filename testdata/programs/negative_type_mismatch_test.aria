@@ -1,0 +1,11 @@
+// NEGATIVE TEST: should fail to compile with type errors
+// This file is validated by checking that `aria check` reports errors.
+// It should NOT be compiled with `aria build`.
+
+fn returns_int() -> i64 = "hello"
+
+fn wrong_arg_type(x: i64) -> i64 = x + 1
+
+entry {
+    wrong_arg_type("not a number")
+}

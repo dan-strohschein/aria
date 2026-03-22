@@ -1,0 +1,43 @@
+// #13: For-in over arrays — iteration patterns
+
+entry {
+    // For-in over integer array
+    nums := [0].append(10).append(20).append(30).append(40)
+    mut sum := 0
+    for n in nums {
+        sum = sum + n
+    }
+    assert sum == 100  // 0+10+20+30+40
+
+    // For-in with counting
+    mut count := 0
+    for item in nums {
+        count = count + 1
+    }
+    assert count == 5
+
+    // Nested for with ranges
+    mut total := 0
+    for i in 0..3 {
+        for j in 0..3 {
+            total = total + 1
+        }
+    }
+    assert total == 9
+
+    // For-in collecting values
+    mut doubled := [0]
+    for n in nums {
+        doubled = doubled.append(n * 2)
+    }
+    assert doubled.len() == 6  // sentinel + 5 doubled values
+
+    // Inclusive range
+    mut inclusive_sum := 0
+    for i in 0..=5 {
+        inclusive_sum = inclusive_sum + i
+    }
+    assert inclusive_sum == 15  // 0+1+2+3+4+5
+
+    println("array_iteration_test passed")
+}

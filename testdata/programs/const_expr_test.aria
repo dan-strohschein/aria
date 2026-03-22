@@ -1,0 +1,45 @@
+// #15: Constants used in expressions
+
+const MAX_SIZE: i64 = 100
+const MIN_SIZE: i64 = 1
+const DEFAULT_NAME: str = "unknown"
+const PI_APPROX: i64 = 3
+
+fn clamp(x: i64) -> i64 {
+    if x > MAX_SIZE { return MAX_SIZE }
+    if x < MIN_SIZE { return MIN_SIZE }
+    x
+}
+
+fn circle_area(r: i64) -> i64 = PI_APPROX * r * r
+
+entry {
+    // Constants in conditions
+    assert clamp(50) == 50
+    assert clamp(200) == MAX_SIZE
+    assert clamp(0) == MIN_SIZE
+
+    // Constants in arithmetic
+    assert circle_area(10) == 300
+    assert circle_area(1) == PI_APPROX
+
+    // String constant
+    assert DEFAULT_NAME == "unknown"
+    assert DEFAULT_NAME.len() == 7
+
+    // Constants in comparisons
+    assert MAX_SIZE > MIN_SIZE
+    assert MAX_SIZE == 100
+    assert MIN_SIZE == 1
+
+    // Constants in array sizing
+    mut arr := [0]
+    mut i := 0
+    while i < 10 {
+        arr = arr.append(i)
+        i = i + 1
+    }
+    assert arr.len() <= MAX_SIZE + 1
+
+    println("const_expr_test passed")
+}
