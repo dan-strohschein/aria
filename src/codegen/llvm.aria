@@ -312,6 +312,7 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         // arg2 is a temp for binary ops and ArrayGet, but NOT for FieldGet/Set (field index),
         // ConstStr (length), Call (reg count), Branch (label)
         if op != "FieldGet" && op != "FieldSet" && op != "ConstStr" && op != "Call" &&
+           op != "CallIndirect" && op != "FnRef" &&
            op != "BranchTrue" && op != "BranchFalse" && op != "Nop" && op != "Const" &&
            op != "Alloc" && op != "Jump" && op != "Label" {
             if inst.arg2 > max_temp { max_temp = inst.arg2 }
@@ -523,6 +524,48 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if op == "Call" { return _gen_call(g, m, f, inst, idx) }
+
+    if op == "FnRef" {
+        // Store function pointer as i64
+        mut gg := g
+        ptr := "%fnref_ptr_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr + " = ptrtoint i64 (i64)* @" + inst.s1 + " to i64")
+        gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "CallIndirect" {
+        // Indirect call through function pointer
+        // inst.dest = result, inst.arg1 = fn_ptr temp, inst.arg2 = arg count, inst.type_id = first_arg temp
+        mut gg := g
+        fn_ptr := "%icall_ptr_" + _i2s(idx)
+        gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + _t(inst.arg1))
+        fn_cast := "%icall_fn_" + _i2s(idx)
+        if inst.arg2 == 0 {
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 ()*")
+            result := "%icall_r_" + _i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "()")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        } else if inst.arg2 == 1 {
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
+            a0 := "%icall_a0_" + _i2s(idx)
+            gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
+            result := "%icall_r_" + _i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ")")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        } else if inst.arg2 == 2 {
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64, i64)*")
+            a0 := "%icall_a0_" + _i2s(idx)
+            a1 := "%icall_a1_" + _i2s(idx)
+            gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
+            extra1 := inst.type_id + 1
+            gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(extra1))
+            result := "%icall_r_" + _i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ", i64 " + a1 + ")")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        }
+        return gg
+    }
 
     if op == "Alloc" {
         mut gg := g

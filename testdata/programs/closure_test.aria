@@ -1,0 +1,30 @@
+// Test no-capture closures
+
+fn apply(f: i64, x: i64) -> i64 {
+    // Indirect call — f is a function pointer
+    // Note: this works because f is treated as a closure variable
+    return 0
+}
+
+entry {
+    // Basic closure
+    double := fn(x: i64) -> i64 => x * 2
+    assert double(5) == 10
+    assert double(0) == 0
+    assert double(21) == 42
+
+    // Closure with two params
+    add := fn(a: i64, b: i64) -> i64 => a + b
+    assert add(3, 4) == 7
+
+    // Closure with no params
+    get_42 := fn() -> i64 => 42
+    assert get_42() == 42
+
+    // Closure returning bool
+    is_positive := fn(n: i64) -> bool => n > 0
+    assert is_positive(5) == true
+    assert is_positive(-3) == false
+
+    println("closure_test passed")
+}

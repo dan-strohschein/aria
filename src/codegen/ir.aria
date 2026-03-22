@@ -32,6 +32,8 @@ type IrOp =
     | OpShl
     | OpShr
     | OpCall
+    | OpCallIndirect
+    | OpFnRef
     | OpRet
     | OpRetVoid
     | OpArg
@@ -84,6 +86,8 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpShl => "Shl"
     OpShr => "Shr"
     OpCall => "Call"
+    OpCallIndirect => "CallIndirect"
+    OpFnRef => "FnRef"
     OpRet => "Ret"
     OpRetVoid => "RetVoid"
     OpArg => "Arg"

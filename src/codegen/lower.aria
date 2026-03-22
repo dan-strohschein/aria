@@ -1388,6 +1388,7 @@ fn _lower_primary(l: Lowerer) -> LT {
 
     if k == "if" { return _lower_if(l) }
     if k == "match" { return _lower_match(l) }
+    if k == "fn" { return _lower_closure(l) }
 
     // self keyword — treat as variable reference
     if k == "self" {
@@ -1677,7 +1678,36 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = _lset_type(ll, nt.temp, 13)
                 return LT{l: ll, temp: nt.temp}
             }
-            // Unknown function — skip args
+            // Check if it's a closure/function variable — indirect call
+            fn_slot := _lenv_lookup(ll, name)
+            if fn_slot >= 0 {
+                // Load function pointer
+                fn_ptr_nt := _lnew_temp(ll)
+                ll = fn_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, fn_ptr_nt.temp, fn_slot, 0, "", 0))
+                // Collect args
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                mut first_arg := -1
+                mut ic_arg_count := 0
+                while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                    ll = _lskip_nl(ll)
+                    arg := _lower_expr(ll)
+                    ll = arg.l
+                    if ic_arg_count == 0 { first_arg = arg.temp }
+                    ic_arg_count = ic_arg_count + 1
+                    ll = _lskip_nl(ll)
+                    if _lk(ll) == "," { ll = _ladv(ll) }
+                }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut fa := 0
+                if first_arg >= 0 { fa = first_arg }
+                ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, ic_arg_count, "", fa))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Truly unknown — skip args
             ll = _ladv(ll)
             while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
             if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -2579,6 +2609,151 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     }
     ll = _lower_block(ll)
     ll
+}
+
+// --- Lower closure expression ---
+
+fn _lower_closure(l: Lowerer) -> LT {
+    mut ll := _ladv(l)  // skip fn
+    // Generate unique closure name based on module function count
+    closure_name := "_closure_" + _closure_i2s(ll.module.funcs.len())
+
+    // Parse parameter names and count
+    mut param_count := 0
+    mut pname_0 := ""
+    mut pname_1 := ""
+    mut pname_2 := ""
+    mut pname_3 := ""
+    if _lk(ll) == "(" {
+        ll = _ladv(ll)  // skip (
+        while _lk(ll) != ")" && _lk(ll) != "EOF" {
+            if _lk(ll) == "IDENT" || _lk(ll) == "self" {
+                ptext := _lcur(ll).text
+                if param_count == 0 { pname_0 = ptext }
+                if param_count == 1 { pname_1 = ptext }
+                if param_count == 2 { pname_2 = ptext }
+                if param_count == 3 { pname_3 = ptext }
+                param_count = param_count + 1
+                ll = _ladv(ll)
+                // Skip type annotation
+                if _lk(ll) == ":" {
+                    ll = _ladv(ll)
+                    while _lk(ll) != "," && _lk(ll) != ")" && _lk(ll) != "EOF" {
+                        ll = _ladv(ll)
+                    }
+                }
+            } else {
+                ll = _ladv(ll)
+            }
+            if _lk(ll) == "," { ll = _ladv(ll) }
+        }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+    }
+    // Skip return type annotation
+    if _lk(ll) == "->" {
+        ll = _ladv(ll)
+        while _lk(ll) != "=>" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+    }
+    // Skip =>
+    if _lk(ll) == "=>" { ll = _ladv(ll) }
+    ll = _lskip_nl(ll)
+
+    // Save body position — we'll lower it inside the closure function
+    body_start := ll.pos
+
+    // Skip body expression to find the end (for the outer context)
+    // The body is a single expression until newline or }
+    lb := "\{"
+    if _lk(ll) == lb {
+        ll = _skip_braces_l(ll)
+    } else {
+        // Skip single expression — advance until statement boundary
+        mut depth := 0
+        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" {
+            if _lk(ll) == "(" { depth = depth + 1 }
+            if _lk(ll) == ")" {
+                if depth == 0 { return LT{l: ll, temp: 0} }
+                depth = depth - 1
+            }
+            if _lk(ll) == "," && depth == 0 { return LT{l: ll, temp: 0} }
+            ll = _ladv(ll)
+        }
+    }
+    body_end := ll.pos
+
+    // Save current function state
+    saved_func := ll.current_func
+    saved_temp := ll.temp_counter
+    saved_label := ll.label_counter
+    saved_env_names := ll.env_names
+    saved_env_slots := ll.env_slots
+    saved_types := ll.temp_types
+
+    // Create closure function
+    ll = _lset_func(ll, new_ir_func(closure_name, param_count, 1))
+
+    // Register closure parameters
+    mut pi := 0
+    while pi < param_count {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        mut pn := ""
+        if pi == 0 { pn = pname_0 }
+        if pi == 1 { pn = pname_1 }
+        if pi == 2 { pn = pname_2 }
+        if pi == 3 { pn = pname_3 }
+        ll = _lenv_add(ll, pn, nt.temp)
+        pi = pi + 1
+    }
+
+    // Lower body
+    ll = _lset_pos(ll, body_start)
+    if body_start < body_end {
+        result := _lower_expr(ll)
+        ll = result.l
+        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
+    }
+
+    // Finish closure function
+    ll = _lfinish_func(ll)
+
+    // Restore outer function state
+    ll = Lowerer{tokens: ll.tokens, pos: body_end, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: saved_func,
+                 temp_counter: saved_temp, label_counter: saved_label,
+                 env_names: saved_env_names, env_slots: saved_env_slots,
+                 loop_start: ll.loop_start, loop_end: ll.loop_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: saved_types}
+
+    // Emit OpFnRef to get function pointer
+    nt := _lnew_temp(ll)
+    ll = nt.l
+    ll = _lemit(ll, new_inst(OpFnRef, nt.temp, 0, 0, closure_name, 0))
+    LT{l: ll, temp: nt.temp}
+}
+
+fn _closure_i2s(n: i64) -> str {
+    if n == 0 { return "0" }
+    mut result := ""
+    mut v := n
+    while v > 0 {
+        d := v % 10
+        v = v / 10
+        if d == 0 { result = "0" + result }
+        if d == 1 { result = "1" + result }
+        if d == 2 { result = "2" + result }
+        if d == 3 { result = "3" + result }
+        if d == 4 { result = "4" + result }
+        if d == 5 { result = "5" + result }
+        if d == 6 { result = "6" + result }
+        if d == 7 { result = "7" + result }
+        if d == 8 { result = "8" + result }
+        if d == 9 { result = "9" + result }
+    }
+    result
 }
 
 // --- Newtype detection ---
