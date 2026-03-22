@@ -399,9 +399,20 @@ fn render_text(diag: Diagnostic, source: str) -> str {
 }
 
 fn _escape_json_str(s: str) -> str {
-    // Simple escape: just replace known problematic chars
-    mut result := s.replace("\\", "\\\\")
-    result = result.replace("\"", "\\\"")
+    // Simple character-by-character escape for JSON strings
+    mut result := ""
+    mut i := 0
+    while i < s.len() {
+        ch := s.charAt(i)
+        if ch == "\\" {
+            result = result + "\\\\"
+        } else if ch == _q() {
+            result = result + "\\" + _q()
+        } else {
+            result = result + ch
+        }
+        i = i + 1
+    }
     result
 }
 
@@ -423,6 +434,7 @@ fn render_json_diagnostic(diag: Diagnostic) -> str {
     msg := _escape_json_str(diag.message)
     file := _escape_json_str(diag.span.file)
     end_off := span_end_offset(diag.span)
+    desc := _escape_json_str(describe_code(diag.code))
     q := _q()
 
     lb := "\{"
@@ -431,12 +443,52 @@ fn render_json_diagnostic(diag: Diagnostic) -> str {
     json = json + _json_str("code", diag.code) + ","
     json = json + _json_str("severity", sev) + ","
     json = json + _json_str("message", msg) + ","
+    json = json + _json_str("description", desc) + ","
     json = json + _json_str("file", file) + ","
     json = json + _json_int("line", diag.span.line) + ","
     json = json + _json_int("column", diag.span.col) + ","
     off_str := _diag_i2s(diag.span.offset)
     end_str := _diag_i2s(end_off)
-    json = json + q + "span" + q + ":[" + off_str + "," + end_str + "]"
+    json = json + q + "span" + q + ":[" + off_str + "," + end_str + "],"
+
+    // Labels array
+    json = json + q + "labels" + q + ":["
+    mut li := 0
+    mut first_lbl := true
+    while li < diag.labels.len() {
+        lbl := diag.labels[li]
+        if lbl.message.len() > 0 {
+            if first_lbl { first_lbl = false } else { json = json + "," }
+            json = json + lb
+            json = json + _json_str("message", _escape_json_str(lbl.message)) + ","
+            json = json + _json_str("style", label_style_to_str(lbl.style)) + ","
+            json = json + _json_str("file", _escape_json_str(lbl.span.file)) + ","
+            json = json + _json_int("line", lbl.span.line) + ","
+            json = json + _json_int("column", lbl.span.col)
+            json = json + rb
+        }
+        li = li + 1
+    }
+    json = json + "],"
+
+    // Suggestions array
+    json = json + q + "suggestions" + q + ":["
+    mut si := 0
+    mut first_sug := true
+    while si < diag.suggestions.len() {
+        sug := diag.suggestions[si]
+        if sug.message.len() > 0 {
+            if first_sug { first_sug = false } else { json = json + "," }
+            json = json + lb
+            json = json + _json_str("message", _escape_json_str(sug.message)) + ","
+            json = json + _json_str("replacement", _escape_json_str(sug.replacement)) + ","
+            json = json + _json_str("applicability", applicability_to_str(sug.applicability))
+            json = json + rb
+        }
+        si = si + 1
+    }
+    json = json + "]"
+
     json = json + rb
     json
 }

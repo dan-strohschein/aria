@@ -199,6 +199,21 @@ fn run_check(files: [str], format: str) -> i64 {
     0
 }
 
+fn _print_diagnostics(diags: DiagnosticBag, format: str) {
+    if format == "json" {
+        println(render_json_bag(diags))
+    } else {
+        // Text format (default)
+        mut di := 1
+        while di < diags.diagnostics.len() {
+            d := diags.diagnostics[di]
+            println(format_span(d.span) + ": " + severity_to_str(d.severity) + "[" + d.code + "]: " + d.message)
+            di = di + 1
+        }
+        println(format_summary(diags))
+    }
+}
+
 fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
     if files.len() <= 1 {
         println("error: no input files")
@@ -215,14 +230,12 @@ fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
     // Run full pipeline: lex → resolve → check → lower → LLVM IR → clang
     diags := generate_from_sources(files, output, runtime_path)
     if bag_has_errors(diags) {
-        mut di := 1
-        while di < diags.diagnostics.len() {
-            d := diags.diagnostics[di]
-            println(format_span(d.span) + ": " + severity_to_str(d.severity) + "[" + d.code + "]: " + d.message)
-            di = di + 1
-        }
-        println(format_summary(diags))
+        _print_diagnostics(diags, format)
         return 1
+    }
+    // Print warnings even on success
+    if bag_warning_count(diags) > 0 {
+        _print_diagnostics(diags, format)
     }
     println("built: " + output)
     0
