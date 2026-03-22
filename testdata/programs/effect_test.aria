@@ -1,0 +1,48 @@
+// Test effect system: with clauses, purity verification
+
+// Pure function — no with clause
+fn add(a: i64, b: i64) -> i64 = a + b
+
+// Function with Io effect
+fn greet(name: str) with [Io] {
+    println("Hello, " + name)
+}
+
+// Function with multiple effects
+fn log_and_compute(x: i64) -> i64 with [Io] {
+    println("computing...")
+    x * 2
+}
+
+// Pure function calling another pure function — OK
+fn double_add(a: i64, b: i64) -> i64 = add(a, b) + add(a, b)
+
+// Effectful function calling another effectful function — OK
+fn greet_twice(name: str) with [Io] {
+    greet(name)
+    greet(name)
+}
+
+// Fs implies Io
+fn read_and_log(path: str) with [Fs] {
+    println("reading: " + path)
+}
+
+entry {
+    // Pure functions work in entry (entry has all effects)
+    r := add(10, 20)
+    assert r == 30
+
+    // Effectful functions work in entry
+    greet("world")
+
+    r2 := log_and_compute(21)
+    assert r2 == 42
+
+    r3 := double_add(3, 4)
+    assert r3 == 14
+
+    greet_twice("Aria")
+
+    println("effect_test passed")
+}

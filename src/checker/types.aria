@@ -443,24 +443,57 @@ struct FnSig {
     generic_bound_1: str
     generic_bound_2: str
     token_start: i64
+    // Effects: boolean flags for built-in effects
+    has_io: bool
+    has_fs: bool
+    has_net: bool
+    has_ffi: bool
+    has_async: bool
 }
 
 fn _sentinel_fn_sig() -> FnSig =
     FnSig{name: "", param_names: [""], param_types: [0], return_type: 0, error_type: 0,
            generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
-           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0}
+           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0,
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
 
 fn new_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig =
     FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
            generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
-           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0}
+           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0,
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
 
 fn new_generic_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64, gc: i64, gn0: str, gn1: str, gn2: str, gb0: str, gb1: str, gb2: str, tstart: i64) -> FnSig =
     FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
            generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2,
-           generic_bound_0: gb0, generic_bound_1: gb1, generic_bound_2: gb2, token_start: tstart}
+           generic_bound_0: gb0, generic_bound_1: gb1, generic_bound_2: gb2, token_start: tstart,
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
 
 fn fn_is_generic(sig: FnSig) -> bool = sig.generic_count > 0
+
+// Check if a function's declared effects satisfy a required effect.
+// Fs implies Io, Net implies Io.
+fn fn_has_effect(sig: FnSig, effect: str) -> bool {
+    if effect == "Io" { return sig.has_io || sig.has_fs || sig.has_net }
+    if effect == "Fs" { return sig.has_fs }
+    if effect == "Net" { return sig.has_net }
+    if effect == "Ffi" { return sig.has_ffi }
+    if effect == "Async" { return sig.has_async }
+    false
+}
+
+fn fn_is_pure(sig: FnSig) -> bool =
+    sig.has_io == false && sig.has_fs == false && sig.has_net == false &&
+    sig.has_ffi == false && sig.has_async == false
+
+fn sig_set_effects(sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e: bool) -> FnSig =
+    FnSig{name: sig.name, param_names: sig.param_names, param_types: sig.param_types,
+           return_type: sig.return_type, error_type: sig.error_type,
+           generic_count: sig.generic_count, generic_name_0: sig.generic_name_0,
+           generic_name_1: sig.generic_name_1, generic_name_2: sig.generic_name_2,
+           generic_bound_0: sig.generic_bound_0, generic_bound_1: sig.generic_bound_1,
+           generic_bound_2: sig.generic_bound_2, token_start: sig.token_start,
+           has_io: io, has_fs: fs, has_net: net, has_ffi: ffi, has_async: async_e}
 
 // --- MonoSpec (monomorphization specialization record) ---
 

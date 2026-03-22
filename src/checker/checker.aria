@@ -55,6 +55,7 @@ struct Checker {
     // Function context
     fn_return_type: i64
     fn_error_type: i64
+    fn_current_name: str
     in_loop: bool
 }
 
@@ -91,6 +92,7 @@ fn _new_checker(tokens: [Token], table: SymbolTable, file: str) -> Checker =
         env_scopes: [0],
         fn_return_type: TY_UNIT,
         fn_error_type: 0,
+        fn_current_name: "",
         in_loop: false
     }
 
@@ -110,56 +112,56 @@ fn _cadv(c: Checker) -> Checker =
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_pos(c: Checker, pos: i64) -> Checker =
     Checker{tokens: c.tokens, pos: pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_store(c: Checker, store: TypeStore) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_reg(c: Checker, reg: TypeRegistry) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: reg,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_diag(c: Checker, diag: DiagnosticBag) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: diag, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_fn_ctx(c: Checker, ret: i64, err: i64) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: ret, fn_error_type: err, in_loop: c.in_loop}
+            fn_return_type: ret, fn_error_type: err, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_treg(c: Checker, treg: TraitRegistry) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_loop(c: Checker, in_loop: bool) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
             current_scope: c.current_scope, file: c.file,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: in_loop}
 
 fn _cspan(c: Checker) -> Span {
     tok := _ccur(c)
@@ -191,7 +193,7 @@ fn _env_add(c: Checker, name: str, type_id: i64, sc: i64) -> Checker =
             env_names: c.env_names.append(name),
             env_types: c.env_types.append(type_id),
             env_scopes: c.env_scopes.append(sc),
-            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _env_lookup(c: Checker, name: str) -> i64 {
     // Walk backwards to find latest binding
@@ -845,9 +847,40 @@ fn _register_fn_sig(c: Checker) -> Checker {
         err = et.type_id
     }
 
+    // Parse effect clause: with [Io, Fs, ...]
+    mut eff_io := false
+    mut eff_fs := false
+    mut eff_net := false
+    mut eff_ffi := false
+    mut eff_async := false
+    if _ck2(cc) == "with" {
+        cc = _cadv(cc)  // skip with
+        if _ck2(cc) == "[" {
+            cc = _cadv(cc)  // skip [
+            while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+                if _ck2(cc) == "IDENT" {
+                    eff := _ccur(cc).text
+                    if eff == "Io" { eff_io = true }
+                    if eff == "Fs" { eff_fs = true }
+                    if eff == "Net" { eff_net = true }
+                    if eff == "Ffi" { eff_ffi = true }
+                    if eff == "Async" { eff_async = true }
+                    cc = _cadv(cc)
+                } else {
+                    cc = _cadv(cc)
+                }
+                if _ck2(cc) == "," { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+        }
+    }
+
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
         sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+    }
+    if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
+        sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
     }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
 
@@ -1026,9 +1059,40 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
         err = et.type_id
     }
 
+    // Parse effect clause: with [Io, Fs, ...]
+    mut eff_io := false
+    mut eff_fs := false
+    mut eff_net := false
+    mut eff_ffi := false
+    mut eff_async := false
+    if _ck2(cc) == "with" {
+        cc = _cadv(cc)  // skip with
+        if _ck2(cc) == "[" {
+            cc = _cadv(cc)  // skip [
+            while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+                if _ck2(cc) == "IDENT" {
+                    eff := _ccur(cc).text
+                    if eff == "Io" { eff_io = true }
+                    if eff == "Fs" { eff_fs = true }
+                    if eff == "Net" { eff_net = true }
+                    if eff == "Ffi" { eff_ffi = true }
+                    if eff == "Async" { eff_async = true }
+                    cc = _cadv(cc)
+                } else {
+                    cc = _cadv(cc)
+                }
+                if _ck2(cc) == "," { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+        }
+    }
+
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
         sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+    }
+    if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
+        sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
     }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
 
@@ -1153,8 +1217,13 @@ fn _check_fn(c: Checker) -> Checker {
         return _skip_decl(cc)
     }
 
-    // Set function context
+    // Set function context with effect tracking
     cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
+    cc = Checker{tokens: cc.tokens, pos: cc.pos, store: cc.store, registry: cc.registry,
+            treg: cc.treg, diagnostics: cc.diagnostics, table: cc.table,
+            current_scope: cc.current_scope, file: cc.file,
+            env_names: cc.env_names, env_types: cc.env_types, env_scopes: cc.env_scopes,
+            fn_return_type: cc.fn_return_type, fn_error_type: cc.fn_error_type, fn_current_name: name, in_loop: cc.in_loop}
 
     // Register params in env
     mut pi := 1  // skip sentinel
@@ -1286,6 +1355,12 @@ fn _check_impl_fn(c: Checker, impl_type: str) -> Checker {
 fn _check_entry(c: Checker) -> Checker {
     mut cc := _cadv(c)  // skip entry
     cc = _cset_fn_ctx(cc, TY_UNIT, 0)
+    // entry blocks have all effects
+    cc = Checker{tokens: cc.tokens, pos: cc.pos, store: cc.store, registry: cc.registry,
+            treg: cc.treg, diagnostics: cc.diagnostics, table: cc.table,
+            current_scope: cc.current_scope, file: cc.file,
+            env_names: cc.env_names, env_types: cc.env_types, env_scopes: cc.env_scopes,
+            fn_return_type: cc.fn_return_type, fn_error_type: cc.fn_error_type, fn_current_name: "_entry", in_loop: cc.in_loop}
     result := _check_block(cc)
     result.c
 }
@@ -1740,6 +1815,27 @@ fn _check_primary(c: Checker) -> CE {
         if _ck2(cc) == "(" {
             sig := reg_find_fn(cc.registry, name)
             if sig.name != "" {
+                // Check effect compatibility (skip for entry/test blocks which have all effects)
+                if fn_is_pure(sig) == false && cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
+                    caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
+                    if caller_sig.name != "" {
+                        if sig.has_io && fn_has_effect(caller_sig, "Io") == false {
+                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
+                        }
+                        if sig.has_fs && fn_has_effect(caller_sig, "Fs") == false {
+                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Fs] but " + cc.fn_current_name + " is missing [Fs]")
+                        }
+                        if sig.has_net && fn_has_effect(caller_sig, "Net") == false {
+                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Net] but " + cc.fn_current_name + " is missing [Net]")
+                        }
+                        if sig.has_ffi && fn_has_effect(caller_sig, "Ffi") == false {
+                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Ffi] but " + cc.fn_current_name + " is missing [Ffi]")
+                        }
+                        if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
+                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Async] but " + cc.fn_current_name + " is missing [Async]")
+                        }
+                    }
+                }
                 if fn_is_generic(sig) {
                     // Infer type args from call arguments
                     result := _check_generic_call(cc, sig)
@@ -1748,6 +1844,14 @@ fn _check_primary(c: Checker) -> CE {
                 cr := _check_call_args(cc, TY_UNKNOWN)
                 cc = cr.c
                 return CE{c: cc, type_id: sig.return_type}
+            }
+            // Check effects for built-in I/O functions (warning only for smooth adoption)
+            if (name == "println" || name == "print" || name == "eprintln") &&
+               cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
+                caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
+                if caller_sig.name != "" && fn_has_effect(caller_sig, "Io") == false {
+                    cc = _cwarning(cc, "W0100", name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
+                }
             }
             // Unknown function — still consume args
             cr := _check_call_args(cc, TY_UNKNOWN)
