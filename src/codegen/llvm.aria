@@ -527,26 +527,27 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "FnRef" {
         // Store function pointer as i64
+        // Use bitcast to i8* first for type-agnostic ptrtoint
         mut gg := g
+        raw := "%fnref_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = bitcast i64 (i64)* @" + inst.s1 + " to i8*")
         ptr := "%fnref_ptr_" + _i2s(idx)
-        gg = _lg_emit(gg, ptr + " = ptrtoint i64 (i64)* @" + inst.s1 + " to i64")
+        gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if op == "CallIndirect" {
-        // Indirect call through function pointer
-        // inst.dest = result, inst.arg1 = fn_ptr temp, inst.arg2 = arg count, inst.type_id = first_arg temp
+        // Indirect call through function pointer (fat pointer convention)
+        // inst.dest = result, inst.arg1 = fn_ptr temp, inst.arg2 = total arg count (env + user args)
+        // inst.type_id = first_arg temp (env_ptr, then user args in consecutive temps)
         mut gg := g
         fn_ptr := "%icall_ptr_" + _i2s(idx)
         gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + _t(inst.arg1))
         fn_cast := "%icall_fn_" + _i2s(idx)
-        if inst.arg2 == 0 {
-            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 ()*")
-            result := "%icall_r_" + _i2s(idx)
-            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "()")
-            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
-        } else if inst.arg2 == 1 {
+        // Build function type and arg list based on total arg count
+        if inst.arg2 == 1 {
+            // env only, no user args
             gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
             a0 := "%icall_a0_" + _i2s(idx)
             gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
@@ -554,14 +555,29 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         } else if inst.arg2 == 2 {
+            // env + 1 user arg
             gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64, i64)*")
             a0 := "%icall_a0_" + _i2s(idx)
             a1 := "%icall_a1_" + _i2s(idx)
             gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
-            extra1 := inst.type_id + 1
-            gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(extra1))
+            t1 := inst.type_id + 1
+            gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(t1))
             result := "%icall_r_" + _i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ", i64 " + a1 + ")")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        } else if inst.arg2 == 3 {
+            // env + 2 user args
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64, i64, i64)*")
+            a0 := "%icall_a0_" + _i2s(idx)
+            a1 := "%icall_a1_" + _i2s(idx)
+            a2 := "%icall_a2_" + _i2s(idx)
+            gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
+            t1 := inst.type_id + 1
+            t2 := inst.type_id + 2
+            gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(t1))
+            gg = _lg_emit(gg, a2 + " = load i64, i64* " + _t(t2))
+            result := "%icall_r_" + _i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ", i64 " + a1 + ", i64 " + a2 + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         }
         return gg

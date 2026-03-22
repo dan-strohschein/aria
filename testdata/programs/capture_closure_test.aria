@@ -1,0 +1,46 @@
+// Test closures that capture variables from enclosing scope
+
+fn make_adder(n: i64) -> i64 {
+    adder := fn(x: i64) -> i64 => x + n
+    return adder(10)
+}
+
+fn make_multiplier(factor: i64) -> i64 {
+    mul := fn(x: i64) -> i64 => x * factor
+    return mul(7)
+}
+
+fn multi_capture(a: i64, b: i64) -> i64 {
+    sum := fn(x: i64) -> i64 => x + a + b
+    return sum(1)
+}
+
+fn nested_use(base: i64) -> i64 {
+    offset := base + 10
+    calc := fn(x: i64) -> i64 => x + offset
+    return calc(5)
+}
+
+entry {
+    // Single capture
+    assert make_adder(5) == 15
+    assert make_adder(0) == 10
+    assert make_adder(100) == 110
+
+    // Different operation
+    assert make_multiplier(3) == 21
+    assert make_multiplier(0) == 0
+
+    // Multiple captures
+    assert multi_capture(10, 20) == 31
+
+    // Capture of computed value
+    assert nested_use(90) == 105
+
+    // Inline capture
+    x := 42
+    get_x := fn() -> i64 => x
+    assert get_x() == 42
+
+    println("capture_closure_test passed")
+}

@@ -1681,10 +1681,17 @@ fn _lower_primary(l: Lowerer) -> LT {
             // Check if it's a closure/function variable — indirect call
             fn_slot := _lenv_lookup(ll, name)
             if fn_slot >= 0 {
-                // Load function pointer
+                // Load fat pointer (closure object)
+                closure_nt := _lnew_temp(ll)
+                ll = closure_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, closure_nt.temp, fn_slot, 0, "", 0))
+                // Extract fn_ptr from slot 0 and env_ptr from slot 1
                 fn_ptr_nt := _lnew_temp(ll)
                 ll = fn_ptr_nt.l
-                ll = _lemit(ll, new_inst(OpLoad, fn_ptr_nt.temp, fn_slot, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, closure_nt.temp, 0, "_fn", 0))
+                env_ptr_nt := _lnew_temp(ll)
+                ll = env_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, closure_nt.temp, 1, "_env", 0))
                 // Collect args
                 ll = _ladv(ll)  // skip (
                 ll = _lskip_nl(ll)
@@ -1700,11 +1707,36 @@ fn _lower_primary(l: Lowerer) -> LT {
                     if _lk(ll) == "," { ll = _ladv(ll) }
                 }
                 if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Store env_ptr as first arg, then user args follow
+                // We use OpStore to pack: env_ptr at first_arg-1 position
+                // Actually: emit CallIndirect with env_ptr and user args
+                // The function expects (env_ptr, arg0, arg1, ...)
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                mut fa := 0
-                if first_arg >= 0 { fa = first_arg }
-                ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, ic_arg_count, "", fa))
+                mut fa := env_ptr_nt.temp
+                // CallIndirect: fn_ptr, arg_count+1 (including env), first_arg = env_ptr
+                // The user args follow env_ptr in consecutive temps
+                // We need to pack env_ptr + user args into consecutive temps
+                // Simplest: store env_ptr into a temp, then args follow
+                // But args may not be consecutive with env_ptr...
+                // Solution: copy env_ptr and all args into consecutive temps
+                pack_start := _lnew_temp(ll)
+                ll = pack_start.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp, env_ptr_nt.temp, 0, "", 0))
+                mut pack_idx := 1
+                if ic_arg_count > 0 && first_arg >= 0 {
+                    mut ai := 0
+                    while ai < ic_arg_count {
+                        pack_t := _lnew_temp(ll)
+                        ll = pack_t.l
+                        ll = _lemit(ll, new_inst(OpLoad, pack_t.temp, first_arg + ai, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, pack_t.temp, 0, "", 0))
+                        pack_idx = pack_idx + 1
+                        ai = ai + 1
+                    }
+                }
+                total_args := ic_arg_count + 1
+                ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, total_args, "", pack_start.temp))
                 return LT{l: ll, temp: nt.temp}
             }
             // Truly unknown — skip args
@@ -2689,10 +2721,86 @@ fn _lower_closure(l: Lowerer) -> LT {
     saved_env_slots := ll.env_slots
     saved_types := ll.temp_types
 
-    // Create closure function
-    ll = _lset_func(ll, new_ir_func(closure_name, param_count, 1))
+    // Scan for captured variables: identifiers in body that exist in outer env
+    // but are NOT closure parameters
+    mut cap_count := 0
+    mut cap_name_0 := ""
+    mut cap_name_1 := ""
+    mut cap_name_2 := ""
+    mut cap_name_3 := ""
+    mut cap_name_4 := ""
+    mut cap_name_5 := ""
+    mut cap_name_6 := ""
+    mut cap_name_7 := ""
+    mut cap_slot_0 := 0
+    mut cap_slot_1 := 0
+    mut cap_slot_2 := 0
+    mut cap_slot_3 := 0
+    mut cap_slot_4 := 0
+    mut cap_slot_5 := 0
+    mut cap_slot_6 := 0
+    mut cap_slot_7 := 0
+    // Scan body tokens for captures
+    mut scan_pos := body_start
+    while scan_pos < body_end && scan_pos < ll.tokens.len() {
+        stok := ll.tokens[scan_pos]
+        if token_name(stok.kind) == "IDENT" {
+            sname := stok.text
+            // Check if it's in outer env
+            outer_slot := _lenv_lookup(ll, sname)
+            if outer_slot >= 0 {
+                // Check it's not a closure parameter
+                mut is_param := false
+                if param_count > 0 && pname_0 == sname { is_param = true }
+                if param_count > 1 && pname_1 == sname { is_param = true }
+                if param_count > 2 && pname_2 == sname { is_param = true }
+                if param_count > 3 && pname_3 == sname { is_param = true }
+                if is_param == false {
+                    // Check not already captured
+                    mut already := false
+                    if cap_count > 0 && cap_name_0 == sname { already = true }
+                    if cap_count > 1 && cap_name_1 == sname { already = true }
+                    if cap_count > 2 && cap_name_2 == sname { already = true }
+                    if cap_count > 3 && cap_name_3 == sname { already = true }
+                    if cap_count > 4 && cap_name_4 == sname { already = true }
+                    if cap_count > 5 && cap_name_5 == sname { already = true }
+                    if cap_count > 6 && cap_name_6 == sname { already = true }
+                    if cap_count > 7 && cap_name_7 == sname { already = true }
+                    if already == false && cap_count < 8 {
+                        if cap_count == 0 { cap_name_0 = sname }
+                        if cap_count == 0 { cap_slot_0 = outer_slot }
+                        if cap_count == 1 { cap_name_1 = sname }
+                        if cap_count == 1 { cap_slot_1 = outer_slot }
+                        if cap_count == 2 { cap_name_2 = sname }
+                        if cap_count == 2 { cap_slot_2 = outer_slot }
+                        if cap_count == 3 { cap_name_3 = sname }
+                        if cap_count == 3 { cap_slot_3 = outer_slot }
+                        if cap_count == 4 { cap_name_4 = sname }
+                        if cap_count == 4 { cap_slot_4 = outer_slot }
+                        if cap_count == 5 { cap_name_5 = sname }
+                        if cap_count == 5 { cap_slot_5 = outer_slot }
+                        if cap_count == 6 { cap_name_6 = sname }
+                        if cap_count == 6 { cap_slot_6 = outer_slot }
+                        if cap_count == 7 { cap_name_7 = sname }
+                        if cap_count == 7 { cap_slot_7 = outer_slot }
+                        cap_count = cap_count + 1
+                    }
+                }
+            }
+        }
+        scan_pos = scan_pos + 1
+    }
 
-    // Register closure parameters
+    // Create closure function: param_count + 1 (extra env_ptr as first param)
+    actual_params := param_count + 1
+    ll = _lset_func(ll, new_ir_func(closure_name, actual_params, 1))
+
+    // First param is env_ptr
+    env_param := _lnew_temp(ll)
+    ll = env_param.l
+    ll = _lenv_add(ll, "_env", env_param.temp)
+
+    // Register closure parameters (after env_ptr)
     mut pi := 0
     while pi < param_count {
         nt := _lnew_temp(ll)
@@ -2704,6 +2812,27 @@ fn _lower_closure(l: Lowerer) -> LT {
         if pi == 3 { pn = pname_3 }
         ll = _lenv_add(ll, pn, nt.temp)
         pi = pi + 1
+    }
+
+    // Load captured variables from env struct into local temps
+    if cap_count > 0 {
+        mut ci := 0
+        while ci < cap_count {
+            mut cn := ""
+            if ci == 0 { cn = cap_name_0 }
+            if ci == 1 { cn = cap_name_1 }
+            if ci == 2 { cn = cap_name_2 }
+            if ci == 3 { cn = cap_name_3 }
+            if ci == 4 { cn = cap_name_4 }
+            if ci == 5 { cn = cap_name_5 }
+            if ci == 6 { cn = cap_name_6 }
+            if ci == 7 { cn = cap_name_7 }
+            cap_nt := _lnew_temp(ll)
+            ll = cap_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, cap_nt.temp, env_param.temp, ci, "", 0))
+            ll = _lenv_add(ll, cn, cap_nt.temp)
+            ci = ci + 1
+        }
     }
 
     // Lower body
@@ -2728,11 +2857,52 @@ fn _lower_closure(l: Lowerer) -> LT {
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: saved_types}
 
-    // Emit OpFnRef to get function pointer
-    nt := _lnew_temp(ll)
-    ll = nt.l
-    ll = _lemit(ll, new_inst(OpFnRef, nt.temp, 0, 0, closure_name, 0))
-    LT{l: ll, temp: nt.temp}
+    // Build fat pointer: {fn_ptr, env_ptr}
+    // Allocate 2-slot struct
+    fat_nt := _lnew_temp(ll)
+    ll = fat_nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, fat_nt.temp, 2, 0, "_closure", 0))
+
+    // Store fn_ptr at slot 0
+    fnref_nt := _lnew_temp(ll)
+    ll = fnref_nt.l
+    ll = _lemit(ll, new_inst(OpFnRef, fnref_nt.temp, 0, 0, closure_name, 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, fnref_nt.temp, 0, "_fn", 0))
+
+    // Build and store env_ptr at slot 1
+    if cap_count > 0 {
+        // Allocate env struct with cap_count slots
+        env_nt := _lnew_temp(ll)
+        ll = env_nt.l
+        ll = _lemit(ll, new_inst(OpAlloc, env_nt.temp, cap_count, 0, "_env", 0))
+        // Copy captured values into env
+        mut ci := 0
+        while ci < cap_count {
+            mut cs := 0
+            if ci == 0 { cs = cap_slot_0 }
+            if ci == 1 { cs = cap_slot_1 }
+            if ci == 2 { cs = cap_slot_2 }
+            if ci == 3 { cs = cap_slot_3 }
+            if ci == 4 { cs = cap_slot_4 }
+            if ci == 5 { cs = cap_slot_5 }
+            if ci == 6 { cs = cap_slot_6 }
+            if ci == 7 { cs = cap_slot_7 }
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, cs, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, env_nt.temp, val_nt.temp, ci, "", 0))
+            ci = ci + 1
+        }
+        ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, env_nt.temp, 1, "_env", 0))
+    } else {
+        // No captures: store 0 as env_ptr
+        null_nt := _lnew_temp(ll)
+        ll = null_nt.l
+        ll = _lemit(ll, new_inst(OpConst, null_nt.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
+    }
+
+    LT{l: ll, temp: fat_nt.temp}
 }
 
 fn _closure_i2s(n: i64) -> str {
