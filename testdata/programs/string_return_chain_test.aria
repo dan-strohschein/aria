@@ -1,0 +1,62 @@
+// Test string return values flowing through multiple function calls
+fn greet(name: str) -> str = "Hello, " + name + "!"
+
+fn upper_greet(name: str) -> str {
+    g := greet(name)
+    return g
+}
+
+fn format_greeting(name: str, title: str) -> str {
+    prefix := title + " "
+    full_name := prefix + name
+    return greet(full_name)
+}
+
+fn repeat_str(s: str, n: i64) -> str {
+    mut result := ""
+    mut i := 0
+    while i < n {
+        result = result + s
+        i = i + 1
+    }
+    return result
+}
+
+fn join_with(items: [str], sep: str) -> str {
+    mut result := ""
+    mut i := 1
+    while i < items.len() {
+        if i > 1 {
+            result = result + sep
+        }
+        result = result + items[i]
+        i = i + 1
+    }
+    return result
+}
+
+entry {
+    // String through one call
+    assert greet("World") == "Hello, World!"
+
+    // String through two calls
+    assert upper_greet("Alice") == "Hello, Alice!"
+
+    // String built from multiple function results
+    assert format_greeting("Smith", "Dr.") == "Hello, Dr. Smith!"
+
+    // String built in a loop
+    assert repeat_str("ab", 3) == "ababab"
+    assert repeat_str("x", 5) == "xxxxx"
+    assert repeat_str("", 10) == ""
+
+    // Join array of strings
+    mut words := [""]
+    words = words.append("one")
+    words = words.append("two")
+    words = words.append("three")
+    assert join_with(words, ", ") == "one, two, three"
+    assert join_with(words, "-") == "one-two-three"
+
+    println("string_return_chain_test passed")
+}

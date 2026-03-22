@@ -1,0 +1,37 @@
+// Test functions that don't return a value (void/side-effect only)
+mut global_count := 0
+
+fn do_nothing() -> i64 {
+    return 0
+}
+
+fn print_label(label: str, value: i64) -> i64 {
+    println(label + ": " + value.toString())
+    return 0
+}
+
+fn assert_eq(actual: i64, expected: i64, name: str) -> i64 {
+    if actual != expected {
+        println("FAIL " + name + ": expected " + expected.toString() + " got " + actual.toString())
+        assert false
+    }
+    return 0
+}
+
+entry {
+    // Call void-like functions
+    do_nothing()
+    print_label("test", 42)
+
+    // Void function in sequence
+    assert_eq(5, 5, "five")
+    assert_eq(10, 10, "ten")
+    assert_eq(0, 0, "zero")
+
+    // Call sequence
+    do_nothing()
+    do_nothing()
+    do_nothing()
+
+    println("void_func_test passed")
+}

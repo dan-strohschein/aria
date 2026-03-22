@@ -1,0 +1,49 @@
+// Test match expressions that return structs
+struct Point {
+    x: i64
+    y: i64
+}
+
+type Quadrant =
+    | TopRight
+    | TopLeft
+    | BottomRight
+    | BottomLeft
+
+fn quadrant_origin(q: Quadrant) -> Point = match q {
+    TopRight => Point{x: 1, y: 1}
+    TopLeft => Point{x: 0 - 1, y: 1}
+    BottomRight => Point{x: 1, y: 0 - 1}
+    BottomLeft => Point{x: 0 - 1, y: 0 - 1}
+    _ => Point{x: 0, y: 0}
+}
+
+fn scale_point(p: Point, factor: i64) -> Point =
+    Point{x: p.x * factor, y: p.y * factor}
+
+entry {
+    // Match returning struct
+    tr := quadrant_origin(TopRight)
+    assert tr.x == 1
+    assert tr.y == 1
+
+    bl := quadrant_origin(BottomLeft)
+    assert bl.x == 0 - 1
+    assert bl.y == 0 - 1
+
+    // Use match result in further computation
+    p := scale_point(quadrant_origin(TopLeft), 5)
+    assert p.x == 0 - 5
+    assert p.y == 5
+
+    // Match in a conditional
+    q := TopRight
+    r := quadrant_origin(q)
+    if r.x > 0 && r.y > 0 {
+        assert true
+    } else {
+        assert false
+    }
+
+    println("match_struct_test passed")
+}

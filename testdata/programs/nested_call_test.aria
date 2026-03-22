@@ -1,0 +1,29 @@
+// Test deeply nested function calls: f(g(h(x)))
+fn add(a: i64, b: i64) -> i64 = a + b
+fn mul(a: i64, b: i64) -> i64 = a * b
+fn inc(n: i64) -> i64 = n + 1
+fn double(n: i64) -> i64 = n * 2
+fn square(n: i64) -> i64 = n * n
+
+entry {
+    // 3 levels deep
+    assert double(inc(square(3))) == 20
+
+    // 4 levels deep
+    assert inc(double(inc(square(2)))) == 11
+
+    // Nested with multiple args
+    assert add(mul(2, 3), mul(4, 5)) == 26
+
+    // Nested inside nested
+    assert add(add(1, 2), add(3, 4)) == 10
+
+    // Mix of nesting and arithmetic
+    x := add(mul(2, 3), 4)
+    assert x == 10
+
+    // Deep chain
+    assert inc(inc(inc(inc(inc(0))))) == 5
+
+    println("nested_call_test passed")
+}
