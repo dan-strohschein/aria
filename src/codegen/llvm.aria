@@ -201,6 +201,7 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_array_append(i64, i64)" + nl)
     p = p.append("declare i64 @_aria_args_get()" + nl)
     p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_str_to_int(i8*, i64)" + nl)
     p = p.append(nl)
 
     // _aria_panic: print message to stderr and exit(1)
@@ -771,6 +772,32 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrContains" { return _gen_str_binop_returning_i64(g, "@_aria_str_contains", inst, idx) }
     if op == "StrStartsWith" { return _gen_str_binop_returning_i64(g, "@_aria_str_startsWith", inst, idx) }
+
+    if op == "StrToInt" {
+        // Returns {value, success} — we store both to consecutive temps
+        mut gg := g
+        ptr_v := "%sti_p_" + _i2s(idx)
+        len_v := "%sti_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%sti_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        srt := _str_ret_type()
+        res := "%sti_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_to_int(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        // Extract value (field 0) and success (field 1)
+        val := "%sti_val_" + _i2s(idx)
+        suc := "%sti_suc_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = extractvalue " + srt + " " + res + ", 0")
+        gg = _lg_emit(gg, suc + " = extractvalue " + srt + " " + res + ", 1")
+        // Cast ptr back to i64 for the value
+        val_int := "%sti_vi_" + _i2s(idx)
+        gg = _lg_emit(gg, val_int + " = ptrtoint i8* " + val + " to i64")
+        gg = _lg_emit(gg, "store i64 " + val_int + ", i64* " + _t(inst.dest))
+        dest_suc := inst.dest + 1
+        gg = _lg_emit(gg, "store i64 " + suc + ", i64* " + _t(dest_suc))
+        return gg
+    }
 
     if op == "IntToStr" {
         mut gg := g

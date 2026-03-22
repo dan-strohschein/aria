@@ -1,0 +1,33 @@
+// Test type conversions: toStr, .to[T](), .trunc[T]()
+
+entry {
+    // toStr() — integer to string
+    n := 42
+    s := n.toStr()
+    assert s == "42"
+
+    neg := -7
+    s2 := neg.toStr()
+    assert s2 == "-7"
+
+    // .to[i64]() — string to int (checked, returns Result)
+    parsed := "123".to[i64]()!
+    assert parsed == 123
+
+    // .to[i64]() — invalid string returns Err
+    bad := "abc".to[i64]() catch |e| {
+        -1
+    }
+    assert bad == -1
+
+    // .to[i64]() — negative number parsing
+    neg_parsed := "-42".to[i64]()!
+    assert neg_parsed == -42
+
+    // .trunc[i64]() — truncating (pass-through for same-width)
+    big := 999
+    small := big.trunc[i64]()
+    assert small == 999
+
+    println("conversion_test passed")
+}

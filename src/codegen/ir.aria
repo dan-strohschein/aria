@@ -56,6 +56,7 @@ type IrOp =
     | OpStrContains
     | OpStrStartsWith
     | OpIntToStr
+    | OpStrToInt
     | OpJump
     | OpBranchTrue
     | OpBranchFalse
@@ -110,6 +111,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrContains => "StrContains"
     OpStrStartsWith => "StrStartsWith"
     OpIntToStr => "IntToStr"
+    OpStrToInt => "StrToInt"
     OpJump => "Jump"
     OpBranchTrue => "BranchTrue"
     OpBranchFalse => "BranchFalse"

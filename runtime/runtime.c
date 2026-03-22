@@ -122,6 +122,35 @@ struct _aria_str _aria_int_to_str(long value) {
     return s;
 }
 
+// Parse string to integer. Returns {value, 1} on success, {0, 0} on failure.
+struct _aria_str _aria_str_to_int(char *ptr, long len) {
+    if (len == 0) {
+        struct _aria_str s = {0, 0};
+        return s;
+    }
+    long result = 0;
+    long i = 0;
+    long neg = 0;
+    if (ptr[0] == '-') { neg = 1; i = 1; }
+    if (ptr[0] == '+') { i = 1; }
+    if (i >= len) {
+        struct _aria_str s = {0, 0};
+        return s;
+    }
+    while (i < len) {
+        char ch = ptr[i];
+        if (ch < '0' || ch > '9') {
+            struct _aria_str s = {0, 0};
+            return s;
+        }
+        result = result * 10 + (ch - '0');
+        i++;
+    }
+    if (neg) result = -result;
+    struct _aria_str s = {(char *)result, 1};
+    return s;
+}
+
 // --- String operations ---
 
 struct _aria_str _aria_str_concat(char *a_ptr, long a_len, char *b_ptr, long b_len) {

@@ -1537,7 +1537,28 @@ fn _check_expr_full(c: Checker) -> CE {
             } else {
                 field := _ccur(cc).text
                 cc = _cadv(cc)
-                if _ck2(cc) == "(" {
+                if _ck2(cc) == "[" && (field == "to" || field == "trunc") {
+                    // Conversion method: .to[Type]() or .trunc[Type]()
+                    cc = _cadv(cc)  // skip [
+                    mut conv_type := TY_UNKNOWN
+                    if _ck2(cc) == "IDENT" {
+                        ct := _parse_type_ann(cc)
+                        cc = ct.c
+                        conv_type = ct.type_id
+                    }
+                    if _ck2(cc) == "]" { cc = _cadv(cc) }
+                    if _ck2(cc) == "(" { cc = _cadv(cc) }
+                    if _ck2(cc) == ")" { cc = _cadv(cc) }
+                    if field == "to" {
+                        // Checked conversion returns Result[T, ConversionError]
+                        new_st := store_add(cc.store, mk_result_type(conv_type, TY_STR))
+                        cc = _cset_store(cc, new_st)
+                        left_type = store_last_id(cc.store)
+                    } else {
+                        // Truncating conversion returns T directly
+                        left_type = conv_type
+                    }
+                } else if _ck2(cc) == "(" {
                     // Method call
                     mr := _check_method_call(cc, left_type, field)
                     cc = mr.c
@@ -2126,6 +2147,11 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
         if _ck2(cc) == "," { cc = _cadv(cc) }
     }
     if _ck2(cc) == ")" { cc = _cadv(cc) }
+
+    // Conversion methods
+    if method == "toStr" || method == "toString" {
+        return CE{c: cc, type_id: TY_STR}
+    }
 
     // Built-in method return types
     if method == "len" { return CE{c: cc, type_id: TY_I64} }
