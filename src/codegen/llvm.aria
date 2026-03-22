@@ -377,7 +377,8 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         if op != "FieldGet" && op != "FieldSet" && op != "ConstStr" && op != "Call" &&
            op != "CallIndirect" && op != "FnRef" &&
            op != "BranchTrue" && op != "BranchFalse" && op != "Nop" && op != "Const" &&
-           op != "Alloc" && op != "Jump" && op != "Label" {
+           op != "Alloc" && op != "Jump" && op != "Label" &&
+           op != "TraitObject" && op != "VtableCall" {
             if inst.arg2 > max_temp { max_temp = inst.arg2 }
         }
         ti = ti + 1
@@ -711,6 +712,66 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         ptr := "%alloc_ptr_" + _i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    // TraitObject: create a fat pointer (data_ptr, vtable_ptr)
+    // dest = result, arg1 = data_ptr temp, arg2 = vtable_ptr temp
+    if op == "TraitObject" {
+        mut gg := g
+        // Allocate 2-slot struct for trait object
+        raw := "%to_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 16)")
+        ptr := "%to_ptr_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr + " = bitcast i8* " + raw + " to i64*")
+        // Store data_ptr in slot 0
+        d0 := "%to_d0_" + _i2s(idx)
+        gg = _lg_emit(gg, d0 + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "store i64 " + d0 + ", i64* " + ptr)
+        // Store vtable_ptr in slot 1
+        gep1 := "%to_gep1_" + _i2s(idx)
+        gg = _lg_emit(gg, gep1 + " = getelementptr i64, i64* " + ptr + ", i64 1")
+        v1 := "%to_v1_" + _i2s(idx)
+        gg = _lg_emit(gg, v1 + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, "store i64 " + v1 + ", i64* " + gep1)
+        // Store pointer as result
+        res := "%to_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = ptrtoint i64* " + ptr + " to i64")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    // VtableCall: call method via vtable
+    // dest = result, arg1 = trait_object temp, arg2 = method index
+    // name = method name (for debugging), type_id = arg count
+    if op == "VtableCall" {
+        mut gg := g
+        // Load trait object pointer
+        to_ptr := "%vc_to_" + _i2s(idx)
+        gg = _lg_emit(gg, to_ptr + " = load i64, i64* " + _t(inst.arg1))
+        to_raw := "%vc_to_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, to_raw + " = inttoptr i64 " + to_ptr + " to i64*")
+        // Load data_ptr from slot 0
+        data_ptr := "%vc_data_" + _i2s(idx)
+        gg = _lg_emit(gg, data_ptr + " = load i64, i64* " + to_raw)
+        // Load vtable_ptr from slot 1
+        vt_gep := "%vc_vt_gep_" + _i2s(idx)
+        gg = _lg_emit(gg, vt_gep + " = getelementptr i64, i64* " + to_raw + ", i64 1")
+        vt_ptr := "%vc_vt_" + _i2s(idx)
+        gg = _lg_emit(gg, vt_ptr + " = load i64, i64* " + vt_gep)
+        vt_raw := "%vc_vt_raw_" + _i2s(idx)
+        gg = _lg_emit(gg, vt_raw + " = inttoptr i64 " + vt_ptr + " to i64*")
+        // Load fn_ptr from vtable[method_index]
+        fn_gep := "%vc_fn_gep_" + _i2s(idx)
+        gg = _lg_emit(gg, fn_gep + " = getelementptr i64, i64* " + vt_raw + ", i64 " + _i2s(inst.arg2))
+        fn_ptr := "%vc_fn_" + _i2s(idx)
+        gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + fn_gep)
+        // Cast to function pointer and call with data_ptr as self
+        fn_cast := "%vc_cast_" + _i2s(idx)
+        gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
+        result := "%vc_result_" + _i2s(idx)
+        gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + data_ptr + ")")
+        gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         return gg
     }
 

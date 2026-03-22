@@ -74,6 +74,8 @@ type IrOp =
     | OpBranchTrue
     | OpBranchFalse
     | OpLabel
+    | OpTraitObject
+    | OpVtableCall
     | OpNop
 
 fn ir_op_name(op: IrOp) -> str = match op {
@@ -142,6 +144,8 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpBranchTrue => "BranchTrue"
     OpBranchFalse => "BranchFalse"
     OpLabel => "Label"
+    OpTraitObject => "TraitObject"
+    OpVtableCall => "VtableCall"
     OpNop => "Nop"
 }
 

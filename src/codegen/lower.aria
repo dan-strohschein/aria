@@ -1138,6 +1138,34 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
         return result.l
     }
     if k == "assert" { return _lower_assert(l) }
+    if k == "with" {
+        // with expr { body } — resource block
+        // Check if this is effect clause (with [...]) or resource block
+        mut ll := _ladv(l)  // skip with
+        if _lk(ll) != "[" {
+            // Resource block: lower resource expr, lower body, emit drop at end
+            resource := _lower_expr(ll)
+            ll = resource.l
+            // Lower body block
+            ll = _lower_block(ll)
+            // Emit drop for the resource if it has a drop method
+            obj_type := _lget_type(ll, resource.temp)
+            sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+            if sname != "" {
+                drop_fn := sname + "_drop"
+                drop_sig := reg_find_fn(ll.registry, drop_fn)
+                if drop_sig.name != "" {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpCall, nt.temp, resource.temp, 1, drop_fn, 0))
+                }
+            }
+            return ll
+        }
+        // Otherwise it's effect clause — skip (handled by checker, not lowerer)
+        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        return ll
+    }
     if k == "defer" {
         mut ll := _ladv(l)  // skip defer
         // Save the token position of the deferred expression
@@ -3713,6 +3741,23 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    // Check for trait object dispatch (dyn Trait)
+    dyn_obj_type := _lget_type(ll, obj)
+    if dyn_obj_type == 500 {
+        // Trait object — dispatch via vtable
+        // The type_id 500 is our marker for trait objects
+        // Look up the method index in the trait's method_names
+        // For now, use the method name stored in the lowerer's type tracking
+        // Skip args
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        // Emit VtableCall: arg1=trait_object, arg2=method_index(0 for first method)
+        ll = _lemit(ll, new_inst(OpVtableCall, nt.temp, obj, 0, method, 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
     // Try user-defined method: qualified name first (Type_method), then plain name
     // Determine object type for qualified lookup
     obj_type := _lget_type(ll, obj)
@@ -4832,8 +4877,10 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
 
 // Emit deferred expressions in reverse order (LIFO)
 fn _emit_defers(l: Lowerer) -> Lowerer {
-    if l.defer_count == 0 { return l }
     mut ll := l
+    // Emit drop calls for bindings whose types implement Drop (reverse order)
+    ll = _emit_drops(ll)
+    if ll.defer_count == 0 { return ll }
     // Emit in reverse order: last defer first
     mut di := ll.defer_count - 1
     while di >= 0 {
@@ -4855,6 +4902,32 @@ fn _emit_defers(l: Lowerer) -> Lowerer {
             ll = _lset_pos(ll, saved_pos)
         }
         di = di - 1
+    }
+    ll
+}
+
+// Emit drop calls for bindings with Drop-implementing types
+fn _emit_drops(l: Lowerer) -> Lowerer {
+    mut ll := l
+    // Walk bindings in reverse order (LIFO destruction order)
+    mut i := ll.env_names.len() - 1
+    while i > 0 {
+        name := ll.env_names[i]
+        slot := ll.env_slots[i]
+        // Check if this binding's type has a drop function
+        obj_type := _lget_type(ll, slot)
+        sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+        if sname != "" {
+            drop_fn := sname + "_drop"
+            drop_sig := reg_find_fn(ll.registry, drop_fn)
+            if drop_sig.name != "" {
+                // Emit: TypeName_drop(binding)
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, slot, 1, drop_fn, 0))
+            }
+        }
+        i = i - 1
     }
     ll
 }

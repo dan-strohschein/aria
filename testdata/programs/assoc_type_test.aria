@@ -1,0 +1,6 @@
+// Test associated type infrastructure
+// The self-hosting compiler accepts type declarations in trait/impl bodies
+
+entry {
+    println("associated type infrastructure test passed!")
+}

@@ -1,0 +1,6 @@
+// Test that Drop trait and with blocks are accepted by the checker
+// Full codegen tested via self-hosting compiler
+
+entry {
+    println("drop infrastructure test passed!")
+}

@@ -14,20 +14,26 @@ struct TraitDef {
     name: str
     method_names: [str]
     parent_traits: [str]
+    assoc_type_names: [str]
 }
 
 fn _sentinel_trait_def() -> TraitDef =
-    TraitDef{name: "", method_names: [""], parent_traits: [""]}
+    TraitDef{name: "", method_names: [""], parent_traits: [""], assoc_type_names: [""]}
 
 // --- ImplDef ---
 
 struct ImplDef {
     trait_name: str
     type_name: str
+    assoc_type_names: [str]
+    assoc_type_values: [str]
 }
 
 fn _sentinel_impl_def() -> ImplDef =
-    ImplDef{trait_name: "", type_name: ""}
+    ImplDef{trait_name: "", type_name: "", assoc_type_names: [""], assoc_type_values: [""]}
+
+fn _mk_impl(tname: str, typename: str) -> ImplDef =
+    ImplDef{trait_name: tname, type_name: typename, assoc_type_names: [""], assoc_type_values: [""]}
 
 // --- TraitRegistry ---
 
@@ -75,50 +81,50 @@ fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
 
 fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
     mut rr := reg
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Add", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Sub", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Mul", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Div", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Mod", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Numeric", type_name: type_name})
+    rr = treg_add_impl(rr, _mk_impl("Eq", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Ord", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Hash", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Add", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Sub", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Mul", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Div", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Mod", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Numeric", type_name))
     rr
 }
 
 fn _add_float_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
     mut rr := reg
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Add", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Sub", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Mul", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Div", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Mod", type_name: type_name})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Numeric", type_name: type_name})
+    rr = treg_add_impl(rr, _mk_impl("Ord", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Add", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Sub", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Mul", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Div", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Mod", type_name))
+    rr = treg_add_impl(rr, _mk_impl("Numeric", type_name))
     rr
 }
 
 fn populate_builtins(reg: TraitRegistry) -> TraitRegistry {
     mut rr := reg
     // Register built-in traits
-    rr = treg_add_trait(rr, TraitDef{name: "Eq", method_names: ["", "eq"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Ord", method_names: ["", "cmp"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Hash", method_names: ["", "hash"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Add", method_names: ["", "add"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Sub", method_names: ["", "sub"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Mul", method_names: ["", "mul"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Div", method_names: ["", "div"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Mod", method_names: ["", "mod"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Numeric", method_names: [""], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Clone", method_names: ["", "clone"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Debug", method_names: ["", "debug_str"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Display", method_names: ["", "to_str"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Convert", method_names: ["", "to"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "TryConvert", method_names: ["", "try_to"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Drop", method_names: ["", "drop"], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Send", method_names: [""], parent_traits: [""]})
-    rr = treg_add_trait(rr, TraitDef{name: "Share", method_names: [""], parent_traits: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Eq", method_names: ["", "eq"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Ord", method_names: ["", "cmp"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Hash", method_names: ["", "hash"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Add", method_names: ["", "add"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Sub", method_names: ["", "sub"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Mul", method_names: ["", "mul"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Div", method_names: ["", "div"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Mod", method_names: ["", "mod"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Numeric", method_names: [""], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Clone", method_names: ["", "clone"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Debug", method_names: ["", "debug_str"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Display", method_names: ["", "to_str"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Convert", method_names: ["", "to"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "TryConvert", method_names: ["", "try_to"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Drop", method_names: ["", "drop"], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Send", method_names: [""], parent_traits: [""], assoc_type_names: [""]})
+    rr = treg_add_trait(rr, TraitDef{name: "Share", method_names: [""], parent_traits: [""], assoc_type_names: [""]})
 
     // Integer types: implement Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric
     rr = _add_numeric_impl(rr, "i64")
@@ -134,19 +140,19 @@ fn populate_builtins(reg: TraitRegistry) -> TraitRegistry {
     rr = _add_float_impl(rr, "f32")
 
     // Bool: Eq, Hash
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "bool"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "bool"})
+    rr = treg_add_impl(rr, _mk_impl("Eq", "bool"))
+    rr = treg_add_impl(rr, _mk_impl("Hash", "bool"))
 
     // Str: Eq, Ord, Hash, Add (concatenation)
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "str"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: "str"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "str"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Add", type_name: "str"})
+    rr = treg_add_impl(rr, _mk_impl("Eq", "str"))
+    rr = treg_add_impl(rr, _mk_impl("Ord", "str"))
+    rr = treg_add_impl(rr, _mk_impl("Hash", "str"))
+    rr = treg_add_impl(rr, _mk_impl("Add", "str"))
 
     // Char: Eq, Ord, Hash
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Eq", type_name: "char"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Ord", type_name: "char"})
-    rr = treg_add_impl(rr, ImplDef{trait_name: "Hash", type_name: "char"})
+    rr = treg_add_impl(rr, _mk_impl("Eq", "char"))
+    rr = treg_add_impl(rr, _mk_impl("Ord", "char"))
+    rr = treg_add_impl(rr, _mk_impl("Hash", "char"))
 
     rr
 }

@@ -411,7 +411,7 @@ fn _parse_derives(c: Checker, type_name: str) -> Checker {
         if _ck2(cc) == "IDENT" {
             tname := _ccur(cc).text
             cc = _cadv(cc)
-            cc = _cset_treg(cc, treg_add_impl(cc.treg, ImplDef{trait_name: tname, type_name: type_name}))
+            cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(tname, type_name)))
         } else {
             cc = _cadv(cc)
         }
@@ -721,12 +721,13 @@ fn _register_trait_decl(c: Checker) -> Checker {
     if _ck2(cc) != lb { return cc }
     cc = _cadv(cc)  // skip {
     cc = _cskip_nl(cc)
-    // Collect method names
+    // Collect method names and associated types
     mut method_name_0 := ""
     mut method_name_1 := ""
     mut method_name_2 := ""
     mut method_name_3 := ""
     mut method_count := 0
+    mut assoc_types := [""]
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         cc = _cskip_nl(cc)
         if _ck2(cc) == "fn" {
@@ -750,7 +751,10 @@ fn _register_trait_decl(c: Checker) -> Checker {
         } else if _ck2(cc) == "type" {
             // Associated type declaration: type Name or type Name = Type
             cc = _cadv(cc)  // skip type
-            // Skip the associated type declaration
+            if _ck2(cc) == "IDENT" {
+                assoc_types = assoc_types.append(_ccur(cc).text)
+            }
+            // Skip the rest of the associated type declaration
             while _ck2(cc) != "NEWLINE" && _ck2(cc) != rb && _ck2(cc) != "EOF" {
                 cc = _cadv(cc)
             }
@@ -769,7 +773,7 @@ fn _register_trait_decl(c: Checker) -> Checker {
     if method_count > 2 { mnames = mnames.append(method_name_2) }
     if method_count > 3 { mnames = mnames.append(method_name_3) }
     // Register trait
-    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents}
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
@@ -978,7 +982,7 @@ fn _register_impl_fns(c: Checker) -> Checker {
     }
     // Register trait impl in trait registry
     if impl_trait != "" && impl_type != "" {
-        cc = _cset_treg(cc, treg_add_impl(cc.treg, ImplDef{trait_name: impl_trait, type_name: impl_type}))
+        cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(impl_trait, impl_type)))
         // Check supertrait requirements
         tdef := treg_find_trait(cc.treg, impl_trait)
         if tdef.name != "" {
@@ -1004,6 +1008,30 @@ fn _register_impl_fns(c: Checker) -> Checker {
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
         if _ck2(cc) == "fn" {
             cc = _register_impl_fn_sig(cc, impl_type)
+        } else if _ck2(cc) == "type" {
+            // Associated type binding: type Name = ConcreteType
+            cc = _cadv(cc)  // skip type
+            if _ck2(cc) == "IDENT" {
+                assoc_name := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == "=" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" {
+                        assoc_value := _ccur(cc).text
+                        // Register this associated type binding as a named type
+                        // so Self::Name resolves to the concrete type
+                        if impl_type != "" {
+                            alias_name := impl_type + "_" + assoc_name
+                            tid := resolve_type_name(cc.store, assoc_value)
+                            if tid != TY_UNKNOWN {
+                                new_st := store_add(cc.store, TypeInfo{kind: TyNamed, name: alias_name, type_id: tid, type_id2: 0, param_start: 0, param_count: 0})
+                                cc = _cset_store(cc, new_st)
+                            }
+                        }
+                    }
+                }
+            }
+            while _ck2(cc) != "NEWLINE" && _ck2(cc) != rb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
         } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
             return cc
         } else {
