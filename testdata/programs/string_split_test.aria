@@ -1,0 +1,67 @@
+// Test new string methods: split, trim, indexOf, replace, endsWith, toLower, toUpper
+entry {
+    // trim
+    s1 := "  hello  "
+    assert s1.trim() == "hello"
+    assert "nowhitespace".trim() == "nowhitespace"
+    assert "".trim() == ""
+    println("trim ok")
+
+    // indexOf
+    s := "hello world"
+    assert s.indexOf("world") == 6
+    assert s.indexOf("hello") == 0
+    assert s.indexOf("xyz") == -1
+    assert s.indexOf("o") == 4
+    println("indexOf ok")
+
+    // endsWith
+    assert s.endsWith("world") == true
+    assert s.endsWith("hello") == false
+    assert s.endsWith("d") == true
+    println("endsWith ok")
+
+    // replace
+    r1 := "hello world".replace("world", "aria")
+    assert r1 == "hello aria"
+    r2 := "aaa".replace("a", "bb")
+    assert r2 == "bbbbbb"
+    r3 := "no match".replace("xyz", "abc")
+    assert r3 == "no match"
+    println("replace ok")
+
+    // toLower / toUpper
+    assert "HELLO".toLower() == "hello"
+    assert "Hello World".toLower() == "hello world"
+    assert "hello".toUpper() == "HELLO"
+    assert "Hello World".toUpper() == "HELLO WORLD"
+    println("case ok")
+
+    // split — arrays have sentinel at index 0, so len includes sentinel
+    parts := "a,b,c".split(",")
+    assert parts[1] == "a"
+    assert parts[2] == "b"
+    assert parts[3] == "c"
+    println("split1 ok")
+
+    parts2 := "hello world foo".split(" ")
+    assert parts2[1] == "hello"
+    assert parts2[2] == "world"
+    assert parts2[3] == "foo"
+    println("split2 ok")
+
+    parts3 := "nosplit".split(",")
+    assert parts3[1] == "nosplit"
+    println("split3 ok")
+
+    // split + for iteration
+    mut joined := ""
+    sp := "x-y-z".split("-")
+    for p in sp {
+        joined = joined + p
+    }
+    assert joined == "xyz"
+    println("split_iter ok")
+
+    println("string_split_test passed")
+}

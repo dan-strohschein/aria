@@ -1,0 +1,46 @@
+// Test TCP echo server — binds, listens, handles one connection via fork
+// We test by having the parent process connect to itself via _ariaExec
+
+entry {
+    // Create server socket
+    server := _ariaTcpSocket()
+    assert server >= 0
+
+    // Bind to port 18080 on localhost
+    br := _ariaTcpBind(server, "127.0.0.1", 18080)
+    assert br == 0
+
+    // Listen
+    lr := _ariaTcpListen(server, 5)
+    assert lr == 0
+    println("server listening on 127.0.0.1:18080")
+
+    // Spawn a background client that sends data after a short delay
+    // Uses curl or nc to send data to our server
+    _ariaExec("(sleep 0.1 && echo 'hello from client' | nc -w1 127.0.0.1 18080) &")
+
+    // Accept one connection
+    client := _ariaTcpAccept(server)
+    assert client >= 0
+    println("accepted connection")
+
+    // Read data
+    data := _ariaTcpRead(client, 4096)
+    println("received: " + data.trim())
+
+    // Send response
+    response := "echo: " + data.trim()
+    wr := _ariaTcpWrite(client, response)
+    assert wr > 0
+    println("sent response")
+
+    // Get peer address
+    peer := _ariaTcpPeerAddr(client)
+    println("peer: " + peer)
+
+    // Cleanup
+    _ariaTcpClose(client)
+    _ariaTcpClose(server)
+
+    println("tcp_echo_test passed")
+}

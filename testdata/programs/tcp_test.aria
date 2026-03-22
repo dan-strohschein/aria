@@ -1,0 +1,28 @@
+// Test TCP networking primitives
+entry {
+    // Test getenv
+    home := _ariaGetenv("HOME")
+    assert home.len() > 0
+    println("getenv ok: HOME=" + home)
+
+    // Test socket creation
+    fd := _ariaTcpSocket()
+    assert fd >= 0
+    println("socket ok: fd=" + fd.toStr())
+
+    // Test bind to ephemeral port
+    result := _ariaTcpBind(fd, "127.0.0.1", 0)
+    assert result == 0
+    println("bind ok")
+
+    // Test listen
+    lr := _ariaTcpListen(fd, 5)
+    assert lr == 0
+    println("listen ok")
+
+    // Close server socket
+    _ariaTcpClose(fd)
+    println("close ok")
+
+    println("tcp_test passed")
+}

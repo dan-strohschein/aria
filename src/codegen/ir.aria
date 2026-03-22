@@ -55,6 +55,13 @@ type IrOp =
     | OpStrSubstring
     | OpStrContains
     | OpStrStartsWith
+    | OpStrEndsWith
+    | OpStrIndexOf
+    | OpStrTrim
+    | OpStrReplace
+    | OpStrToLower
+    | OpStrToUpper
+    | OpStrSplit
     | OpIntToStr
     | OpStrToInt
     | OpMapNew
@@ -116,6 +123,13 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrSubstring => "StrSubstring"
     OpStrContains => "StrContains"
     OpStrStartsWith => "StrStartsWith"
+    OpStrEndsWith => "StrEndsWith"
+    OpStrIndexOf => "StrIndexOf"
+    OpStrTrim => "StrTrim"
+    OpStrReplace => "StrReplace"
+    OpStrToLower => "StrToLower"
+    OpStrToUpper => "StrToUpper"
+    OpStrSplit => "StrSplit"
     OpIntToStr => "IntToStr"
     OpStrToInt => "StrToInt"
     OpMapNew => "MapNew"

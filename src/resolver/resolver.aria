@@ -177,6 +177,18 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaWriteBinaryFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaArgs", SkBuiltin)
     rr = _add_builtin(rr, "_ariaExec", SkBuiltin)
+    // Environment
+    rr = _add_builtin(rr, "_ariaGetenv", SkBuiltin)
+    // TCP networking
+    rr = _add_builtin(rr, "_ariaTcpSocket", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpBind", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpListen", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpAccept", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpRead", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpWrite", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpClose", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpPeerAddr", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpSetTimeout", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)

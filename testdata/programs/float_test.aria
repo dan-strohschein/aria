@@ -1,0 +1,45 @@
+// Test floating point support
+entry {
+    // Basic arithmetic
+    x := 3.14
+    y := 2.0
+    z := x + y
+    d := x - y
+    m := x * y
+    q := 10.0 / 3.0
+    println("float arith ok")
+
+    // Comparisons
+    assert 1.0 < 2.0
+    assert 2.0 > 1.0
+    assert 1.0 <= 1.0
+    assert 1.0 >= 1.0
+    assert 1.0 == 1.0
+    assert 1.0 != 2.0
+    println("float cmp ok")
+
+    // Negation
+    n := -3.14
+    assert n < 0.0
+    println("float neg ok")
+
+    // Float to string
+    s := 3.14.toStr()
+    println(s)
+    println("float toStr ok")
+
+    // Float in conditions
+    val := 2.5
+    if val > 1.0 {
+        println("float if ok")
+    }
+
+    // Float reassignment
+    mut acc := 0.0
+    acc = acc + 1.5
+    acc = acc + 2.5
+    assert acc == 4.0
+    println("float reassign ok")
+
+    println("float_test passed")
+}

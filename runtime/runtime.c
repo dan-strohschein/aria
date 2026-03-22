@@ -9,6 +9,18 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+// --- String struct (used by many functions) ---
+struct _aria_str {
+    char *ptr;
+    long len;
+};
+
+// --- Forward declarations ---
+long _aria_array_new(long capacity);
+long _aria_array_append(long arr_ptr, long value);
+void _aria_map_set(long map_ptr, long key_ptr, long key_len, long value);
+long _aria_map_get(long map_ptr, long key_ptr, long key_len);
+
 // --- Exit ---
 
 void _aria_exit(long code) {
@@ -46,12 +58,6 @@ void _aria_memcpy(char *dst, char *src, long len) {
 }
 
 // --- File I/O ---
-
-// Returns {char* ptr, long len} as a struct in registers (ARM64: X0, X1)
-struct _aria_str {
-    char *ptr;
-    long len;
-};
 
 struct _aria_str _aria_read_file(char *path_ptr, long path_len) {
     // Null-terminate the path
@@ -151,6 +157,19 @@ struct _aria_str _aria_str_to_int(char *ptr, long len) {
     return s;
 }
 
+// --- Float to string ---
+
+struct _aria_str _aria_float_to_str(long bits) {
+    double value;
+    memcpy(&value, &bits, sizeof(double));
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%g", value);
+    char *result = (char *)malloc((size_t)(len + 1));
+    memcpy(result, buf, (size_t)(len + 1));
+    struct _aria_str s = {result, (long)len};
+    return s;
+}
+
 // --- String operations ---
 
 struct _aria_str _aria_str_concat(char *a_ptr, long a_len, char *b_ptr, long b_len) {
@@ -216,6 +235,174 @@ long _aria_str_startsWith(char *str_ptr, long str_len,
                           char *prefix_ptr, long prefix_len) {
     if (prefix_len > str_len) return 0;
     return memcmp(str_ptr, prefix_ptr, (size_t)prefix_len) == 0 ? 1 : 0;
+}
+
+long _aria_str_endsWith(char *str_ptr, long str_len,
+                        char *suffix_ptr, long suffix_len) {
+    if (suffix_len > str_len) return 0;
+    return memcmp(str_ptr + str_len - suffix_len, suffix_ptr, (size_t)suffix_len) == 0 ? 1 : 0;
+}
+
+long _aria_str_indexOf(char *str_ptr, long str_len,
+                       char *sub_ptr, long sub_len) {
+    if (sub_len == 0) return 0;
+    if (sub_len > str_len) return -1;
+    for (long i = 0; i <= str_len - sub_len; i++) {
+        if (memcmp(str_ptr + i, sub_ptr, (size_t)sub_len) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+struct _aria_str _aria_str_trim(char *ptr, long len) {
+    long start = 0;
+    long end = len;
+    while (start < end && (ptr[start] == ' ' || ptr[start] == '\t' || ptr[start] == '\n' || ptr[start] == '\r')) {
+        start++;
+    }
+    while (end > start && (ptr[end - 1] == ' ' || ptr[end - 1] == '\t' || ptr[end - 1] == '\n' || ptr[end - 1] == '\r')) {
+        end--;
+    }
+    long new_len = end - start;
+    if (new_len == 0) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    char *result = (char *)malloc((size_t)(new_len + 1));
+    memcpy(result, ptr + start, (size_t)new_len);
+    result[new_len] = '\0';
+    struct _aria_str s = {result, new_len};
+    return s;
+}
+
+struct _aria_str _aria_str_replace(char *ptr, long len,
+                                   char *old_ptr, long old_len,
+                                   char *new_ptr, long new_len) {
+    if (old_len == 0) {
+        char *result = (char *)malloc((size_t)(len + 1));
+        memcpy(result, ptr, (size_t)len);
+        result[len] = '\0';
+        struct _aria_str s = {result, len};
+        return s;
+    }
+    long count = 0;
+    for (long i = 0; i <= len - old_len; i++) {
+        if (memcmp(ptr + i, old_ptr, (size_t)old_len) == 0) {
+            count++;
+            i += old_len - 1;
+        }
+    }
+    if (count == 0) {
+        char *result = (char *)malloc((size_t)(len + 1));
+        memcpy(result, ptr, (size_t)len);
+        result[len] = '\0';
+        struct _aria_str s = {result, len};
+        return s;
+    }
+    long result_len = len + count * (new_len - old_len);
+    char *result = (char *)malloc((size_t)(result_len + 1));
+    long ri = 0;
+    long i = 0;
+    while (i < len) {
+        if (i <= len - old_len && memcmp(ptr + i, old_ptr, (size_t)old_len) == 0) {
+            memcpy(result + ri, new_ptr, (size_t)new_len);
+            ri += new_len;
+            i += old_len;
+        } else {
+            result[ri++] = ptr[i++];
+        }
+    }
+    result[result_len] = '\0';
+    struct _aria_str s = {result, result_len};
+    return s;
+}
+
+struct _aria_str _aria_str_toLower(char *ptr, long len) {
+    char *result = (char *)malloc((size_t)(len + 1));
+    for (long i = 0; i < len; i++) {
+        char c = ptr[i];
+        if (c >= 'A' && c <= 'Z') c = c + 32;
+        result[i] = c;
+    }
+    result[len] = '\0';
+    struct _aria_str s = {result, len};
+    return s;
+}
+
+struct _aria_str _aria_str_toUpper(char *ptr, long len) {
+    char *result = (char *)malloc((size_t)(len + 1));
+    for (long i = 0; i < len; i++) {
+        char c = ptr[i];
+        if (c >= 'a' && c <= 'z') c = c - 32;
+        result[i] = c;
+    }
+    result[len] = '\0';
+    struct _aria_str s = {result, len};
+    return s;
+}
+
+long _aria_str_split(char *ptr, long len, char *delim_ptr, long delim_len) {
+    long arr = _aria_array_new(8);
+    // Sentinel: empty string struct (safe to dereference)
+    long *sentinel_str = (long *)malloc(16);
+    sentinel_str[0] = (long)"";
+    sentinel_str[1] = 0;
+    _aria_array_append(arr, (long)sentinel_str);
+
+    if (delim_len == 0) {
+        long *str_struct = (long *)malloc(16);
+        str_struct[0] = (long)ptr;
+        str_struct[1] = len;
+        _aria_array_append(arr, (long)str_struct);
+        return arr;
+    }
+
+    long start = 0;
+    long i = 0;
+    while (i <= len - delim_len) {
+        if (memcmp(ptr + i, delim_ptr, (size_t)delim_len) == 0) {
+            long sub_len = i - start;
+            char *sub = (char *)malloc((size_t)(sub_len + 1));
+            memcpy(sub, ptr + start, (size_t)sub_len);
+            sub[sub_len] = '\0';
+            long *str_struct = (long *)malloc(16);
+            str_struct[0] = (long)sub;
+            str_struct[1] = sub_len;
+            _aria_array_append(arr, (long)str_struct);
+            i += delim_len;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    long sub_len = len - start;
+    char *sub = (char *)malloc((size_t)(sub_len + 1));
+    memcpy(sub, ptr + start, (size_t)sub_len);
+    sub[sub_len] = '\0';
+    long *str_struct = (long *)malloc(16);
+    str_struct[0] = (long)sub;
+    str_struct[1] = sub_len;
+    _aria_array_append(arr, (long)str_struct);
+    return arr;
+}
+
+void _aria_map_set_str(long map_ptr, long key_ptr, long key_len, long val_ptr, long val_len) {
+    long *pair = (long *)malloc(16);
+    pair[0] = val_ptr;
+    pair[1] = val_len;
+    _aria_map_set(map_ptr, key_ptr, key_len, (long)pair);
+}
+
+struct _aria_str _aria_map_get_str(long map_ptr, long key_ptr, long key_len) {
+    long val = _aria_map_get(map_ptr, key_ptr, key_len);
+    if (val == 0) {
+        struct _aria_str s = {NULL, 0};
+        return s;
+    }
+    long *pair = (long *)val;
+    struct _aria_str s = {(char *)pair[0], pair[1]};
+    return s;
 }
 
 // --- Array operations ---
@@ -483,6 +670,139 @@ long _aria_exec(char *cmd_ptr, long cmd_len) {
     if (ret == -1) return 1;
     // system() returns the exit status shifted
     return (long)(ret >> 8);  // WEXITSTATUS equivalent
+}
+
+// --- Environment ---
+
+struct _aria_str _aria_getenv(char *name_ptr, long name_len) {
+    char *name = (char *)malloc((size_t)(name_len + 1));
+    memcpy(name, name_ptr, (size_t)name_len);
+    name[name_len] = '\0';
+    char *val = getenv(name);
+    free(name);
+    if (val == NULL) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    long vlen = (long)strlen(val);
+    char *result = (char *)malloc((size_t)(vlen + 1));
+    memcpy(result, val, (size_t)(vlen + 1));
+    struct _aria_str s = {result, vlen};
+    return s;
+}
+
+// --- TCP Networking ---
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
+// Create a TCP socket. Returns fd or -1 on error.
+long _aria_tcp_socket(void) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    // Enable SO_REUSEADDR to avoid "address already in use"
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    return (long)fd;
+}
+
+// Bind socket to address:port. Returns 0 on success, -1 on error.
+long _aria_tcp_bind(long fd, char *addr_ptr, long addr_len, long port) {
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port);
+
+    if (addr_len == 0 || (addr_len == 7 && memcmp(addr_ptr, "0.0.0.0", 7) == 0)) {
+        sa.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        char *addr = (char *)malloc((size_t)(addr_len + 1));
+        memcpy(addr, addr_ptr, (size_t)addr_len);
+        addr[addr_len] = '\0';
+        if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
+            free(addr);
+            return -1;
+        }
+        free(addr);
+    }
+
+    if (bind((int)fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) return -1;
+    return 0;
+}
+
+// Listen for connections. Returns 0 on success, -1 on error.
+long _aria_tcp_listen(long fd, long backlog) {
+    if (listen((int)fd, (int)backlog) < 0) return -1;
+    return 0;
+}
+
+// Accept a connection. Returns new client fd or -1 on error.
+long _aria_tcp_accept(long fd) {
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int client_fd = accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+    if (client_fd < 0) return -1;
+    return (long)client_fd;
+}
+
+// Read from socket. Returns {ptr, len} or {NULL, 0} on error/closed.
+struct _aria_str _aria_tcp_read(long fd, long max_len) {
+    char *buf = (char *)malloc((size_t)(max_len + 1));
+    ssize_t n = read((int)fd, buf, (size_t)max_len);
+    if (n <= 0) {
+        free(buf);
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    buf[n] = '\0';
+    struct _aria_str s = {buf, (long)n};
+    return s;
+}
+
+// Write to socket. Returns bytes written or -1 on error.
+long _aria_tcp_write(long fd, char *ptr, long len) {
+    ssize_t total = 0;
+    while (total < len) {
+        ssize_t n = write((int)fd, ptr + total, (size_t)(len - total));
+        if (n <= 0) return -1;
+        total += n;
+    }
+    return (long)total;
+}
+
+// Close socket.
+void _aria_tcp_close(long fd) {
+    close((int)fd);
+}
+
+// Get peer address as string. Returns "ip:port".
+struct _aria_str _aria_tcp_peer_addr(long fd) {
+    struct sockaddr_in sa;
+    socklen_t sa_len = sizeof(sa);
+    if (getpeername((int)fd, (struct sockaddr *)&sa, &sa_len) < 0) {
+        struct _aria_str s = {"unknown", 7};
+        return s;
+    }
+    char buf[64];
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &sa.sin_addr, ip, sizeof(ip));
+    int len = snprintf(buf, sizeof(buf), "%s:%d", ip, ntohs(sa.sin_port));
+    char *result = (char *)malloc((size_t)(len + 1));
+    memcpy(result, buf, (size_t)(len + 1));
+    struct _aria_str s = {result, (long)len};
+    return s;
+}
+
+// Set socket timeout in milliseconds. kind: 0=recv, 1=send
+long _aria_tcp_set_timeout(long fd, long kind, long ms) {
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    int opt = (kind == 0) ? SO_RCVTIMEO : SO_SNDTIMEO;
+    if (setsockopt((int)fd, SOL_SOCKET, opt, &tv, sizeof(tv)) < 0) return -1;
+    return 0;
 }
 
 // --- Entry point ---

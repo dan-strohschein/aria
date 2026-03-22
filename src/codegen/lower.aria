@@ -465,6 +465,8 @@ fn _cmp_or_logic_op(k: str) -> IrOp {
     return OpEq
 }
 
+fn _is_float_type(t: i64) -> bool = t == 9
+
 // Expression continuation check
 fn _is_cont_l(k: str) -> bool =
     k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
@@ -1272,10 +1274,16 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
                         // Evaluate RHS
                         rhs := _lower_expr(ll)
                         ll = rhs.l
-                        // Apply operation
+                        // Apply operation (float-aware)
                         res_nt := _lnew_temp(ll)
                         ll = res_nt.l
-                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
+                        cur_type := _lget_type(ll, slot)
+                        if _is_float_type(cur_type) || _is_float_type(_lget_type(ll, rhs.temp)) {
+                            ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "f64", 0))
+                            ll = _lset_type(ll, res_nt.temp, 9)
+                        } else {
+                            ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
+                        }
                         // Store back
                         ll = _lemit(ll, new_inst(OpStore, slot, res_nt.temp, 0, "", 0))
                     }
@@ -1326,8 +1334,15 @@ fn _lower_multiplicative(l: Lowerer) -> LT {
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
-            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
-            ll = _lset_type(ll, nt.temp, 1)
+            left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
+            if _is_float_type(left_type) || _is_float_type(right_type) {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
+            } else {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, nt.temp, 1)
+            }
             left = nt.temp
         } else {
             running = false
@@ -1351,11 +1366,18 @@ fn _lower_additive(l: Lowerer) -> LT {
             right := _lower_multiplicative(ll)
             ll = right.l
             left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
             if k == "+" && left_type == 12 {
                 nt := _lnew_str_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpStrConcat, nt.temp, left, right.temp, "", 0))
                 ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else if _is_float_type(left_type) || _is_float_type(right_type) {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
                 left = nt.temp
             } else {
                 nt := _lnew_temp(ll)
@@ -1416,6 +1438,9 @@ fn _lower_comparison(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                 left = nt.temp
             }
+        } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
+            ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
+            left = nt.temp
         } else {
             ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
             left = nt.temp
@@ -1443,11 +1468,18 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = right.l
             // Check if left operand is a string for +
             left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
             if k == "+" && left_type == 12 {
                 nt := _lnew_str_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpStrConcat, nt.temp, left, right.temp, "", 0))
                 ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else if _is_float_type(left_type) || _is_float_type(right_type) {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
                 left = nt.temp
             } else {
                 nt := _lnew_temp(ll)
@@ -1462,8 +1494,15 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
-            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
-            ll = _lset_type(ll, nt.temp, 1)
+            left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
+            if _is_float_type(left_type) || _is_float_type(right_type) {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
+            } else {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, nt.temp, 1)
+            }
             left = nt.temp
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
@@ -1501,6 +1540,9 @@ fn _lower_expr(l: Lowerer) -> LT {
                     ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                     left = nt.temp
                 }
+            } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
+                ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
+                left = nt.temp
             } else {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                 left = nt.temp
@@ -1766,7 +1808,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                 fidx := _field_index_any(ll.registry, field)
                 field_val := _lnew_temp(ll)
                 ll = field_val.l
-                ll = _lemit(ll, new_inst(OpFieldGet, field_val.temp, inner, fidx, field, 0))
+                ll = _lemit(ll, new_inst(OpFieldGet, field_val.temp, inner.temp, fidx, field, 0))
                 // Wrap in Some
                 some_result := _lnew_temp(ll)
                 ll = some_result.l
@@ -1888,11 +1930,16 @@ fn _lower_expr(l: Lowerer) -> LT {
 
 fn _lower_primary(l: Lowerer) -> LT {
     k := _lk(l)
-
     if k == "-" || k == "!" || k == "~" {
         ll := _ladv(l)
         operand := _lower_atom(ll)
         nt := _lnew_temp(operand.l)
+        op_type := _lget_type(nt.l, operand.temp)
+        if k == "-" && _is_float_type(op_type) {
+            lll := _lemit(nt.l, new_inst(OpNeg, nt.temp, operand.temp, 0, "f64", 0))
+            llll := _lset_type(lll, nt.temp, 9)
+            return LT{l: llll, temp: nt.temp}
+        }
         lll := _lemit(nt.l, new_inst(_unary_op(k), nt.temp, operand.temp, 0, "", 0))
         return LT{l: lll, temp: nt.temp}
     }
@@ -1924,8 +1971,30 @@ fn _lower_primary(l: Lowerer) -> LT {
     }
 
     if k == "FLOAT" {
-        nt := _lnew_temp(l)
-        ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        val := _lcur(l).text
+        mut ll := _ladv(l)
+        // Store float literal text as a string constant, then use its index
+        mut str_idx := mod_find_string(ll.module, val)
+        if str_idx == 0 {
+            new_mod := mod_add_string(ll.module, val)
+            str_idx = new_mod.string_constants.len() - 1
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                         table: ll.table, file: ll.file, module: new_mod,
+                         current_func: ll.current_func,
+                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                         env_names: ll.env_names, env_slots: ll.env_slots,
+                         loop_start: ll.loop_start, loop_end: ll.loop_end,
+                         const_names: ll.const_names, const_vals: ll.const_vals,
+                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                         temp_types: ll.temp_types,
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+        }
+        // Use OpConstStr with arg2 = -9 as float marker
+        // arg1 = string constant index, arg2 = -9 signals float
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, nt.temp, str_idx, 0 - 9, "", 0))
+        ll = _lset_type(ll, nt.temp, 9)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -2410,6 +2479,142 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = _lset_type(ll, nt.temp, 13)
                 return LT{l: ll, temp: nt.temp}
             }
+            // --- Environment ---
+            if name == "_ariaGetenv" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_getenv", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // --- TCP Networking ---
+            if name == "_ariaTcpSocket" {
+                ll = _ladv(ll)  // skip (
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_tcp_socket", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpBind" {
+                ll = _ladv(ll)  // skip (
+                // args: fd, addr (str = 2 temps), port
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                addr_arg := _lower_expr(ll)
+                ll = addr_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                port_arg := _lower_expr(ll)
+                ll = port_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Pack: fd, addr_ptr, addr_len, port into consecutive temps
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 4, "_aria_tcp_bind", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpListen" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                backlog_arg := _lower_expr(ll)
+                ll = backlog_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 2, "_aria_tcp_listen", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpAccept" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 1, "_aria_tcp_accept", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpRead" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                max_arg := _lower_expr(ll)
+                ll = max_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 2, "_aria_tcp_read", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpWrite" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                data_arg := _lower_expr(ll)
+                ll = data_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // fd (1 temp) + str (2 temps) = 3 consecutive temps
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 3, "_aria_tcp_write", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpClose" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 1, "_aria_tcp_close", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpPeerAddr" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 1, "_aria_tcp_peer_addr", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTcpSetTimeout" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                kind_arg := _lower_expr(ll)
+                ll = kind_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ms_arg := _lower_expr(ll)
+                ll = ms_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 3, "_aria_tcp_set_timeout", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+
             // Check if it's a closure/function variable — indirect call
             fn_slot := _lenv_lookup(ll, name)
             if fn_slot >= 0 {
@@ -2941,6 +3146,82 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    if method == "endsWith" {
+        arg := _lower_expr(ll)
+        ll = arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrEndsWith, nt.temp, obj, arg.temp, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "indexOf" {
+        arg := _lower_expr(ll)
+        ll = arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrIndexOf, nt.temp, obj, arg.temp, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "trim" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrTrim, nt.temp, obj, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "replace" {
+        old_arg := _lower_expr(ll)
+        ll = old_arg.l
+        if _lk(ll) == "," { ll = _ladv(ll) }
+        new_arg := _lower_expr(ll)
+        ll = new_arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrReplace, nt.temp, obj, old_arg.temp, "", new_arg.temp))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "toLower" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrToLower, nt.temp, obj, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "toUpper" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrToUpper, nt.temp, obj, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "split" {
+        arg := _lower_expr(ll)
+        ll = arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSplit, nt.temp, obj, arg.temp, "", 0))
+        ll = _lset_type(ll, nt.temp, 13)
+        return LT{l: ll, temp: nt.temp}
+    }
+
     if method == "substring" {
         start := _lower_expr(ll)
         ll = start.l
@@ -3113,7 +3394,11 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             // Already a string — just return it
             return LT{l: ll, temp: obj}
         }
-        ll = _lemit(ll, new_inst(OpIntToStr, nt.temp, obj, 0, "", 0))
+        if _is_float_type(obj_type) {
+            ll = _lemit(ll, new_inst(OpIntToStr, nt.temp, obj, 0, "f64", 0))
+        } else {
+            ll = _lemit(ll, new_inst(OpIntToStr, nt.temp, obj, 0, "", 0))
+        }
         ll = _lset_type(ll, nt.temp, 12)
         return LT{l: ll, temp: nt.temp}
     }
@@ -3576,6 +3861,9 @@ fn _lower_if_cond(l: Lowerer) -> LT {
                 } else {
                     left = nt.temp
                 }
+            } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
+                ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
+                left = nt.temp
             } else {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                 left = nt.temp
@@ -3601,11 +3889,18 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             right := _lower_multiplicative(ll)
             ll = right.l
             left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
             if k == "+" && left_type == 12 {
                 nt := _lnew_str_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpStrConcat, nt.temp, left, right.temp, "", 0))
                 ll = _lset_type(ll, nt.temp, 12)
+                left = nt.temp
+            } else if _is_float_type(left_type) || _is_float_type(right_type) {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
                 left = nt.temp
             } else {
                 nt := _lnew_temp(ll)
@@ -3619,7 +3914,14 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             ll = right.l
             nt := _lnew_temp(ll)
             ll = nt.l
-            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
+            if _is_float_type(left_type) || _is_float_type(right_type) {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "f64", 0))
+                ll = _lset_type(ll, nt.temp, 9)
+            } else {
+                ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            }
             left = nt.temp
         } else {
             running = false
@@ -3829,6 +4131,8 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
     ll = loop_lbl.l
     end_lbl := _lnew_label(ll)
     ll = end_lbl.l
+    inc_lbl := _lnew_label(ll)
+    ll = inc_lbl.l
 
     // Loop start
     ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
@@ -3844,7 +4148,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
         ll = _lenv_add(ll, var_name, idx_nt.temp)
     }
 
-    // Set break/continue labels
+    // Set break/continue labels (continue jumps to increment)
     prev_start := ll.loop_start
     prev_end := ll.loop_end
     ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
@@ -3852,7 +4156,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
                  env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
+                 loop_start: inc_lbl.temp, loop_end: end_lbl.temp,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
@@ -3872,6 +4176,9 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+
+    // Increment label (continue target)
+    ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
 
     // Increment: idx = idx + 1
     one_nt := _lnew_temp(ll)
@@ -3988,11 +4295,16 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll = idx_nt.l
     ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
 
+    // Determine array element type
+    iter_type := _lget_type(ll, iter.temp)
+
     // Labels
     loop_lbl := _lnew_label(ll)
     ll = loop_lbl.l
     end_lbl := _lnew_label(ll)
     ll = end_lbl.l
+    inc_lbl := _lnew_label(ll)
+    ll = inc_lbl.l
 
     // Loop start
     ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
@@ -4005,13 +4317,21 @@ fn _lower_for(l: Lowerer) -> Lowerer {
 
     // Load arr[idx] into loop variable
     if var_name != "" {
-        elem_nt := _lnew_temp(ll)
-        ll = elem_nt.l
-        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
-        ll = _lenv_add(ll, var_name, elem_nt.temp)
+        if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+            elem_nt := _lnew_str_temp(ll)
+            ll = elem_nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
+            ll = _lset_type(ll, elem_nt.temp, 12)
+            ll = _lenv_add(ll, var_name, elem_nt.temp)
+        } else {
+            elem_nt := _lnew_temp(ll)
+            ll = elem_nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+            ll = _lenv_add(ll, var_name, elem_nt.temp)
+        }
     }
 
-    // Set break/continue labels
+    // Set break/continue labels (continue jumps to increment)
     prev_start := ll.loop_start
     prev_end := ll.loop_end
     ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
@@ -4019,7 +4339,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
                  env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
+                 loop_start: inc_lbl.temp, loop_end: end_lbl.temp,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
@@ -4039,6 +4359,9 @@ fn _lower_for(l: Lowerer) -> Lowerer {
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+
+    // Increment label (continue target)
+    ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
 
     // Increment index: idx = idx + 1
     one_nt := _lnew_temp(ll)
@@ -4084,10 +4407,13 @@ fn _lower_interpolated_string(l: Lowerer) -> LT {
             expr_type := _lget_type(ll, expr.temp)
             mut str_temp := expr.temp
             if expr_type != 12 {
-                // Convert i64/bool to string
                 conv_nt := _lnew_str_temp(ll)
                 ll = conv_nt.l
-                ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, "", 0))
+                if _is_float_type(expr_type) {
+                    ll = _lemit(ll, new_inst(OpIntToStr,conv_nt.temp, expr.temp, 0, "", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, "", 0))
+                }
                 ll = _lset_type(ll, conv_nt.temp, 12)
                 str_temp = conv_nt.temp
             }
@@ -4127,7 +4453,11 @@ fn _lower_interpolated_string(l: Lowerer) -> LT {
                 if expr_type != 12 {
                     conv_nt := _lnew_str_temp(ll)
                     ll = conv_nt.l
-                    ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, "", 0))
+                    if _is_float_type(expr_type) {
+                        ll = _lemit(ll, new_inst(OpIntToStr,conv_nt.temp, expr.temp, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, "", 0))
+                    }
                     ll = _lset_type(ll, conv_nt.temp, 12)
                     str_temp = conv_nt.temp
                 }

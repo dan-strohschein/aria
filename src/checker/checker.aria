@@ -2192,13 +2192,15 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
     // Built-in method return types
     if method == "len" { return CE{c: cc, type_id: TY_I64} }
     if method == "contains" { return CE{c: cc, type_id: TY_BOOL} }
-    if method == "starts_with" { return CE{c: cc, type_id: TY_BOOL} }
-    if method == "ends_with" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "starts_with" || method == "startsWith" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "ends_with" || method == "endsWith" { return CE{c: cc, type_id: TY_BOOL} }
+    if method == "indexOf" { return CE{c: cc, type_id: TY_I64} }
     if method == "is_empty" { return CE{c: cc, type_id: TY_BOOL} }
 
     // String methods returning str
     if method == "trim" || method == "to_upper" || method == "to_lower" ||
-       method == "replace" || method == "substring" || method == "charAt" {
+       method == "replace" || method == "substring" || method == "charAt" ||
+       method == "toUpper" || method == "toLower" {
         return CE{c: cc, type_id: TY_STR}
     }
 

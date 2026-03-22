@@ -1,0 +1,51 @@
+// Test continue in for and while loops
+entry {
+    // continue in for-range loop: sum only even numbers
+    mut sum := 0
+    for i in 0..10 {
+        if i % 2 != 0 {
+            continue
+        }
+        sum = sum + i
+    }
+    assert sum == 20
+    println("range_continue ok")
+
+    // continue in while loop
+    mut w := 0
+    mut wsum := 0
+    while w < 10 {
+        w = w + 1
+        if w % 3 == 0 {
+            continue
+        }
+        wsum = wsum + w
+    }
+    assert wsum == 37
+    println("while_continue ok")
+
+    // continue in for-range inclusive
+    mut sum2 := 0
+    for i in 1..=5 {
+        if i == 3 {
+            continue
+        }
+        sum2 = sum2 + i
+    }
+    assert sum2 == 12
+    println("inclusive_continue ok")
+
+    // continue in for-array loop with integers
+    nums := [0].append(1).append(2).append(3).append(4).append(5)
+    mut oddsum := 0
+    for n in nums {
+        if n % 2 == 0 {
+            continue
+        }
+        oddsum = oddsum + n
+    }
+    assert oddsum == 9
+    println("array_continue ok")
+
+    println("continue_test passed")
+}
