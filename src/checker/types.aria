@@ -500,6 +500,11 @@ fn _builtin_effect(name: str) -> str {
     if name == "_ariaHttpGet" || name == "_ariaHttpPost" || name == "_ariaHttpRequest" { return "Net" }
     // Async operations
     if name == "_ariaSpawn" || name == "_ariaTaskAwait" || name == "_ariaChanSend" || name == "_ariaChanRecv" || name == "_ariaChanNew" || name == "_ariaMutexNew" || name == "_ariaMutexLock" || name == "_ariaMutexUnlock" { return "Async" }
+    if name == "_ariaSpawn2" || name == "_ariaTaskAwait2" || name == "_ariaTaskDone" || name == "_ariaTaskCancel" || name == "_ariaTaskResult" || name == "_ariaCancelCheck" { return "Async" }
+    if name == "_ariaChanTryRecv" || name == "_ariaChanSelect" || name == "_ariaChanClose" { return "Async" }
+    if name == "_ariaRWMutexNew" || name == "_ariaRWMutexRlock" || name == "_ariaRWMutexRunlock" || name == "_ariaRWMutexWlock" || name == "_ariaRWMutexWunlock" { return "Async" }
+    if name == "_ariaWgNew" || name == "_ariaWgAdd" || name == "_ariaWgDone" || name == "_ariaWgWait" { return "Async" }
+    if name == "_ariaOnceNew" || name == "_ariaOnceCall" { return "Async" }
     ""
 }
 

@@ -1,0 +1,14 @@
+// Test: scope blocks with auto-join
+
+entry {
+    mut result := 0
+
+    scope {
+        spawn fn() -> i64 {
+            42
+        }
+    }
+
+    // After scope, all spawned tasks are joined
+    print("scope_test passed")
+}

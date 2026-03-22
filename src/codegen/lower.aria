@@ -1183,6 +1183,18 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
         while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         return ll
     }
+    if k == "spawn" {
+        result := _lower_spawn(l)
+        return result.l
+    }
+    if k == "scope" {
+        result := _lower_scope(l)
+        return result.l
+    }
+    if k == "select" {
+        result := _lower_select(l)
+        return result.l
+    }
     if k == "defer" {
         mut ll := _ladv(l)  // skip defer
         // Save the token position of the deferred expression
@@ -2254,6 +2266,9 @@ fn _lower_primary(l: Lowerer) -> LT {
     if k == "if" { return _lower_if(l) }
     if k == "match" { return _lower_match(l) }
     if k == "fn" { return _lower_closure(l) }
+    if k == "spawn" { return _lower_spawn(l) }
+    if k == "scope" { return _lower_scope(l) }
+    if k == "select" { return _lower_select(l) }
 
     // self keyword — treat as variable reference
     if k == "self" {
@@ -3170,6 +3185,192 @@ fn _lower_primary(l: Lowerer) -> LT {
                 nt := _lnew_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_mutex_unlock", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // --- Extended concurrency builtins ---
+            // Spawn2 (enhanced spawn with task struct)
+            if name == "_ariaSpawn2" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                fn_ptr_nt := _lnew_temp(ll)
+                ll = fn_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, arg.temp, 0, "_fn", 0))
+                env_ptr_nt := _lnew_temp(ll)
+                ll = env_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, arg.temp, 1, "_env", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr_nt.temp, 2, "_aria_spawn2", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Single-arg builtins returning i64
+            if name == "_ariaTaskAwait2" || name == "_ariaTaskDone" || name == "_ariaTaskResult" || name == "_ariaCancelCheck" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut rt_name := "_aria_task_await2"
+                if name == "_ariaTaskDone" { rt_name = "_aria_task_done" }
+                if name == "_ariaTaskResult" { rt_name = "_aria_task_result" }
+                if name == "_ariaCancelCheck" { rt_name = "_aria_cancel_check" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, rt_name, 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Single-arg void builtins
+            if name == "_ariaTaskCancel" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_task_cancel", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Channel try_recv (returns {value, status} in 2 consecutive temps)
+            if name == "_ariaChanTryRecv" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)  // 2 consecutive temps
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_chan_try_recv", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Channel select (arr, timeout_ms) returns {index, value} in 2 temps
+            if name == "_ariaChanSelect" {
+                ll = _ladv(ll)
+                arr_arg := _lower_expr(ll)
+                ll = arr_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                to_arg := _lower_expr(ll)
+                ll = to_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                pack0 := _lnew_temp(ll)
+                ll = pack0.l
+                ll = _lemit(ll, new_inst(OpStore, pack0.temp, arr_arg.temp, 0, "", 0))
+                pack1 := _lnew_temp(ll)
+                ll = pack1.l
+                ll = _lemit(ll, new_inst(OpStore, pack1.temp, to_arg.temp, 0, "", 0))
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_select", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // RWMutex
+            if name == "_ariaRWMutexNew" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_rwmutex_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaRWMutexRlock" || name == "_ariaRWMutexRunlock" || name == "_ariaRWMutexWlock" || name == "_ariaRWMutexWunlock" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut rn := "_aria_rwmutex_rlock"
+                if name == "_ariaRWMutexRunlock" { rn = "_aria_rwmutex_runlock" }
+                if name == "_ariaRWMutexWlock" { rn = "_aria_rwmutex_wlock" }
+                if name == "_ariaRWMutexWunlock" { rn = "_aria_rwmutex_wunlock" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, rn, 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // WaitGroup
+            if name == "_ariaWgNew" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_wg_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaWgAdd" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                d_arg := _lower_expr(ll)
+                ll = d_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                pack0 := _lnew_temp(ll)
+                ll = pack0.l
+                ll = _lemit(ll, new_inst(OpStore, pack0.temp, h_arg.temp, 0, "", 0))
+                pack1 := _lnew_temp(ll)
+                ll = pack1.l
+                ll = _lemit(ll, new_inst(OpStore, pack1.temp, d_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_wg_add", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaWgDone" || name == "_ariaWgWait" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut wn := "_aria_wg_done"
+                if name == "_ariaWgWait" { wn = "_aria_wg_wait" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, wn, 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Once
+            if name == "_ariaOnceNew" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_once_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaOnceCall" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                fn_arg := _lower_expr(ll)
+                ll = fn_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                fn_ptr := _lnew_temp(ll)
+                ll = fn_ptr.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, fn_arg.temp, 0, "_fn", 0))
+                env_ptr := _lnew_temp(ll)
+                ll = env_ptr.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, fn_arg.temp, 1, "_env", 0))
+                // Pack: handle, fn_ptr, env_ptr
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, fn_ptr.temp, 0, "", 0))
+                p2 := _lnew_temp(ll)
+                ll = p2.l
+                ll = _lemit(ll, new_inst(OpStore, p2.temp, env_ptr.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 3, "_aria_once_call", 1))
+                ll = _lset_type(ll, nt.temp, 1)
                 return LT{l: ll, temp: nt.temp}
             }
 
@@ -5911,6 +6112,366 @@ fn _lower_match_subject(l: Lowerer) -> LT {
 }
 
 // --- Lower match expression ---
+
+// --- Lower spawn expression ---
+// spawn <expr> desugars to: wrap expr in closure, call _aria_spawn(closure)
+// spawn { block } desugars to: _aria_spawn(fn() -> i64 { block; 0 })
+
+fn _lower_spawn(l: Lowerer) -> LT {
+    mut ll := _ladv(l)  // skip spawn
+    lb := "\{"
+    // If next token is {, it's a spawn block
+    if _lk(ll) == lb {
+        // Treat as spawn { block } — lower the block's body as a closure
+        // For now, lower the closure expression inline and call _ariaSpawn
+        closure := _lower_closure_from_block(ll)
+        ll = closure.l
+        // Extract fn_ptr and env_ptr from closure
+        fn_ptr := _lnew_temp(ll)
+        ll = fn_ptr.l
+        ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, closure.temp, 0, "_fn", 0))
+        env_ptr := _lnew_temp(ll)
+        ll = env_ptr.l
+        ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, closure.temp, 1, "_env", 0))
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    // spawn <expr> — the expr should evaluate to a closure
+    expr := _lower_expr(ll)
+    ll = expr.l
+    fn_ptr := _lnew_temp(ll)
+    ll = fn_ptr.l
+    ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, expr.temp, 0, "_fn", 0))
+    env_ptr := _lnew_temp(ll)
+    ll = env_ptr.l
+    ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, expr.temp, 1, "_env", 0))
+    nt := _lnew_temp(ll)
+    ll = nt.l
+    ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
+    ll = _lset_type(ll, nt.temp, 1)
+    LT{l: ll, temp: nt.temp}
+}
+
+// Lower a { block } as a zero-arg closure returning i64
+fn _lower_closure_from_block(l: Lowerer) -> LT {
+    // Synthesize: fn() -> i64 { <block>; 0 }
+    // Reuse the existing closure lowering by pretending we saw "fn() {"
+    // For simplicity, directly lower the block contents in a new function
+    mut ll := l
+    lb := "\{"
+    rb := "\}"
+    // Create a new function for the closure body
+    fname := "_spawn_fn_" + _i2s_lower(ll.temp_counter)
+    saved_func := ll.current_func
+    saved_tc := ll.temp_counter
+    saved_lc := ll.label_counter
+    saved_env := ll.env_names
+    saved_slots := ll.env_slots
+    ll = _lset_func(ll, new_ir_func(fname, 1, 0))
+    // arg 0 = env pointer (unused for no-capture spawns)
+    env_nt := _lnew_temp(ll)
+    ll = env_nt.l
+    ll = _lemit(ll, new_inst(OpArg, env_nt.temp, 0, 0, "", 0))
+    // Lower block body
+    ll = _ladv(ll)  // skip {
+    ll = _lskip_nl(ll)
+    while _lk(ll) != rb && _lk(ll) != "EOF" {
+        ll = _lower_stmt(ll)
+        ll = _lskip_nl(ll)
+    }
+    if _lk(ll) == rb { ll = _ladv(ll) }
+    // Return 0
+    ret_nt := _lnew_temp(ll)
+    ll = ret_nt.l
+    ll = _lemit(ll, new_inst(OpConst, ret_nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpRet, 0, ret_nt.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    // Restore saved state
+    ll = _lset_func(ll, saved_func)
+    // Build closure: {fn_ptr, 0} — no captures for now
+    fn_ref := _lnew_temp(ll)
+    ll = fn_ref.l
+    ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, fname, 0))
+    clos := _lnew_temp(ll)
+    ll = clos.l
+    ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+    null_nt := _lnew_temp(ll)
+    ll = null_nt.l
+    ll = _lemit(ll, new_inst(OpConst, null_nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, null_nt.temp, 1, "_env", 0))
+    LT{l: ll, temp: clos.temp}
+}
+
+// --- Lower scope expression ---
+// scope { stmts } — track spawned tasks, auto-join at block exit
+
+fn _lower_scope(l: Lowerer) -> LT {
+    mut ll := _ladv(l)  // skip scope
+    lb := "\{"
+    rb := "\}"
+    if _lk(ll) != lb {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    ll = _ladv(ll)  // skip {
+    ll = _lskip_nl(ll)
+    // Track task handles spawned within this scope (up to 8)
+    mut task_count := 0
+    mut task_0 := 0
+    mut task_1 := 0
+    mut task_2 := 0
+    mut task_3 := 0
+    mut task_4 := 0
+    mut task_5 := 0
+    mut task_6 := 0
+    mut task_7 := 0
+    mut last_temp := 0
+    while _lk(ll) != rb && _lk(ll) != "EOF" {
+        // Check if statement starts with spawn
+        if _lk(ll) == "spawn" {
+            result := _lower_spawn(ll)
+            ll = result.l
+            // Save task handle
+            if task_count == 0 { task_0 = result.temp }
+            if task_count == 1 { task_1 = result.temp }
+            if task_count == 2 { task_2 = result.temp }
+            if task_count == 3 { task_3 = result.temp }
+            if task_count == 4 { task_4 = result.temp }
+            if task_count == 5 { task_5 = result.temp }
+            if task_count == 6 { task_6 = result.temp }
+            if task_count == 7 { task_7 = result.temp }
+            task_count = task_count + 1
+            last_temp = result.temp
+        } else {
+            ll = _lower_stmt(ll)
+        }
+        ll = _lskip_nl(ll)
+    }
+    if _lk(ll) == rb { ll = _ladv(ll) }
+    // Auto-join: await all spawned tasks
+    mut ti := 0
+    while ti < task_count {
+        mut th := 0
+        if ti == 0 { th = task_0 }
+        if ti == 1 { th = task_1 }
+        if ti == 2 { th = task_2 }
+        if ti == 3 { th = task_3 }
+        if ti == 4 { th = task_4 }
+        if ti == 5 { th = task_5 }
+        if ti == 6 { th = task_6 }
+        if ti == 7 { th = task_7 }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, th, 1, "_aria_task_await", 1))
+        ti = ti + 1
+    }
+    // Result is the last expression temp (or 0)
+    result_nt := _lnew_temp(ll)
+    ll = result_nt.l
+    ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+    LT{l: ll, temp: result_nt.temp}
+}
+
+// --- Lower select expression ---
+// select { msg from ch1 => body1, msg from ch2 => body2, default => body3 }
+
+fn _lower_select(l: Lowerer) -> LT {
+    mut ll := _ladv(l)  // skip select
+    lb := "\{"
+    rb := "\}"
+    if _lk(ll) != lb {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    ll = _ladv(ll)  // skip {
+    ll = _lskip_nl(ll)
+    // Collect channel handles and arm info
+    // Each arm: binding_name from channel_expr => body
+    // Or: default => body
+    mut ch_count := 0
+    mut has_default := false
+    // Build array of channel handles
+    arr_nt := _lnew_temp(ll)
+    ll = arr_nt.l
+    ll = _lemit(ll, new_inst(OpArrayNew, arr_nt.temp, 8, 0, "", 0))
+    // Collect arms
+    mut bind_name_0 := ""
+    mut bind_name_1 := ""
+    mut bind_name_2 := ""
+    mut bind_name_3 := ""
+    mut arm_start_0 := 0
+    mut arm_start_1 := 0
+    mut arm_start_2 := 0
+    mut arm_start_3 := 0
+    mut arm_end_0 := 0
+    mut arm_end_1 := 0
+    mut arm_end_2 := 0
+    mut arm_end_3 := 0
+    mut default_start := 0
+    mut default_end := 0
+    while _lk(ll) != rb && _lk(ll) != "EOF" {
+        ll = _lskip_nl(ll)
+        if _lk(ll) == rb { break }
+        // Check for default arm
+        if _lk(ll) == "_" || (_lk(ll) == "IDENT" && _lcur(ll).text == "default") {
+            has_default = true
+            ll = _ladv(ll)
+            if _lk(ll) == "=>" { ll = _ladv(ll) }
+            ll = _lskip_nl(ll)
+            default_start = ll.pos
+            // Skip to next arm or end
+            if _lk(ll) == lb {
+                while _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == rb { ll = _ladv(ll) }
+            } else {
+                while _lk(ll) != "NEWLINE" && _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            }
+            default_end = ll.pos
+        } else if _lk(ll) == "IDENT" {
+            // binding_name from channel_expr => body
+            bname := _lcur(ll).text
+            ll = _ladv(ll)
+            // Expect "from"
+            if _lk(ll) == "IDENT" && _lcur(ll).text == "from" {
+                ll = _ladv(ll)  // skip from
+            }
+            // Lower channel expression
+            ch_expr := _lower_expr(ll)
+            ll = ch_expr.l
+            // Append channel handle to array
+            ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, ch_expr.temp, 0, "", 0))
+            // Save arm info
+            if ch_count == 0 { bind_name_0 = bname }
+            if ch_count == 1 { bind_name_1 = bname }
+            if ch_count == 2 { bind_name_2 = bname }
+            if ch_count == 3 { bind_name_3 = bname }
+            if _lk(ll) == "=>" { ll = _ladv(ll) }
+            ll = _lskip_nl(ll)
+            // Record arm body position
+            if ch_count == 0 { arm_start_0 = ll.pos }
+            if ch_count == 1 { arm_start_1 = ll.pos }
+            if ch_count == 2 { arm_start_2 = ll.pos }
+            if ch_count == 3 { arm_start_3 = ll.pos }
+            // Skip arm body
+            if _lk(ll) == lb {
+                while _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == rb { ll = _ladv(ll) }
+            } else {
+                while _lk(ll) != "NEWLINE" && _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            }
+            if ch_count == 0 { arm_end_0 = ll.pos }
+            if ch_count == 1 { arm_end_1 = ll.pos }
+            if ch_count == 2 { arm_end_2 = ll.pos }
+            if ch_count == 3 { arm_end_3 = ll.pos }
+            ch_count = ch_count + 1
+        } else {
+            ll = _ladv(ll)
+        }
+        ll = _lskip_nl(ll)
+    }
+    if _lk(ll) == rb { ll = _ladv(ll) }
+    // Call _aria_chan_select(array, timeout)
+    // timeout: 0 if has_default (non-blocking), -1 otherwise (blocking)
+    timeout_nt := _lnew_temp(ll)
+    ll = timeout_nt.l
+    mut timeout_val := 0 - 1
+    if has_default { timeout_val = 0 }
+    ll = _lemit(ll, new_inst(OpConst, timeout_nt.temp, timeout_val, 0, "", 0))
+    pack0 := _lnew_temp(ll)
+    ll = pack0.l
+    ll = _lemit(ll, new_inst(OpStore, pack0.temp, arr_nt.temp, 0, "", 0))
+    pack1 := _lnew_temp(ll)
+    ll = pack1.l
+    ll = _lemit(ll, new_inst(OpStore, pack1.temp, timeout_nt.temp, 0, "", 0))
+    sel_result := _lnew_str_temp(ll)  // 2 temps: {index, value}
+    ll = sel_result.l
+    ll = _lemit(ll, new_inst(OpCall, sel_result.temp, pack0.temp, 2, "_aria_chan_select", 0))
+    // Dispatch based on returned index
+    result_nt := _lnew_temp(ll)
+    ll = result_nt.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+    // Load index
+    idx_nt := _lnew_temp(ll)
+    ll = idx_nt.l
+    ll = _lemit(ll, new_inst(OpLoad, idx_nt.temp, sel_result.temp, 0, "", 0))
+    // Load value
+    val_nt := _lnew_temp(ll)
+    ll = val_nt.l
+    ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, sel_result.temp + 1, 0, "", 0))
+    // For each arm, compare index and branch
+    mut ai := 0
+    while ai < ch_count {
+        next_lbl := _lnew_label(ll)
+        ll = next_lbl.l
+        // Compare index == ai
+        ai_nt := _lnew_temp(ll)
+        ll = ai_nt.l
+        ll = _lemit(ll, new_inst(OpConst, ai_nt.temp, ai, 0, "", 0))
+        cmp := _lnew_temp(ll)
+        ll = cmp.l
+        ll = _lemit(ll, new_inst(OpEq, cmp.temp, idx_nt.temp, ai_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp.temp, next_lbl.temp, "", 0))
+        // Bind received value to binding name
+        mut bname := ""
+        if ai == 0 { bname = bind_name_0 }
+        if ai == 1 { bname = bind_name_1 }
+        if ai == 2 { bname = bind_name_2 }
+        if ai == 3 { bname = bind_name_3 }
+        if bname != "" && bname != "_" {
+            ll = _lenv_add(ll, bname, val_nt.temp)
+        }
+        // Lower arm body by re-positioning to saved tokens
+        mut arm_s := 0
+        mut arm_e := 0
+        if ai == 0 { arm_s = arm_start_0 }
+        if ai == 0 { arm_e = arm_end_0 }
+        if ai == 1 { arm_s = arm_start_1 }
+        if ai == 1 { arm_e = arm_end_1 }
+        if ai == 2 { arm_s = arm_start_2 }
+        if ai == 2 { arm_e = arm_end_2 }
+        if ai == 3 { arm_s = arm_start_3 }
+        if ai == 3 { arm_e = arm_end_3 }
+        if arm_s > 0 {
+            saved_pos := ll.pos
+            ll = _lset_pos(ll, arm_s)
+            if _lk(ll) == "\{" {
+                ll = _lower_block(ll)
+            } else {
+                arm_result := _lower_expr(ll)
+                ll = arm_result.l
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+            }
+            ll = _lset_pos(ll, saved_pos)
+        }
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+        ai = ai + 1
+    }
+    // Default arm (index == -1)
+    if has_default && default_start > 0 {
+        saved_pos := ll.pos
+        ll = _lset_pos(ll, default_start)
+        if _lk(ll) == "\{" {
+            ll = _lower_block(ll)
+        } else {
+            arm_result := _lower_expr(ll)
+            ll = arm_result.l
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+        }
+        ll = _lset_pos(ll, saved_pos)
+    }
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+    LT{l: ll, temp: result_nt.temp}
+}
 
 fn _lower_match(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip match

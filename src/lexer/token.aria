@@ -56,6 +56,10 @@ type TokenKind =
     | TkIs
     | TkSelf
     | TkSelfType
+    // Concurrency keywords
+    | TkSpawn
+    | TkScope
+    | TkSelect
     // Operators
     | TkPlus
     | TkMinus
@@ -164,6 +168,9 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkIs => "is"
     TkSelf => "self"
     TkSelfType => "Self"
+    TkSpawn => "spawn"
+    TkScope => "scope"
+    TkSelect => "select"
     TkPlus => "+"
     TkMinus => "-"
     TkStar => "*"
@@ -246,6 +253,9 @@ fn lookup_keyword(text: str) -> TokenKind {
     if text == "is" { return TkIs }
     if text == "self" { return TkSelf }
     if text == "Self" { return TkSelfType }
+    if text == "spawn" { return TkSpawn }
+    if text == "scope" { return TkScope }
+    if text == "select" { return TkSelect }
     if text == "true" { return TkBoolTrue }
     if text == "false" { return TkBoolFalse }
     return TkIdent

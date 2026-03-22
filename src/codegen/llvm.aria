@@ -257,6 +257,27 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_mutex_new()" + nl)
     p = p.append("declare void @_aria_mutex_lock(i64)" + nl)
     p = p.append("declare void @_aria_mutex_unlock(i64)" + nl)
+    // RWMutex, WaitGroup, Once
+    p = p.append("declare i64 @_aria_rwmutex_new()" + nl)
+    p = p.append("declare void @_aria_rwmutex_rlock(i64)" + nl)
+    p = p.append("declare void @_aria_rwmutex_runlock(i64)" + nl)
+    p = p.append("declare void @_aria_rwmutex_wlock(i64)" + nl)
+    p = p.append("declare void @_aria_rwmutex_wunlock(i64)" + nl)
+    p = p.append("declare i64 @_aria_wg_new()" + nl)
+    p = p.append("declare void @_aria_wg_add(i64, i64)" + nl)
+    p = p.append("declare void @_aria_wg_done(i64)" + nl)
+    p = p.append("declare void @_aria_wg_wait(i64)" + nl)
+    p = p.append("declare i64 @_aria_once_new()" + nl)
+    p = p.append("declare i64 @_aria_once_call(i64, i64, i64)" + nl)
+    // Extended channel/task ops
+    p = p.append("declare " + si64 + " @_aria_chan_try_recv(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_chan_select(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_spawn2(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_task_await2(i64)" + nl)
+    p = p.append("declare i64 @_aria_task_done(i64)" + nl)
+    p = p.append("declare void @_aria_task_cancel(i64)" + nl)
+    p = p.append("declare i64 @_aria_task_result(i64)" + nl)
+    p = p.append("declare i64 @_aria_cancel_check(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
     p = p.append(nl)
 
@@ -1782,6 +1803,113 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         m_v := "%call_mu_m_" + _i2s(idx)
         gg = _lg_emit(gg, m_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_mutex_unlock(i64 " + m_v + ")")
+        return gg
+    }
+
+    // RWMutex
+    if name == "_aria_rwmutex_new" {
+        res := "%call_rwn_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_rwmutex_new()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_rwmutex_rlock" || name == "_aria_rwmutex_runlock" || name == "_aria_rwmutex_wlock" || name == "_aria_rwmutex_wunlock" {
+        h := "%call_rw_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @" + name + "(i64 " + h + ")")
+        return gg
+    }
+    // WaitGroup
+    if name == "_aria_wg_new" {
+        res := "%call_wgn_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_wg_new()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_wg_add" {
+        h := "%call_wga_h_" + _i2s(idx)
+        d := "%call_wga_d_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, d + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, "call void @_aria_wg_add(i64 " + h + ", i64 " + d + ")")
+        return gg
+    }
+    if name == "_aria_wg_done" || name == "_aria_wg_wait" {
+        h := "%call_wg_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @" + name + "(i64 " + h + ")")
+        return gg
+    }
+    // Once
+    if name == "_aria_once_new" {
+        res := "%call_on_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_once_new()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    // Task extended ops
+    if name == "_aria_task_done" || name == "_aria_task_result" || name == "_aria_cancel_check" {
+        h := "%call_td_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_td_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @" + name + "(i64 " + h + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_task_cancel" {
+        h := "%call_tc_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_task_cancel(i64 " + h + ")")
+        return gg
+    }
+    // Spawn2 / await2 (enhanced task API)
+    if name == "_aria_spawn2" {
+        fp_v := "%call_sp2_fp_" + _i2s(idx)
+        ep_v := "%call_sp2_ep_" + _i2s(idx)
+        gg = _lg_emit(gg, fp_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, ep_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        res := "%call_sp2_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_spawn2(i64 " + fp_v + ", i64 " + ep_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_task_await2" {
+        h := "%call_ta2_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_ta2_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_task_await2(i64 " + h + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    // Channel extended ops
+    if name == "_aria_chan_try_recv" {
+        ch_v := "%call_ctr_ch_" + _i2s(idx)
+        gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
+        srt := _str_ret_type()
+        res := "%call_ctr_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_chan_try_recv(i64 " + ch_v + ")")
+        val := "%call_ctr_v_" + _i2s(idx)
+        gg = _lg_emit(gg, val + " = extractvalue " + srt + " " + res + ", 0")
+        gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        sta := "%call_ctr_s_" + _i2s(idx)
+        gg = _lg_emit(gg, sta + " = extractvalue " + srt + " " + res + ", 1")
+        gg = _lg_emit(gg, "store i64 " + sta + ", i64* " + _t(inst.dest + 1))
+        return gg
+    }
+    if name == "_aria_chan_select" {
+        arr_v := "%call_cs_a_" + _i2s(idx)
+        to_v := "%call_cs_t_" + _i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, to_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        srt := _str_ret_type()
+        res := "%call_cs_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_chan_select(i64 " + arr_v + ", i64 " + to_v + ")")
+        idx_v := "%call_cs_i_" + _i2s(idx)
+        gg = _lg_emit(gg, idx_v + " = extractvalue " + srt + " " + res + ", 0")
+        gg = _lg_emit(gg, "store i64 " + idx_v + ", i64* " + _t(inst.dest))
+        val_v := "%call_cs_v_" + _i2s(idx)
+        gg = _lg_emit(gg, val_v + " = extractvalue " + srt + " " + res + ", 1")
+        gg = _lg_emit(gg, "store i64 " + val_v + ", i64* " + _t(inst.dest + 1))
         return gg
     }
 

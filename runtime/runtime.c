@@ -1202,6 +1202,256 @@ void _aria_mutex_unlock(long handle) {
     pthread_mutex_unlock((pthread_mutex_t *)handle);
 }
 
+// --- RWMutex ---
+
+long _aria_rwmutex_new(void) {
+    pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
+    pthread_rwlock_init(rw, NULL);
+    return (long)rw;
+}
+
+void _aria_rwmutex_rlock(long handle) {
+    pthread_rwlock_rdlock((pthread_rwlock_t *)handle);
+}
+
+void _aria_rwmutex_runlock(long handle) {
+    pthread_rwlock_unlock((pthread_rwlock_t *)handle);
+}
+
+void _aria_rwmutex_wlock(long handle) {
+    pthread_rwlock_wrlock((pthread_rwlock_t *)handle);
+}
+
+void _aria_rwmutex_wunlock(long handle) {
+    pthread_rwlock_unlock((pthread_rwlock_t *)handle);
+}
+
+// --- WaitGroup (atomic counter + condvar) ---
+
+struct _aria_wg {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    long count;
+};
+
+long _aria_wg_new(void) {
+    struct _aria_wg *wg = (struct _aria_wg *)calloc(1, sizeof(struct _aria_wg));
+    pthread_mutex_init(&wg->mutex, NULL);
+    pthread_cond_init(&wg->cond, NULL);
+    wg->count = 0;
+    return (long)wg;
+}
+
+void _aria_wg_add(long handle, long delta) {
+    struct _aria_wg *wg = (struct _aria_wg *)handle;
+    pthread_mutex_lock(&wg->mutex);
+    wg->count += delta;
+    if (wg->count <= 0) pthread_cond_broadcast(&wg->cond);
+    pthread_mutex_unlock(&wg->mutex);
+}
+
+void _aria_wg_done(long handle) {
+    _aria_wg_add(handle, -1);
+}
+
+void _aria_wg_wait(long handle) {
+    struct _aria_wg *wg = (struct _aria_wg *)handle;
+    pthread_mutex_lock(&wg->mutex);
+    while (wg->count > 0) {
+        pthread_cond_wait(&wg->cond, &wg->mutex);
+    }
+    pthread_mutex_unlock(&wg->mutex);
+}
+
+// --- Once ---
+
+struct _aria_once {
+    pthread_once_t once;
+    long (*fn_ptr)(long);
+    long env_ptr;
+    long result;
+};
+
+static struct _aria_once *_once_current = NULL;
+
+static void _aria_once_trampoline(void) {
+    if (_once_current) {
+        _once_current->result = _once_current->fn_ptr(_once_current->env_ptr);
+    }
+}
+
+long _aria_once_new(void) {
+    struct _aria_once *o = (struct _aria_once *)calloc(1, sizeof(struct _aria_once));
+    pthread_once_t init = PTHREAD_ONCE_INIT;
+    o->once = init;
+    o->fn_ptr = NULL;
+    o->env_ptr = 0;
+    o->result = 0;
+    return (long)o;
+}
+
+long _aria_once_call(long handle, long fn_ptr, long env_ptr) {
+    struct _aria_once *o = (struct _aria_once *)handle;
+    o->fn_ptr = (long (*)(long))fn_ptr;
+    o->env_ptr = env_ptr;
+    _once_current = o;
+    pthread_once(&o->once, _aria_once_trampoline);
+    return o->result;
+}
+
+// --- Channel: try_recv (non-blocking) ---
+// Returns {value, status} packed as 2-word struct.
+// status=1: got value, status=0: channel closed+empty or empty
+
+struct _aria_recv_result {
+    long value;
+    long status;
+};
+
+struct _aria_recv_result _aria_chan_try_recv(long handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    struct _aria_recv_result r = {0, 0};
+    pthread_mutex_lock(&ch->mutex);
+    if (ch->count > 0) {
+        r.value = ch->buf[ch->head];
+        ch->head = (ch->head + 1) % ch->capacity;
+        ch->count--;
+        r.status = 1;
+        pthread_cond_signal(&ch->cond_send);
+    }
+    pthread_mutex_unlock(&ch->mutex);
+    return r;
+}
+
+// --- Channel: select (poll multiple channels) ---
+// Polls n channels, returns index of first ready one + received value.
+// channels_arr is an Aria array handle containing channel handles.
+// timeout_ms: -1=block forever, 0=non-blocking
+
+struct _aria_select_result {
+    long index;
+    long value;
+};
+
+struct _aria_select_result _aria_chan_select(long channels_arr, long timeout_ms) {
+    struct _aria_select_result r = {-1, 0};
+    long *arr_header = (long *)channels_arr;
+    long n = arr_header[0];
+    long *data = (long *)arr_header[2];
+
+    // Non-blocking mode
+    if (timeout_ms == 0) {
+        for (long i = 0; i < n; i++) {
+            struct _aria_recv_result rr = _aria_chan_try_recv(data[i]);
+            if (rr.status) {
+                r.index = i;
+                r.value = rr.value;
+                return r;
+            }
+        }
+        return r;  // index=-1 means default arm
+    }
+
+    // Blocking mode: poll with short sleeps
+    // (A proper implementation would use a shared condvar across channels)
+    long max_iters = (timeout_ms < 0) ? 1000000000L : (timeout_ms * 1000);
+    long iter = 0;
+    while (iter < max_iters) {
+        for (long i = 0; i < n; i++) {
+            struct _aria_recv_result rr = _aria_chan_try_recv(data[i]);
+            if (rr.status) {
+                r.index = i;
+                r.value = rr.value;
+                return r;
+            }
+        }
+        // Check if all channels are closed
+        int all_closed = 1;
+        for (long i = 0; i < n; i++) {
+            struct _aria_chan *ch = (struct _aria_chan *)data[i];
+            if (!ch->closed || ch->count > 0) {
+                all_closed = 0;
+                break;
+            }
+        }
+        if (all_closed) return r;
+        usleep(100);  // 100us between polls
+        iter += 100;
+    }
+    return r;  // timeout
+}
+
+// --- Task: done check (non-blocking) ---
+// Since macOS lacks pthread_tryjoin_np, we use a wrapper struct approach.
+
+struct _aria_task {
+    pthread_t thread;
+    long result;
+    volatile int done;
+    volatile int cancelled;
+};
+
+static void *_aria_task_trampoline(void *arg) {
+    struct _aria_task *task = (struct _aria_task *)arg;
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)task->result;  // reuse result field temporarily
+    long (*fn_ptr)(long) = sa->fn_ptr;
+    long env = sa->env_ptr;
+    free(sa);
+    task->result = fn_ptr(env);
+    task->done = 1;
+    return (void *)task->result;
+}
+
+long _aria_spawn2(long fn_ptr, long env_ptr) {
+    struct _aria_task *task = (struct _aria_task *)calloc(1, sizeof(struct _aria_task));
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)malloc(sizeof(struct _aria_spawn_arg));
+    sa->fn_ptr = (long (*)(long))fn_ptr;
+    sa->env_ptr = env_ptr;
+    task->result = (long)sa;
+    task->done = 0;
+    task->cancelled = 0;
+    if (pthread_create(&task->thread, NULL, _aria_task_trampoline, task) != 0) {
+        free(sa);
+        free(task);
+        return -1;
+    }
+    return (long)task;
+}
+
+long _aria_task_await2(long handle) {
+    if (handle <= 0) return -1;
+    struct _aria_task *task = (struct _aria_task *)handle;
+    pthread_join(task->thread, NULL);
+    long r = task->result;
+    free(task);
+    return r;
+}
+
+long _aria_task_done(long handle) {
+    if (handle <= 0) return 1;
+    struct _aria_task *task = (struct _aria_task *)handle;
+    return task->done ? 1 : 0;
+}
+
+void _aria_task_cancel(long handle) {
+    if (handle <= 0) return;
+    struct _aria_task *task = (struct _aria_task *)handle;
+    task->cancelled = 1;
+}
+
+long _aria_task_result(long handle) {
+    if (handle <= 0) return 0;
+    struct _aria_task *task = (struct _aria_task *)handle;
+    if (!task->done) return 0;
+    return task->result;
+}
+
+long _aria_cancel_check(long handle) {
+    if (handle <= 0) return 0;
+    struct _aria_task *task = (struct _aria_task *)handle;
+    return task->cancelled ? 1 : 0;
+}
+
 // --- Entry point ---
 
 extern void _aria_entry(void);

@@ -1,0 +1,47 @@
+// Test: concurrency features — spawn, scope, channels, WaitGroup
+
+entry {
+    // Test 1: Basic spawn and await
+    task := _ariaSpawn(fn() -> i64 { 42 })
+    result := _ariaTaskAwait(task)
+    assert result == 42
+
+    // Test 2: Channel communication
+    ch := _ariaChanNew(1)
+    sender := _ariaSpawn(fn() -> i64 {
+        _ariaChanSend(ch, 100)
+        0
+    })
+    val := _ariaChanRecv(ch)
+    assert val == 100
+    _ariaTaskAwait(sender)
+
+    // Test 3: scope with auto-join
+    scope {
+        spawn fn() -> i64 {
+            // This task runs concurrently
+            1
+        }
+        spawn fn() -> i64 {
+            2
+        }
+    }
+    // Both tasks are joined here
+
+    // Test 4: WaitGroup
+    wg := _ariaWgNew()
+    _ariaWgAdd(wg, 2)
+    t1 := _ariaSpawn(fn() -> i64 {
+        _ariaWgDone(wg)
+        0
+    })
+    t2 := _ariaSpawn(fn() -> i64 {
+        _ariaWgDone(wg)
+        0
+    })
+    _ariaWgWait(wg)
+    _ariaTaskAwait(t1)
+    _ariaTaskAwait(t2)
+
+    print("concurrency_test passed")
+}
