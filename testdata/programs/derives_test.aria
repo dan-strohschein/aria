@@ -1,0 +1,34 @@
+struct Point {
+    x: i64
+    y: i64
+} derives [Eq, Debug]
+
+struct Named {
+    label: str
+    value: i64
+} derives [Eq, Debug]
+
+entry {
+    // Eq derive — field-by-field equality
+    a := Point{x: 1, y: 2}
+    b := Point{x: 1, y: 2}
+    c := Point{x: 3, y: 4}
+    assert a == b
+    assert a != c
+
+    // Eq with string fields
+    n1 := Named{label: "hello", value: 42}
+    n2 := Named{label: "hello", value: 42}
+    n3 := Named{label: "world", value: 42}
+    assert n1 == n2
+    assert n1 != n3
+
+    // Debug derive — string representation
+    s := a.debug_str()
+    println(s)
+
+    s2 := n1.debug_str()
+    println(s2)
+
+    println("derives_test passed")
+}

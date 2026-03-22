@@ -287,6 +287,88 @@ fn _is_named_type(store: TypeStore, tid: i64) -> bool {
 
 // Get struct name for a type_id using the store + registry
 // Handles both store-based type_ids (from checker) and registry-based 100+ ids (from lowerer)
+// Generate field-by-field struct equality comparison.
+// Sets result_temp to 1 if all fields equal, 0 otherwise.
+fn _lower_struct_eq(l: Lowerer, a: i64, b: i64, sname: str, result_temp: i64) -> Lowerer {
+    mut ll := l
+    def := reg_find_struct(ll.registry, sname)
+    if def.name == "" || def.fields.len() <= 1 {
+        ll = _lemit(ll, new_inst(OpEq, result_temp, a, b, "", 0))
+        return ll
+    }
+
+    // Compare each field, chain with AND into fresh temps
+    mut last_cmp := -1
+    mut fi := 1  // skip sentinel
+    mut field_slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+
+        if ft == 12 {
+            a_str := _lnew_str_temp(ll)
+            ll = a_str.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_str.temp, a, field_slot, fld.name, 0))
+            fidx_len := field_slot + 1
+            ll = _lemit(ll, new_inst(OpFieldGet, a_str.temp + 1, a, fidx_len, fld.name, 0))
+            b_str := _lnew_str_temp(ll)
+            ll = b_str.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_str.temp, b, field_slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, b_str.temp + 1, b, fidx_len, fld.name, 0))
+            cmp := _lnew_temp(ll)
+            ll = cmp.l
+            ll = _lemit(ll, new_inst(OpStrEq, cmp.temp, a_str.temp, b_str.temp, "", 0))
+            if last_cmp >= 0 {
+                and_nt := _lnew_temp(ll)
+                ll = and_nt.l
+                ll = _lemit(ll, new_inst(OpAnd, and_nt.temp, last_cmp, cmp.temp, "", 0))
+                last_cmp = and_nt.temp
+            } else {
+                last_cmp = cmp.temp
+            }
+            field_slot = field_slot + 2
+        } else {
+            a_val := _lnew_temp(ll)
+            ll = a_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_val.temp, a, field_slot, fld.name, 0))
+            b_val := _lnew_temp(ll)
+            ll = b_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_val.temp, b, field_slot, fld.name, 0))
+            cmp := _lnew_temp(ll)
+            ll = cmp.l
+            ll = _lemit(ll, new_inst(OpEq, cmp.temp, a_val.temp, b_val.temp, "", 0))
+            if last_cmp >= 0 {
+                and_nt := _lnew_temp(ll)
+                ll = and_nt.l
+                ll = _lemit(ll, new_inst(OpAnd, and_nt.temp, last_cmp, cmp.temp, "", 0))
+                last_cmp = and_nt.temp
+            } else {
+                last_cmp = cmp.temp
+            }
+            field_slot = field_slot + 1
+        }
+        fi = fi + 1
+    }
+    // Copy final result to result_temp
+    if last_cmp >= 0 {
+        ll = _lemit(ll, new_inst(OpStore, result_temp, last_cmp, 0, "", 0))
+    } else {
+        ll = _lemit(ll, new_inst(OpConst, result_temp, 1, 0, "", 0))
+    }
+    ll
+}
+
+fn _is_struct_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> bool {
+    if tid >= 100 { return true }
+    if tid <= 16 { return false }
+    info := store_get(store, tid)
+    if type_kind_name(info.kind) == "Named" {
+        def := reg_find_struct(reg, info.name)
+        if def.name != "" && def.is_sum == false { return true }
+    }
+    false
+}
+
 fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
     // Check registry-based 100+ range first
     if tid >= 100 {
@@ -1315,6 +1397,25 @@ fn _lower_comparison(l: Lowerer) -> LT {
             } else {
                 left = nt.temp
             }
+        } else if (k == "==" || k == "!=") && _is_struct_type(ll.store, ll.registry, left_type) {
+            // Struct equality: compare field by field
+            sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+            if sname != "" {
+                eq_result := _lower_struct_eq(ll, left, right.temp, sname, nt.temp)
+                ll = eq_result
+                if k == "!=" {
+                    not_nt := _lnew_temp(ll)
+                    ll = not_nt.l
+                    ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                    left = not_nt.temp
+                    ll = _lset_type(ll, not_nt.temp, 1)
+                } else {
+                    left = nt.temp
+                }
+            } else {
+                ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
+                left = nt.temp
+            }
         } else {
             ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
             left = nt.temp
@@ -1374,13 +1475,30 @@ fn _lower_expr(l: Lowerer) -> LT {
             if (k == "==" || k == "!=") && left_type == 12 {
                 ll = _lemit(ll, new_inst(OpStrEq, nt.temp, left, right.temp, "", 0))
                 if k == "!=" {
-                    // Negate result
                     not_nt := _lnew_temp(ll)
                     ll = not_nt.l
                     ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
                     left = not_nt.temp
                     ll = _lset_type(ll, not_nt.temp, 1)
                 } else {
+                    left = nt.temp
+                }
+            } else if (k == "==" || k == "!=") && _is_struct_type(ll.store, ll.registry, left_type) {
+                sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+                if sname != "" {
+                    eq_result := _lower_struct_eq(ll, left, right.temp, sname, nt.temp)
+                    ll = eq_result
+                    if k == "!=" {
+                        not_nt := _lnew_temp(ll)
+                        ll = not_nt.l
+                        ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                        left = not_nt.temp
+                        ll = _lset_type(ll, not_nt.temp, 1)
+                    } else {
+                        left = nt.temp
+                    }
+                } else {
+                    ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                     left = nt.temp
                 }
             } else {
@@ -2712,6 +2830,153 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = nt.l
         // Pass end temp via type_id field
         ll = _lemit(ll, new_inst(OpStrSubstring, nt.temp, obj, start.temp, "", end.temp))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if method == "debug_str" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        // Generate debug string: "TypeName{field1: val1, field2: val2}"
+        obj_type := _lget_type(ll, obj)
+        sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+        if sname != "" {
+            def := reg_find_struct(ll.registry, sname)
+            // Start with struct name + "{"
+            mut hdr_idx := mod_find_string(ll.module, sname + "\{")
+            if hdr_idx == 0 {
+                new_mod := mod_add_string(ll.module, sname + "\{")
+                hdr_idx = new_mod.string_constants.len() - 1
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                             table: ll.table, file: ll.file, module: new_mod,
+                             current_func: ll.current_func,
+                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                             env_names: ll.env_names, env_slots: ll.env_slots,
+                             loop_start: ll.loop_start, loop_end: ll.loop_end,
+                             const_names: ll.const_names, const_vals: ll.const_vals,
+                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                             temp_types: ll.temp_types,
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            }
+            hdr_len := sname.len() + 1
+            result_nt := _lnew_str_temp(ll)
+            ll = result_nt.l
+            ll = _lemit(ll, new_inst(OpConstStr, result_nt.temp, hdr_idx, hdr_len, "", 0))
+            ll = _lset_type(ll, result_nt.temp, 12)
+
+            // For each field, append "name: " + value
+            mut fi := 1
+            mut field_slot := 0
+            while fi < def.fields.len() {
+                fld := def.fields[fi]
+                ft := fld.type_id
+                // Add separator ", " for second+ fields
+                if fi > 1 {
+                    mut sep_idx := mod_find_string(ll.module, ", ")
+                    if sep_idx == 0 {
+                        new_mod := mod_add_string(ll.module, ", ")
+                        sep_idx = new_mod.string_constants.len() - 1
+                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                                     table: ll.table, file: ll.file, module: new_mod,
+                                     current_func: ll.current_func,
+                                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                                     env_names: ll.env_names, env_slots: ll.env_slots,
+                                     loop_start: ll.loop_start, loop_end: ll.loop_end,
+                                     const_names: ll.const_names, const_vals: ll.const_vals,
+                                     const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                                     temp_types: ll.temp_types,
+                                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                    }
+                    sep_nt := _lnew_str_temp(ll)
+                    ll = sep_nt.l
+                    ll = _lemit(ll, new_inst(OpConstStr, sep_nt.temp, sep_idx, 2, "", 0))
+                    concat_nt := _lnew_str_temp(ll)
+                    ll = concat_nt.l
+                    ll = _lemit(ll, new_inst(OpStrConcat, concat_nt.temp, result_nt.temp, sep_nt.temp, "", 0))
+                    result_nt = concat_nt
+                }
+                // Add "fieldname: "
+                fname_str := fld.name + ": "
+                mut fname_idx := mod_find_string(ll.module, fname_str)
+                if fname_idx == 0 {
+                    new_mod := mod_add_string(ll.module, fname_str)
+                    fname_idx = new_mod.string_constants.len() - 1
+                    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                                 table: ll.table, file: ll.file, module: new_mod,
+                                 current_func: ll.current_func,
+                                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                                 env_names: ll.env_names, env_slots: ll.env_slots,
+                                 loop_start: ll.loop_start, loop_end: ll.loop_end,
+                                 const_names: ll.const_names, const_vals: ll.const_vals,
+                                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                                 temp_types: ll.temp_types,
+                                 fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                }
+                fname_nt := _lnew_str_temp(ll)
+                ll = fname_nt.l
+                ll = _lemit(ll, new_inst(OpConstStr, fname_nt.temp, fname_idx, fname_str.len(), "", 0))
+                c1 := _lnew_str_temp(ll)
+                ll = c1.l
+                ll = _lemit(ll, new_inst(OpStrConcat, c1.temp, result_nt.temp, fname_nt.temp, "", 0))
+
+                // Get field value as string
+                if ft == 12 {
+                    // String field — get ptr+len and concat directly
+                    fval := _lnew_str_temp(ll)
+                    ll = fval.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, obj, field_slot, fld.name, 0))
+                    fidx_len := field_slot + 1
+                    ll = _lemit(ll, new_inst(OpFieldGet, fval.temp + 1, obj, fidx_len, fld.name, 0))
+                    c2 := _lnew_str_temp(ll)
+                    ll = c2.l
+                    ll = _lemit(ll, new_inst(OpStrConcat, c2.temp, c1.temp, fval.temp, "", 0))
+                    result_nt = c2
+                    field_slot = field_slot + 2
+                } else {
+                    // Numeric field — convert to string then concat
+                    fval := _lnew_temp(ll)
+                    ll = fval.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, obj, field_slot, fld.name, 0))
+                    fstr := _lnew_str_temp(ll)
+                    ll = fstr.l
+                    ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, fval.temp, 0, "", 0))
+                    c2 := _lnew_str_temp(ll)
+                    ll = c2.l
+                    ll = _lemit(ll, new_inst(OpStrConcat, c2.temp, c1.temp, fstr.temp, "", 0))
+                    result_nt = c2
+                    field_slot = field_slot + 1
+                }
+                fi = fi + 1
+            }
+
+            // Add closing "}"
+            mut close_idx := mod_find_string(ll.module, "\}")
+            if close_idx == 0 {
+                new_mod := mod_add_string(ll.module, "\}")
+                close_idx = new_mod.string_constants.len() - 1
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                             table: ll.table, file: ll.file, module: new_mod,
+                             current_func: ll.current_func,
+                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                             env_names: ll.env_names, env_slots: ll.env_slots,
+                             loop_start: ll.loop_start, loop_end: ll.loop_end,
+                             const_names: ll.const_names, const_vals: ll.const_vals,
+                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                             temp_types: ll.temp_types,
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            }
+            close_nt := _lnew_str_temp(ll)
+            ll = close_nt.l
+            ll = _lemit(ll, new_inst(OpConstStr, close_nt.temp, close_idx, 1, "", 0))
+            final_nt := _lnew_str_temp(ll)
+            ll = final_nt.l
+            ll = _lemit(ll, new_inst(OpStrConcat, final_nt.temp, result_nt.temp, close_nt.temp, "", 0))
+            ll = _lset_type(ll, final_nt.temp, 12)
+            return LT{l: ll, temp: final_nt.temp}
+        }
+        // Unknown struct — return empty string
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
         ll = _lset_type(ll, nt.temp, 12)
         return LT{l: ll, temp: nt.temp}
     }
