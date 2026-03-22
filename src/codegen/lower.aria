@@ -2302,10 +2302,44 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
 
     loop_lbl := _lnew_label(ll)
     ll = loop_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
 
+    // Loop start
     ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+
+    // Set loop labels for break/continue
+    prev_start := ll.loop_start
+    prev_end := ll.loop_end
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types}
+
+    // Body
     ll = _lower_block(ll)
+
+    // Restore loop labels
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: prev_start, loop_end: prev_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types}
+
+    // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+
+    // End label
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
     ll
 }
 
