@@ -1312,8 +1312,60 @@ fn _lower_primary(l: Lowerer) -> LT {
         name := _lcur(l).text
         mut ll := _ladv(l)
 
-        // Function call
+        // Function call or variant construction with data
         if _lk(ll) == "(" {
+            // Check for variant construction first: Circle(5), Pair(1, 2)
+            vtag := _variant_tag(ll.registry, name)
+            if vtag > 0 {
+                vparent := _variant_parent(ll.registry, name)
+                vdc := variant_data_count(vparent, vtag)
+                if vdc > 0 {
+                    // Variant with tuple data
+                    alloc_sz := sum_alloc_size(vparent)
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, vparent.name, 0))
+                    st_id := _struct_type_id(ll.registry, vparent.name)
+                    if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+                    // Set tag at slot 0
+                    vtag_nt := _lnew_temp(ll)
+                    ll = vtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, vtag_nt.temp, 0, "_tag", 0))
+                    // Parse and set data fields
+                    ll = _ladv(ll)  // skip (
+                    ll = _lskip_nl(ll)
+                    mut vfi := 0
+                    while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                        val := _lower_expr(ll)
+                        ll = val.l
+                        mut vdata_slot := 1
+                        mut vsi := 0
+                        while vsi < vfi {
+                            vft := variant_field_type(vparent, vtag, vsi)
+                            if vft == 12 {
+                                vdata_slot = vdata_slot + 2
+                            } else {
+                                vdata_slot = vdata_slot + 1
+                            }
+                            vsi = vsi + 1
+                        }
+                        vft := variant_field_type(vparent, vtag, vfi)
+                        if vft == 12 {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, vdata_slot, "", 0))
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp + 1, vdata_slot + 1, "", 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, vdata_slot, "", 0))
+                        }
+                        vfi = vfi + 1
+                        ll = _lskip_nl(ll)
+                        if _lk(ll) == "," { ll = _ladv(ll) }
+                        ll = _lskip_nl(ll)
+                    }
+                    if _lk(ll) == ")" { ll = _ladv(ll) }
+                    return LT{l: ll, temp: nt.temp}
+                }
+            }
             sig := reg_find_fn(ll.registry, name)
             if sig.name != "" {
                 ll = _ladv(ll)  // skip (
@@ -1552,9 +1604,26 @@ fn _lower_primary(l: Lowerer) -> LT {
             }
         }
 
-        // Sum type variant — emit tag constant
+        // Sum type variant — tag-only (data variants handled above in function call section)
         tag := _variant_tag(ll.registry, name)
         if tag > 0 {
+            parent := _variant_parent(ll.registry, name)
+            if sum_has_data(parent) {
+                // Tag-only variant in a sum type that has data variants:
+                // allocate struct with tag but no data
+                alloc_sz := sum_alloc_size(parent)
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, parent.name, 0))
+                st_id := _struct_type_id(ll.registry, parent.name)
+                if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, tag, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Pure tag-only sum type (no variant has data) — just emit tag constant
             nt := _lnew_temp(ll)
             ll = nt.l
             ll = _lemit(ll, new_inst(OpConst, nt.temp, tag, 0, "", 0))
@@ -2403,6 +2472,25 @@ fn _variant_tag(reg: TypeRegistry, name: str) -> i64 {
     0  // not found
 }
 
+// Find the parent sum type StructDef for a variant name
+fn _variant_parent(reg: TypeRegistry, name: str) -> StructDef {
+    mut si := 1
+    while si < reg.struct_defs.len() {
+        def := reg.struct_defs[si]
+        if def.is_sum {
+            mut vi := 1
+            while vi < def.variant_names.len() {
+                if def.variant_names[vi] == name {
+                    return def
+                }
+                vi = vi + 1
+            }
+        }
+        si = si + 1
+    }
+    _sentinel_struct_def()
+}
+
 // --- Lower match subject (avoid greedy { consumption) ---
 
 fn _lower_match_subject(l: Lowerer) -> LT {
@@ -2552,6 +2640,31 @@ fn _lower_match(l: Lowerer) -> LT {
     end_lbl := _lnew_label(ll)
     ll = end_lbl.l
 
+    // Determine if the subject is a data sum type (struct-allocated with tag at slot 0)
+    // Scan the arms to find the first non-wildcard variant name and check its parent type
+    mut is_data_sum := false
+    mut subj_tag_temp := subj.temp  // for tag-only sums, subject IS the tag
+    // Peek at arm patterns (we're already past { and newlines at this point)
+    mut peek_pos := ll.pos
+    while peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "NEWLINE" {
+        peek_pos = peek_pos + 1
+    }
+    // First token in arm should be a pattern name
+    if peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "IDENT" {
+        first_pat := ll.tokens[peek_pos].text
+        if first_pat != "_" {
+            pat_parent := _variant_parent(ll.registry, first_pat)
+            if pat_parent.name != "" && sum_has_data(pat_parent) {
+                is_data_sum = true
+                // Extract tag from slot 0 of the struct
+                tag_ext := _lnew_temp(ll)
+                ll = tag_ext.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tag_ext.temp, subj.temp, 0, "_tag", 0))
+                subj_tag_temp = tag_ext.temp
+            }
+        }
+    }
+
     // Process each arm
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         ll = _lskip_nl(ll)
@@ -2567,14 +2680,33 @@ fn _lower_match(l: Lowerer) -> LT {
             ll = _ladv(ll)  // skip variant name
         }
 
-        // Skip optional pattern args (e.g., Red(x) or Point{x, y})
+        // Collect destructuring binding names into parallel token-saved arrays
+        // Use _match_bind_names/_match_bind_count to save bindings before => is reached
+        mut has_bindings := false
+        mut bind_name_0 := ""
+        mut bind_name_1 := ""
+        mut bind_name_2 := ""
+        mut bind_name_3 := ""
+        mut bind_total := 0
         if _lk(ll) == "(" {
-            mut depth := 1
-            ll = _ladv(ll)
-            while depth > 0 && _lk(ll) != "EOF" {
-                if _lk(ll) == "(" { depth = depth + 1 }
-                if _lk(ll) == ")" { depth = depth - 1 }
-                if depth > 0 { ll = _ladv(ll) }
+            ll = _ladv(ll)  // skip (
+            ll = _lskip_nl(ll)
+            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    btext := _lcur(ll).text
+                    if bind_total == 0 { bind_name_0 = btext }
+                    if bind_total == 1 { bind_name_1 = btext }
+                    if bind_total == 2 { bind_name_2 = btext }
+                    if bind_total == 3 { bind_name_3 = btext }
+                    bind_total = bind_total + 1
+                    has_bindings = true
+                    ll = _ladv(ll)
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
             }
             if _lk(ll) == ")" { ll = _ladv(ll) }
         }
@@ -2587,13 +2719,11 @@ fn _lower_match(l: Lowerer) -> LT {
             // Wildcard: no comparison, just lower body
             if _lk(ll) == lb {
                 ll = _lower_block(ll)
-                // Block doesn't produce a value, store 0
                 ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
             } else {
                 arm_result := _lower_expr(ll)
                 ll = arm_result.l
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
-                // Always copy len slot too (harmless for non-strings, required for strings without type tracking)
                 result_len := result_nt.temp + 1
                 arm_len := arm_result.temp + 1
                 ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
@@ -2605,18 +2735,55 @@ fn _lower_match(l: Lowerer) -> LT {
             next_lbl := _lnew_label(ll)
             ll = next_lbl.l
 
-            // Load tag constant
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
             ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, tag, 0, "", 0))
 
-            // Compare subject == tag
             cmp_nt := _lnew_temp(ll)
             ll = cmp_nt.l
-            ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, tag_nt.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag_temp, tag_nt.temp, "", 0))
 
-            // Branch to next arm if not equal
             ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+
+            // Bind destructured fields: extract from struct and add to env
+            if has_bindings {
+                parent := _variant_parent(ll.registry, pattern)
+                mut bi := 0
+                while bi < bind_total {
+                    mut bname := ""
+                    if bi == 0 { bname = bind_name_0 }
+                    if bi == 1 { bname = bind_name_1 }
+                    if bi == 2 { bname = bind_name_2 }
+                    if bi == 3 { bname = bind_name_3 }
+                    mut data_slot := 1
+                    mut si := 0
+                    while si < bi {
+                        ft := variant_field_type(parent, tag, si)
+                        if ft == 12 {
+                            data_slot = data_slot + 2
+                        } else {
+                            data_slot = data_slot + 1
+                        }
+                        si = si + 1
+                    }
+                    ft := variant_field_type(parent, tag, bi)
+                    if ft == 12 {
+                        bnt := _lnew_str_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, subj.temp, data_slot, "", 0))
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp + 1, subj.temp, data_slot + 1, "", 0))
+                        ll = _lset_type(ll, bnt.temp, 12)
+                        ll = _lenv_add(ll, bname, bnt.temp)
+                    } else {
+                        bnt := _lnew_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, subj.temp, data_slot, "", 0))
+                        if ft != 0 { ll = _lset_type(ll, bnt.temp, ft) }
+                        ll = _lenv_add(ll, bname, bnt.temp)
+                    }
+                    bi = bi + 1
+                }
+            }
 
             // Lower arm body
             if _lk(ll) == lb {
@@ -2626,15 +2793,12 @@ fn _lower_match(l: Lowerer) -> LT {
                 arm_result := _lower_expr(ll)
                 ll = arm_result.l
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
-                // Always copy len slot too (harmless for non-strings, required for strings without type tracking)
                 result_len := result_nt.temp + 1
                 arm_len := arm_result.temp + 1
                 ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
             }
 
             ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
-
-            // Next arm label
             ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
         }
 

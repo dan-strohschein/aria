@@ -1,0 +1,61 @@
+// Test destructuring match with sum type variant data
+type Shape =
+    | Circle(i64)
+    | Rect(i64, i64)
+    | Empty
+
+fn area(s: Shape) -> i64 = match s {
+    Circle(r) => r * r * 3
+    Rect(w, h) => w * h
+    Empty => 0
+    _ => 0
+}
+
+fn describe(s: Shape) -> str = match s {
+    Circle(r) => "circle"
+    Rect(w, h) => "rect"
+    Empty => "empty"
+    _ => "unknown"
+}
+
+type Wrapper =
+    | Val(i64)
+    | None
+
+fn unwrap_or(w: Wrapper, default: i64) -> i64 = match w {
+    Val(v) => v
+    None => default
+    _ => default
+}
+
+entry {
+    // Test single-field variant
+    c := Circle(5)
+    assert area(c) == 75
+
+    // Test two-field variant
+    r := Rect(3, 4)
+    assert area(r) == 12
+
+    // Test tag-only variant in data sum type
+    e := Empty
+    assert area(e) == 0
+
+    // Test string return from match
+    assert describe(c) == "circle"
+    assert describe(r) == "rect"
+    assert describe(e) == "empty"
+
+    // Test second sum type
+    v := Val(42)
+    n := None
+    assert unwrap_or(v, 0) == 42
+    assert unwrap_or(n, 99) == 99
+
+    // Test nested construction and matching
+    assert area(Circle(10)) == 300
+    assert area(Rect(5, 6)) == 30
+    assert area(Empty) == 0
+
+    println("destructure_match_test passed")
+}

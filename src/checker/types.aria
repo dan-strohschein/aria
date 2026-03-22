@@ -283,13 +283,91 @@ struct StructDef {
     fields: [FieldInfo]
     is_sum: bool
     variant_names: [str]
+    // Per-variant field info (flat encoding):
+    // variant_field_counts[i] = number of fields for variant i (1-based, 0 = sentinel)
+    // variant_field_names = flat list: sentinel, then fields for variant 1, then variant 2, ...
+    // variant_field_types = parallel to variant_field_names (type IDs)
+    // variant_field_offsets[i] = start index in variant_field_names for variant i
+    variant_field_counts: [i64]
+    variant_field_names: [str]
+    variant_field_types: [i64]
+    variant_field_offsets: [i64]
 }
 
 fn _sentinel_struct_def() -> StructDef =
-    StructDef{name: "", fields: [_sentinel_field()], is_sum: false, variant_names: [""]}
+    StructDef{name: "", fields: [_sentinel_field()], is_sum: false, variant_names: [""],
+              variant_field_counts: [0], variant_field_names: [""],
+              variant_field_types: [0], variant_field_offsets: [0]}
 
 fn new_struct_def(name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef =
-    StructDef{name: name, fields: fields, is_sum: is_sum, variant_names: variants}
+    StructDef{name: name, fields: fields, is_sum: is_sum, variant_names: variants,
+              variant_field_counts: [0], variant_field_names: [""],
+              variant_field_types: [0], variant_field_offsets: [0]}
+
+fn new_sum_def(name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf_types: [i64], vf_offsets: [i64]) -> StructDef =
+    StructDef{name: name, fields: [_sentinel_field()], is_sum: true, variant_names: variants,
+              variant_field_counts: vf_counts, variant_field_names: vf_names,
+              variant_field_types: vf_types, variant_field_offsets: vf_offsets}
+
+// Look up the number of data fields for a variant by its 1-based tag
+fn variant_data_count(def: StructDef, tag: i64) -> i64 {
+    if tag <= 0 || tag >= def.variant_field_counts.len() { return 0 }
+    def.variant_field_counts[tag]
+}
+
+// Get the field name for variant at tag, field index fi (0-based)
+fn variant_field_name(def: StructDef, tag: i64, fi: i64) -> str {
+    if tag <= 0 || tag >= def.variant_field_offsets.len() { return "" }
+    off := def.variant_field_offsets[tag]
+    idx := off + fi
+    if idx >= def.variant_field_names.len() { return "" }
+    def.variant_field_names[idx]
+}
+
+// Get the field type for variant at tag, field index fi (0-based)
+fn variant_field_type(def: StructDef, tag: i64, fi: i64) -> i64 {
+    if tag <= 0 || tag >= def.variant_field_offsets.len() { return 0 }
+    off := def.variant_field_offsets[tag]
+    idx := off + fi
+    if idx >= def.variant_field_types.len() { return 0 }
+    def.variant_field_types[idx]
+}
+
+// Compute total alloc slots for a sum type with data:
+// slot 0 = tag, slot 1+ = max data fields across all variants
+fn sum_alloc_size(def: StructDef) -> i64 {
+    mut max_fields := 0
+    mut i := 1
+    while i < def.variant_field_counts.len() {
+        cnt := def.variant_field_counts[i]
+        // Count slots needed (strings take 2)
+        mut slots := 0
+        off := def.variant_field_offsets[i]
+        mut fi := 0
+        while fi < cnt {
+            idx := off + fi
+            if idx < def.variant_field_types.len() && def.variant_field_types[idx] == 12 {
+                slots = slots + 2
+            } else {
+                slots = slots + 1
+            }
+            fi = fi + 1
+        }
+        if slots > max_fields { max_fields = slots }
+        i = i + 1
+    }
+    1 + max_fields  // 1 for tag + max data slots
+}
+
+// Check if a sum type has any variant with data
+fn sum_has_data(def: StructDef) -> bool {
+    mut i := 1
+    while i < def.variant_field_counts.len() {
+        if def.variant_field_counts[i] > 0 { return true }
+        i = i + 1
+    }
+    false
+}
 
 // --- FnSig ---
 

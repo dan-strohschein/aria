@@ -11,6 +11,31 @@ use diagnostic
 use lexer
 use resolver
 
+// --- Tiny int-to-str for field name generation ---
+
+fn _i2s_checker(n: i64) -> str {
+    if n == 0 { return "0" }
+    mut result := ""
+    mut v := n
+    if v < 0 { v = 0 - v }
+    while v > 0 {
+        d := v % 10
+        v = v / 10
+        if d == 0 { result = "0" + result }
+        if d == 1 { result = "1" + result }
+        if d == 2 { result = "2" + result }
+        if d == 3 { result = "3" + result }
+        if d == 4 { result = "4" + result }
+        if d == 5 { result = "5" + result }
+        if d == 6 { result = "6" + result }
+        if d == 7 { result = "7" + result }
+        if d == 8 { result = "8" + result }
+        if d == 9 { result = "9" + result }
+    }
+    if n < 0 { result = "-" + result }
+    result
+}
+
 // --- Checker state ---
 
 struct Checker {
@@ -376,8 +401,13 @@ fn _register_type_decl(c: Checker) -> Checker {
         cc = _cadv(cc)
         cc = _cskip_nl(cc)
         if _ck2(cc) == "|" {
-            // Sum type
+            // Sum type — parse variants and their data fields
             mut variants := [""]
+            mut vf_counts := [0]
+            mut vf_names := [""]
+            mut vf_types := [0]
+            mut vf_offsets := [0]
+            mut flat_pos := 1  // next insert position in vf_names/vf_types
             while _ck2(cc) == "|" {
                 cc = _cadv(cc)
                 cc = _cskip_nl(cc)
@@ -385,24 +415,63 @@ fn _register_type_decl(c: Checker) -> Checker {
                     variants = variants.append(_ccur(cc).text)
                     cc = _cadv(cc)
                 }
-                // Skip payload
+                // Parse tuple payload: Variant(Type, Type, ...)
+                vf_offsets = vf_offsets.append(flat_pos)
+                mut field_count := 0
                 if _ck2(cc) == "(" {
-                    mut d := 1
-                    cc = _cadv(cc)
-                    while d > 0 && _ck2(cc) != "EOF" {
-                        if _ck2(cc) == "(" { d = d + 1 }
-                        if _ck2(cc) == ")" { d = d - 1 }
-                        if d > 0 { cc = _cadv(cc) }
+                    cc = _cadv(cc)  // skip (
+                    cc = _cskip_nl(cc)
+                    mut fi := 0
+                    while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+                        // Check if this is Name: Type (struct-variant) or just Type (tuple-variant)
+                        // For tuple variants, auto-generate field names: _0, _1, ...
+                        ft := _parse_type_ann(cc)
+                        cc = ft.c
+                        vf_names = vf_names.append("_" + _i2s_checker(fi))
+                        vf_types = vf_types.append(ft.type_id)
+                        field_count = field_count + 1
+                        flat_pos = flat_pos + 1
+                        fi = fi + 1
+                        cc = _cskip_nl(cc)
+                        if _ck2(cc) == "," { cc = _cadv(cc) }
+                        cc = _cskip_nl(cc)
                     }
                     if _ck2(cc) == ")" { cc = _cadv(cc) }
                 }
-                if _ck2(cc) == lb { cc = _skip_braces2(cc) }
+                // Parse struct payload: Variant{name: Type, ...}
+                if _ck2(cc) == lb {
+                    cc = _cadv(cc)  // skip {
+                    cc = _cskip_nl(cc)
+                    rb := "\}"
+                    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+                        if _ck2(cc) == "IDENT" {
+                            fname := _ccur(cc).text
+                            cc = _cadv(cc)
+                            if _ck2(cc) == ":" {
+                                cc = _cadv(cc)
+                                ft := _parse_type_ann(cc)
+                                cc = ft.c
+                                vf_names = vf_names.append(fname)
+                                vf_types = vf_types.append(ft.type_id)
+                                field_count = field_count + 1
+                                flat_pos = flat_pos + 1
+                            }
+                        } else {
+                            cc = _cadv(cc)
+                        }
+                        cc = _cskip_nl(cc)
+                        if _ck2(cc) == "," { cc = _cadv(cc) }
+                        cc = _cskip_nl(cc)
+                    }
+                    if _ck2(cc) == rb { cc = _cadv(cc) }
+                }
+                vf_counts = vf_counts.append(field_count)
                 cc = _cskip_nl(cc)
             }
             // Register as named type
             new_st := store_add(cc.store, mk_named_type(name))
             cc = _cset_store(cc, new_st)
-            def := new_struct_def(name, [_sentinel_field()], true, variants)
+            def := new_sum_def(name, variants, vf_counts, vf_names, vf_types, vf_offsets)
             cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
             return cc
         }
