@@ -33,6 +33,7 @@ type TypeKind =
     | TyResult
     | TyOptional
     | TyTypeVar
+    | TyTraitObject
     | TyNever
     | TyUnknown
     | TyNone
@@ -58,6 +59,7 @@ fn type_kind_name(k: TypeKind) -> str = match k {
     TyResult => "Result"
     TyOptional => "Optional"
     TyTypeVar => "TypeVar"
+    TyTraitObject => "TraitObject"
     TyNever => "Never"
     TyUnknown => "Unknown"
     TyNone => "None"
@@ -183,6 +185,7 @@ fn format_type(store: TypeStore, id: i64) -> str {
     }
     if kn == "Function" { return "fn(...)" }
     if kn == "TypeVar" { return info.name }
+    if kn == "TraitObject" { return "dyn " + info.name }
     return kn
 }
 
@@ -342,7 +345,7 @@ struct StructDef {
 }
 
 fn _sentinel_struct_def() -> StructDef =
-    StructDef{name: "", fields: [_sentinel_field()], is_sum: false, variant_names: [""],
+    StructDef{name: "", fields: [FieldInfo{name: "", type_id: 0}], is_sum: false, variant_names: [""],
               variant_field_counts: [0], variant_field_names: [""],
               variant_field_types: [0], variant_field_offsets: [0],
               generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
@@ -362,7 +365,7 @@ fn new_generic_struct_def(name: str, fields: [FieldInfo], gc: i64, gn0: str, gn1
 fn struct_is_generic(def: StructDef) -> bool = def.generic_count > 0
 
 fn new_sum_def(name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf_types: [i64], vf_offsets: [i64]) -> StructDef =
-    StructDef{name: name, fields: [_sentinel_field()], is_sum: true, variant_names: variants,
+    StructDef{name: name, fields: [FieldInfo{name: "", type_id: 0}], is_sum: true, variant_names: variants,
               variant_field_counts: vf_counts, variant_field_names: vf_names,
               variant_field_types: vf_types, variant_field_offsets: vf_offsets,
               generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
@@ -485,6 +488,20 @@ fn fn_has_effect(sig: FnSig, effect: str) -> bool {
 fn fn_is_pure(sig: FnSig) -> bool =
     sig.has_io == false && sig.has_fs == false && sig.has_net == false &&
     sig.has_ffi == false && sig.has_async == false
+
+fn _builtin_effect(name: str) -> str {
+    // File system operations
+    if name == "_ariaReadFile" || name == "_ariaWriteFile" || name == "_ariaWriteBinaryFile" { return "Fs" }
+    // I/O operations
+    if name == "_ariaExec" || name == "_ariaGetenv" { return "Io" }
+    // Network operations
+    if name == "_ariaTcpConnect" || name == "_ariaTcpListen" || name == "_ariaTcpAccept" || name == "_ariaTcpRead" || name == "_ariaTcpWrite" || name == "_ariaTcpClose" { return "Net" }
+    if name == "_ariaPgConnect" || name == "_ariaPgQuery" || name == "_ariaPgExec" || name == "_ariaPgClose" { return "Net" }
+    if name == "_ariaHttpGet" || name == "_ariaHttpPost" || name == "_ariaHttpRequest" { return "Net" }
+    // Async operations
+    if name == "_ariaSpawn" || name == "_ariaTaskAwait" || name == "_ariaChanSend" || name == "_ariaChanRecv" || name == "_ariaChanNew" || name == "_ariaMutexNew" || name == "_ariaMutexLock" || name == "_ariaMutexUnlock" { return "Async" }
+    ""
+}
 
 fn sig_set_effects(sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e: bool) -> FnSig =
     FnSig{name: sig.name, param_names: sig.param_names, param_types: sig.param_types,

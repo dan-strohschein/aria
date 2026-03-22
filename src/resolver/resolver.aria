@@ -256,7 +256,7 @@ fn _pass1(r: Resolver) -> Resolver {
         rr = _rskip_nl(rr)
     }
 
-    // Skip use declarations (but register imported names)
+    // Skip use declarations (but register imported names and aliases)
     while _rk(rr) == "use" {
         rr = _radv(rr)  // skip "use"
         if _rk(rr) == "IDENT" {
@@ -264,8 +264,18 @@ fn _pass1(r: Resolver) -> Resolver {
             span := _rspan(rr)
             rr = _add_sym(rr, name, SkModule, span, false, false)
             rr = _radv(rr)
+            // Handle "as alias"
+            if _rk(rr) == "as" {
+                rr = _radv(rr)  // skip "as"
+                if _rk(rr) == "IDENT" {
+                    alias_name := _rcur(rr).text
+                    alias_span := _rspan(rr)
+                    rr = _add_sym(rr, alias_name, SkModule, alias_span, false, false)
+                    rr = _radv(rr)
+                }
+            }
         }
-        // Skip to end of use line (handle "as" aliases)
+        // Skip to end of use line
         while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
             rr = _radv(rr)
         }
@@ -332,6 +342,16 @@ fn _pass1(r: Resolver) -> Resolver {
         } else if k == "entry" || k == "test" || k == "impl" {
             // These have bodies — skip to next declaration boundary
             rr = _skip_to_next_top(rr)
+        } else if k == "IDENT" && _rcur(rr).text == "alias" {
+            rr = _radv(rr)  // skip "alias"
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkType, span, false, is_pub)
+            }
+            // Skip to end of alias declaration
+            while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
+            rr = _rskip_nl(rr)
         } else {
             // Unknown — advance past it
             rr = _radv(rr)
@@ -1026,6 +1046,12 @@ fn _resolve_ident(r: Resolver) -> Resolver {
     if found.name == "" {
         q := _q()
         rr := _rerror(r, E0701, "unresolved name " + q + name + q)
+        return _radv(rr)
+    }
+    // Pub visibility check: if symbol is not public and declared in a different file
+    if found.is_public == false && found.span.file != "" && found.span.file != "<builtin>" && found.span.file != r.file {
+        q := _q()
+        rr := _rerror(r, E0704, "symbol " + q + name + q + " is private to module " + q + found.span.file + q)
         return _radv(rr)
     }
     _radv(r)

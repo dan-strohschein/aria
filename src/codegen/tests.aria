@@ -196,19 +196,7 @@ test "emit branch and label" {
     assert emitter_code_size(em) > 0
 }
 
-// --- Runtime tests ---
-
-test "runtime module has funcs" {
-    m := build_runtime_module()
-    assert mod_func_count(m) >= 3
-    found := mod_find_func(m, "_aria_exit")
-    assert found.name == "_aria_exit"
-}
-
-test "runtime externals" {
-    exts := runtime_externals()
-    assert exts.len() >= 4
-}
+// --- Runtime tests (removed: build_runtime_module/runtime_externals no longer exist) ---
 
 // --- SHA-256 tests ---
 
@@ -277,29 +265,11 @@ test "macho has code signature" {
     assert binary[16444] == 0xC0
 }
 
-test "generate exit binary" {
-    binary := generate_exit_binary(42)
-    assert binary.len() > 100
-    // Check Mach-O magic
-    assert binary[1] == 0xCF
-    assert binary[4] == 0xFE
-}
+// (removed: generate_exit_binary no longer exists)
 
 // --- Full pipeline test ---
 
-test "generate from module" {
-    // Create a simple IR module: entry that exits with 0
-    mut m := new_ir_module()
-    mut f := new_ir_func("_main", 0, 0)
-    f = func_add_inst(f, new_inst(OpConst, 0, 0, 0, "", 0))
-    f = func_add_inst(f, new_inst(OpRet, 0, 0, 0, "", 0))
-    f = func_set_locals(f, 1)
-    m = mod_add_func(m, f)
-    m = mod_set_entry(m, "_main")
-    result := generate_from_module(m)
-    assert result.binary.len() > 100
-    assert result.binary[1] == 0xCF
-}
+// (removed: generate_from_module now returns DiagnosticBag, not binary data — old Mach-O test)
 
 // --- Lowering tests ---
 

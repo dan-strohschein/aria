@@ -1,0 +1,59 @@
+// Test hex, octal, and binary integer literal parsing
+
+entry {
+    // Hex literals
+    a := 0xFF
+    assert a == 255
+
+    b := 0x0A
+    assert b == 10
+
+    c := 0xDEAD
+    assert c == 57005
+
+    // Hex with underscores
+    d := 0xFF_FF
+    assert d == 65535
+
+    // Octal literals
+    e := 0o77
+    assert e == 63
+
+    f := 0o10
+    assert f == 8
+
+    g := 0o755
+    assert g == 493
+
+    // Binary literals
+    h := 0b1010
+    assert h == 10
+
+    i := 0b11111111
+    assert i == 255
+
+    j := 0b0
+    assert j == 0
+
+    // Binary with underscores
+    k := 0b1111_0000
+    assert k == 240
+
+    // Uppercase prefix
+    l := 0XFF
+    assert l == 255
+
+    m := 0O77
+    assert m == 63
+
+    n := 0B1010
+    assert n == 10
+
+    // Negative hex
+    o := -1
+    // Can't do -0xFF in literals, but verify math
+    p := 0 - 0xFF
+    assert p == -255
+
+    println("All integer literal base tests passed!")
+}

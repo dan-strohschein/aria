@@ -15,6 +15,7 @@ type TokenKind =
     | TkIntLit
     | TkFloatLit
     | TkStringLit
+    | TkCharLit
     | TkBoolTrue
     | TkBoolFalse
     // String interpolation
@@ -124,6 +125,7 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkIntLit => "INT"
     TkFloatLit => "FLOAT"
     TkStringLit => "STRING"
+    TkCharLit => "CHAR"
     TkBoolTrue => "true"
     TkBoolFalse => "false"
     TkStringStart => "STRING_START"

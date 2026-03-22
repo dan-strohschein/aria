@@ -317,6 +317,25 @@ fn _scan_number(lex: Lexer) -> Lexer {
 
 // --- Scan string literal ---
 
+fn _scan_char(lex: Lexer) -> Lexer {
+    start_line := lex.line
+    start_col := lex.col
+    start_pos := lex.pos
+    mut l := _advance(lex)  // skip opening '
+    mut val := ""
+    if _peek(l) == "\\" {
+        l = _advance(l)  // skip backslash
+        esc := _peek(l)
+        if esc == "n" { val = "\n" } else if esc == "t" { val = "\t" } else if esc == "r" { val = "\r" } else if esc == "\\" { val = "\\" } else if esc == "'" { val = "'" } else if esc == "0" { val = "\0" } else { val = esc }
+        l = _advance(l)
+    } else {
+        val = _peek(l)
+        l = _advance(l)
+    }
+    if _peek(l) == "'" { l = _advance(l) }
+    _add_token(l, TkCharLit, val, start_line, start_col, start_pos)
+}
+
 fn _scan_string(lex: Lexer) -> Lexer {
     _scan_string_impl(lex, false)
 }
@@ -435,6 +454,8 @@ fn tokenize(source: str, file: str) -> Lexer {
             lex = _scan_number(lex)
         } else if c == "\"" {
             lex = _scan_string(lex)
+        } else if c == "'" {
+            lex = _scan_char(lex)
         } else if c == "+" {
             lex = _add_token(lex, TkPlus, "+", lex.line, lex.col, lex.pos)
             lex = _advance(lex)

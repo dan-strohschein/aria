@@ -213,6 +213,18 @@ fn _parse_type_ann(c: Checker) -> CE {
     k := _ck2(c)
     if k == "IDENT" {
         name := _ccur(c).text
+        // Handle dyn Trait — trait object type
+        if name == "dyn" {
+            mut cc := _cadv(c)  // skip "dyn"
+            if _ck2(cc) == "IDENT" {
+                trait_name := _ccur(cc).text
+                cc = _cadv(cc)
+                new_st := store_add(cc.store, TypeInfo{kind: TyTraitObject, name: trait_name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+                cc = _cset_store(cc, new_st)
+                return CE{c: cc, type_id: store_last_id(cc.store)}
+            }
+            return CE{c: cc, type_id: TY_UNKNOWN}
+        }
         mut cc := _cadv(c)
         // Check for array type [T]
         if _ck2(cc) == "[" {
@@ -378,7 +390,7 @@ fn _pass1_types(c: Checker) -> Checker {
             cc = _register_type_decl(cc)
         } else if k == "enum" {
             cc = _register_enum_decl(cc)
-        } else if k == "alias" {
+        } else if k == "IDENT" && _ccur(cc).text == "alias" {
             cc = _register_alias_decl(cc)
         } else {
             cc = _cadv(cc)
@@ -412,7 +424,7 @@ fn _parse_derives(c: Checker, type_name: str) -> Checker {
 }
 
 fn _mk_newtype_def(name: str, underlying: i64) -> StructDef {
-    mut fields := [_sentinel_field()]
+    mut fields := [FieldInfo{name: "", type_id: 0}]
     fields = fields.append(FieldInfo{name: "value", type_id: underlying})
     new_struct_def(name, fields, false, [""])
 }
@@ -583,7 +595,7 @@ fn _register_type_decl(c: Checker) -> Checker {
     if _ck2(cc) == lb {
         cc = _cadv(cc)  // skip {
         cc = _cskip_nl(cc)
-        mut fields := [_sentinel_field()]
+        mut fields := [FieldInfo{name: "", type_id: 0}]
         rb := "\}"
         while _ck2(cc) != rb && _ck2(cc) != "EOF" {
             if _ck2(cc) == "IDENT" {
@@ -627,7 +639,7 @@ fn _register_enum_decl(c: Checker) -> Checker {
     cc = _skip_braces2(cc)
     new_st := store_add(cc.store, mk_named_type(name))
     cc = _cset_store(cc, new_st)
-    def := new_struct_def(name, [_sentinel_field()], false, [""])
+    def := new_struct_def(name, [FieldInfo{name: "", type_id: 0}], false, [""])
     cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
     cc
 }
@@ -689,6 +701,21 @@ fn _register_trait_decl(c: Checker) -> Checker {
     cc = _cadv(cc)
     lb := "\{"
     rb := "\}"
+    // Parse supertrait clause: trait B: A, C {
+    mut parents := [""]
+    if _ck2(cc) == ":" {
+        cc = _cadv(cc)  // skip :
+        mut parsing_parents := true
+        while parsing_parents {
+            if _ck2(cc) == "IDENT" {
+                parents = parents.append(_ccur(cc).text)
+                cc = _cadv(cc)
+                if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_parents = false }
+            } else {
+                parsing_parents = false
+            }
+        }
+    }
     // Skip to opening brace
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
     if _ck2(cc) != lb { return cc }
@@ -720,6 +747,13 @@ fn _register_trait_decl(c: Checker) -> Checker {
                     cc = _cadv(cc)
                 }
             }
+        } else if _ck2(cc) == "type" {
+            // Associated type declaration: type Name or type Name = Type
+            cc = _cadv(cc)  // skip type
+            // Skip the associated type declaration
+            while _ck2(cc) != "NEWLINE" && _ck2(cc) != rb && _ck2(cc) != "EOF" {
+                cc = _cadv(cc)
+            }
         } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
             // done
         } else {
@@ -735,7 +769,7 @@ fn _register_trait_decl(c: Checker) -> Checker {
     if method_count > 2 { mnames = mnames.append(method_name_2) }
     if method_count > 3 { mnames = mnames.append(method_name_3) }
     // Register trait
-    tdef := TraitDef{name: trait_name, method_names: mnames}
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
@@ -875,6 +909,31 @@ fn _register_fn_sig(c: Checker) -> Checker {
         }
     }
 
+    // Parse where clause: where T: Trait, U: Trait2
+    if _ck2(cc) == "where" {
+        cc = _cadv(cc)  // skip where
+        mut parsing_where := true
+        while parsing_where {
+            if _ck2(cc) == "IDENT" {
+                wname := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" {
+                        wbound := _ccur(cc).text
+                        if wname == gp_0 && gb_0 == "" { gb_0 = wbound }
+                        if wname == gp_1 && gb_1 == "" { gb_1 = wbound }
+                        if wname == gp_2 && gb_2 == "" { gb_2 = wbound }
+                        cc = _cadv(cc)
+                    }
+                }
+                if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
+            } else {
+                parsing_where = false
+            }
+        }
+    }
+
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
         sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
@@ -920,6 +979,19 @@ fn _register_impl_fns(c: Checker) -> Checker {
     // Register trait impl in trait registry
     if impl_trait != "" && impl_type != "" {
         cc = _cset_treg(cc, treg_add_impl(cc.treg, ImplDef{trait_name: impl_trait, type_name: impl_type}))
+        // Check supertrait requirements
+        tdef := treg_find_trait(cc.treg, impl_trait)
+        if tdef.name != "" {
+            mut pi := 1
+            while pi < tdef.parent_traits.len() {
+                parent := tdef.parent_traits[pi]
+                if treg_has_impl(cc.treg, impl_type, parent) == false {
+                    q := _q()
+                    cc = _cerror(cc, E0200, "trait " + q + impl_trait + q + " requires " + q + parent + q + " but " + q + impl_type + q + " does not implement it")
+                }
+                pi = pi + 1
+            }
+        }
     }
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -1087,6 +1159,31 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
         }
     }
 
+    // Parse where clause: where T: Trait, U: Trait2
+    if _ck2(cc) == "where" {
+        cc = _cadv(cc)  // skip where
+        mut parsing_where := true
+        while parsing_where {
+            if _ck2(cc) == "IDENT" {
+                wname := _ccur(cc).text
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" {
+                        wbound := _ccur(cc).text
+                        if wname == gp_0 && gb_0 == "" { gb_0 = wbound }
+                        if wname == gp_1 && gb_1 == "" { gb_1 = wbound }
+                        if wname == gp_2 && gb_2 == "" { gb_2 = wbound }
+                        cc = _cadv(cc)
+                    }
+                }
+                if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
+            } else {
+                parsing_where = false
+            }
+        }
+    }
+
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
         sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
@@ -1165,6 +1262,8 @@ fn _pass3_bodies(c: Checker) -> Checker {
         } else if k == "test" {
             cc = _check_test(cc)
         } else if k == "type" || k == "struct" || k == "enum" || k == "trait" || k == "const" {
+            cc = _skip_decl(cc)
+        } else if k == "IDENT" && _ccur(cc).text == "alias" {
             cc = _skip_decl(cc)
         } else {
             cc = _cadv(cc)
@@ -1424,6 +1523,18 @@ fn _check_stmt(c: Checker) -> CE {
         result := _check_expr_full(cc)
         return CE{c: result.c, type_id: TY_UNIT}
     }
+    // with resource { body } — resource block (RAII)
+    if k == "with" {
+        mut cc := _cadv(c)  // skip with
+        // Check if this is a resource block (next is expr) vs effect clause (next is [)
+        if _ck2(cc) != "[" {
+            // Resource block: with expr { body }
+            result := _check_expr_full(cc)
+            cc = result.c
+            body := _check_block(cc)
+            return CE{c: body.c, type_id: body.type_id}
+        }
+    }
 
     // Check for binding or expression
     _check_expr_or_binding(c)
@@ -1494,6 +1605,18 @@ fn _check_expr_or_binding(c: Checker) -> CE {
                 cc = result.c
                 cc = _env_add(cc, name, result.type_id, 0)
                 return CE{c: cc, type_id: TY_UNIT}
+            }
+            // Mutability check: name = expr (reassignment)
+            if next_k == "=" {
+                sym := lookup(c.table, c.current_scope, name)
+                if sym.name != "" && sym.is_mutable == false {
+                    q := _q()
+                    mut cc := _cerror(c, "E0500", "cannot assign to immutable binding " + q + name + q)
+                    cc = _cadv(cc)   // skip name
+                    cc = _cadv(cc)   // skip =
+                    result := _check_expr_full(cc)
+                    return CE{c: result.c, type_id: TY_UNIT}
+                }
             }
             if next_k == ":" {
                 // Typed binding: name : Type = expr
@@ -1813,6 +1936,7 @@ fn _check_primary(c: Checker) -> CE {
     if k == "INT" { return CE{c: _cadv(c), type_id: TY_I64} }
     if k == "FLOAT" { return CE{c: _cadv(c), type_id: TY_F64} }
     if k == "STRING" { return CE{c: _cadv(c), type_id: TY_STR} }
+    if k == "CHAR" { return CE{c: _cadv(c), type_id: TY_CHAR} }
     if k == "STRING_START" {
         // String interpolation — skip tokens until STRING_END, result is str
         mut cc := _cadv(c)
@@ -1861,6 +1985,16 @@ fn _check_primary(c: Checker) -> CE {
             }
         }
 
+        // Check for type conversion: T(x) — lossless widening
+        if _ck2(cc) == "(" {
+            conv_type := resolve_type_name(cc.store, name)
+            if conv_type != TY_UNKNOWN && conv_type <= TY_CHAR {
+                // Type name used as callable — widening conversion
+                cr := _check_call_args(cc, TY_UNKNOWN)
+                return CE{c: cr.c, type_id: conv_type}
+            }
+        }
+
         // Check for function call
         if _ck2(cc) == "(" {
             sig := reg_find_fn(cc.registry, name)
@@ -1901,6 +2035,16 @@ fn _check_primary(c: Checker) -> CE {
                 caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                 if caller_sig.name != "" && fn_has_effect(caller_sig, "Io") == false {
                     cc = _cwarning(cc, "W0100", name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
+                }
+            }
+            // Check effects for builtin _aria* functions
+            if cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
+                builtin_eff := _builtin_effect(name)
+                if builtin_eff != "" {
+                    caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
+                    if caller_sig.name != "" && fn_has_effect(caller_sig, builtin_eff) == false {
+                        cc = _cerror(cc, E0106, name + " requires effect [" + builtin_eff + "] but " + cc.fn_current_name + " is missing [" + builtin_eff + "]")
+                    }
                 }
             }
             // Unknown function — still consume args
@@ -2304,7 +2448,7 @@ fn _check_generic_struct_lit(c: Checker, name: str, sdef: StructDef) -> CE {
         if sdef.generic_count > 2 { tv_2 = resolve_type_name(cc.store, sdef.generic_name_2) }
 
         // Substitute field types
-        mut sp_fields := [_sentinel_field()]
+        mut sp_fields := [FieldInfo{name: "", type_id: 0}]
         mut fi := 1
         while fi < sdef.fields.len() {
             fld := sdef.fields[fi]
@@ -2407,46 +2551,62 @@ fn _check_match(c: Checker) -> CE {
 
     // Exhaustiveness tracking
     mut has_wildcard := false
-    // Track covered variant names (up to 16 variants)
-    mut covered_0 := ""
-    mut covered_1 := ""
-    mut covered_2 := ""
-    mut covered_3 := ""
-    mut covered_4 := ""
-    mut covered_5 := ""
-    mut covered_6 := ""
-    mut covered_7 := ""
-    mut covered_count := 0
+    mut covered := [""]  // sentinel at index 0
+    mut has_true := false
+    mut has_false := false
 
     mut arm_type := TY_UNKNOWN
     mut arm_count := 0
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
-        // Read pattern name for exhaustiveness tracking
+        // Read pattern for exhaustiveness tracking
+        mut arm_is_guarded := false
         if _ck2(cc) == "IDENT" {
             pat_name := _ccur(cc).text
             if pat_name == "_" {
-                has_wildcard = true
+                // Check if guarded: scan ahead to => looking for "if"
+                mut scan := cc
+                mut found_guard := false
+                while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
+                    if _ck2(scan) == "if" { found_guard = true }
+                    scan = _cadv(scan)
+                }
+                if found_guard == false { has_wildcard = true }
+                arm_is_guarded = found_guard
+            } else if pat_name == "true" {
+                has_true = true
+            } else if pat_name == "false" {
+                has_false = true
             } else {
                 // Lowercase-starting names are binding patterns (catch-all)
-                // Variant names start with uppercase (PascalCase)
                 first_char := pat_name.charAt(0)
                 if first_char >= "a" && first_char <= "z" {
-                    has_wildcard = true
+                    // Check if guarded
+                    mut scan := cc
+                    mut found_guard := false
+                    while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
+                        if _ck2(scan) == "if" { found_guard = true }
+                        scan = _cadv(scan)
+                    }
+                    if found_guard == false { has_wildcard = true }
+                    arm_is_guarded = found_guard
                 }
-                // Track covered variant
-                if covered_count == 0 { covered_0 = pat_name }
-                if covered_count == 1 { covered_1 = pat_name }
-                if covered_count == 2 { covered_2 = pat_name }
-                if covered_count == 3 { covered_3 = pat_name }
-                if covered_count == 4 { covered_4 = pat_name }
-                if covered_count == 5 { covered_5 = pat_name }
-                if covered_count == 6 { covered_6 = pat_name }
-                if covered_count == 7 { covered_7 = pat_name }
-                covered_count = covered_count + 1
+                // Track covered variant (only if not guarded)
+                // Also handle or-patterns: A | B => ...
+                if arm_is_guarded == false {
+                    covered = covered.append(pat_name)
+                }
             }
         }
-        // Skip pattern
-        while _ck2(cc) != "=>" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        // Scan pattern for or-patterns: skip to =>, collecting | variants
+        while _ck2(cc) != "=>" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "|" {
+                cc = _cadv(cc)
+                if _ck2(cc) == "IDENT" && arm_is_guarded == false {
+                    covered = covered.append(_ccur(cc).text)
+                }
+            }
+            cc = _cadv(cc)
+        }
         if _ck2(cc) == "=>" { cc = _cadv(cc) }
         cc = _cskip_nl(cc)
 
@@ -2465,34 +2625,106 @@ fn _check_match(c: Checker) -> CE {
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
 
-    // Exhaustiveness check: if subject is a sum type, verify all variants covered
+    // Exhaustiveness check
     if has_wildcard == false {
         info := store_get(cc.store, subj_type)
-        if type_kind_name(info.kind) == "Named" {
+        kind_name := type_kind_name(info.kind)
+
+        // Sum type exhaustiveness
+        if kind_name == "Named" {
             def := reg_find_struct(cc.registry, info.name)
             if def.is_sum && def.variant_names.len() > 1 {
-                // Check each variant is covered
                 mut vi := 1
-                mut all_covered := true
+                mut first_missing := ""
                 while vi < def.variant_names.len() {
                     vname := def.variant_names[vi]
                     mut found := false
-                    if covered_count > 0 && covered_0 == vname { found = true }
-                    if covered_count > 1 && covered_1 == vname { found = true }
-                    if covered_count > 2 && covered_2 == vname { found = true }
-                    if covered_count > 3 && covered_3 == vname { found = true }
-                    if covered_count > 4 && covered_4 == vname { found = true }
-                    if covered_count > 5 && covered_5 == vname { found = true }
-                    if covered_count > 6 && covered_6 == vname { found = true }
-                    if covered_count > 7 && covered_7 == vname { found = true }
-                    if found == false { all_covered = false }
+                    mut ci := 1
+                    while ci < covered.len() {
+                        if covered[ci] == vname { found = true }
+                        ci = ci + 1
+                    }
+                    if found == false && first_missing == "" {
+                        first_missing = vname
+                    }
                     vi = vi + 1
                 }
-                if all_covered == false {
-                    // Warning for now — multi-file token merging causes false positives
-                    // on self-compile. Works correctly for single-file compilation.
-                    cc = _cwarning(cc, "W0010", "non-exhaustive match: not all variants covered and no wildcard '_' arm")
+                if first_missing != "" {
+                    cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + first_missing + "' not covered")
                 }
+            }
+            // Optional exhaustiveness (Some/None)
+            if info.name == "Optional" || info.name == "Option" {
+                mut has_some := false
+                mut has_none := false
+                mut oi := 1
+                while oi < covered.len() {
+                    if covered[oi] == "Some" { has_some = true }
+                    if covered[oi] == "None" { has_none = true }
+                    oi = oi + 1
+                }
+                if (has_some == false || has_none == false) {
+                    mut missing := "Some"
+                    if has_some { missing = "None" }
+                    cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + missing + "' not covered")
+                }
+            }
+            // Result exhaustiveness (Ok/Err)
+            if info.name == "Result" {
+                mut has_ok := false
+                mut has_err := false
+                mut ri := 1
+                while ri < covered.len() {
+                    if covered[ri] == "Ok" { has_ok = true }
+                    if covered[ri] == "Err" { has_err = true }
+                    ri = ri + 1
+                }
+                if (has_ok == false || has_err == false) {
+                    mut missing := "Ok"
+                    if has_ok { missing = "Err" }
+                    cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + missing + "' not covered")
+                }
+            }
+        }
+
+        // Bool exhaustiveness
+        if kind_name == "bool" || subj_type == TY_BOOL {
+            if (has_true == false || has_false == false) {
+                mut missing := "true"
+                if has_true { missing = "false" }
+                cc = _cerror(cc, E0400, "non-exhaustive match: case '" + missing + "' not covered")
+            }
+        }
+
+        // Optional/Result from type store
+        if kind_name == "Optional" {
+            mut has_some := false
+            mut has_none := false
+            mut oi := 1
+            while oi < covered.len() {
+                if covered[oi] == "Some" { has_some = true }
+                if covered[oi] == "None" { has_none = true }
+                oi = oi + 1
+            }
+            if (has_some == false || has_none == false) {
+                mut missing := "Some"
+                if has_some { missing = "None" }
+                cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + missing + "' not covered")
+            }
+        }
+        if kind_name == "Result" {
+            mut has_ok := false
+            mut has_err := false
+            mut ri := 1
+            while ri < covered.len() {
+                if covered[ri] == "Ok" { has_ok = true }
+                if covered[ri] == "Err" { has_err = true }
+                ri = ri + 1
+            }
+            if (has_ok == false || has_err == false) {
+                mut missing := "Ok"
+                if has_ok { missing = "Err" }
+                cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + missing + "' not covered")
             }
         }
     }

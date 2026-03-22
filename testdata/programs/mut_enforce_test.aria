@@ -1,0 +1,19 @@
+// Test mutability enforcement
+// mut x := 5; x = 10 should work
+// x := 5; x = 10 should fail (tested via aria check separately)
+
+entry {
+    mut x := 5
+    x = 10
+    assert x == 10
+
+    mut y := "hello"
+    y = "world"
+    assert y == "world"
+
+    // Immutable binding (no reassignment)
+    z := 42
+    assert z == 42
+
+    println("mutability enforcement test passed!")
+}

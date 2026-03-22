@@ -1,0 +1,12 @@
+// Test where clause parsing (checker-level verification)
+// The where clause should be parsed and bounds stored on generic params
+
+fn identity[T](val: T) -> T where T: Display {
+    val
+}
+
+// Verify the function declaration parses without error
+entry {
+    // where clause is parsed — enforcement happens at monomorphization
+    println("where clause parsing test passed!")
+}

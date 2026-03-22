@@ -257,6 +257,9 @@ const E0401: str = "E0401"
 const E0402: str = "E0402"
 const E0403: str = "E0403"
 
+// Mutability Errors (E0500-E0599)
+const E0500: str = "E0500"
+
 // Module/Import Errors (E0700-E0799)
 const E0700: str = "E0700"
 const E0701: str = "E0701"
@@ -307,6 +310,7 @@ fn describe_code(code: str) -> str {
     if code == E0201 { return "missing trait method" }
     if code == E0300 { return "effect not declared" }
     if code == E0400 { return "non-exhaustive match" }
+    if code == E0500 { return "immutable binding" }
     if code == E0401 { return "unreachable pattern" }
     if code == E0700 { return "module not found" }
     if code == E0701 { return "unresolved name" }

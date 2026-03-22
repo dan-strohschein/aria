@@ -2023,6 +2023,21 @@ fn _lower_primary(l: Lowerer) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    if k == "CHAR" {
+        val := _lcur(l).text
+        // Store char as its first byte value (codepoint for ASCII)
+        mut code := 0
+        if val.len() > 0 {
+            ch := val.charAt(0)
+            // Map ASCII characters to their codepoint values
+            code = _char_to_code(ch)
+        }
+        nt := _lnew_temp(l)
+        mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, code, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 13)  // TY_CHAR
+        return LT{l: ll, temp: nt.temp}
+    }
+
     if k == "STRING_START" {
         return _lower_interpolated_string(l)
     }
@@ -5193,6 +5208,25 @@ fn _parse_int_literal(val: str) -> i64 {
         neg = true
         i = 1
     }
+    // Check for base prefix (0x, 0o, 0b)
+    if val.len() > i + 1 && val.charAt(i) == "0" {
+        p := val.charAt(i + 1)
+        if p == "x" || p == "X" {
+            num = _parse_hex(val, i + 2)
+            if neg { num = 0 - num }
+            return num
+        }
+        if p == "o" || p == "O" {
+            num = _parse_oct(val, i + 2)
+            if neg { num = 0 - num }
+            return num
+        }
+        if p == "b" || p == "B" {
+            num = _parse_bin(val, i + 2)
+            if neg { num = 0 - num }
+            return num
+        }
+    }
     while i < val.len() {
         ch := val.charAt(i)
         if ch != "_" {
@@ -5203,6 +5237,152 @@ fn _parse_int_literal(val: str) -> i64 {
         i = i + 1
     }
     if neg { num = 0 - num }
+    num
+}
+
+fn _char_to_code(ch: str) -> i64 {
+    if ch == "\n" { return 10 }
+    if ch == "\t" { return 9 }
+    if ch == "\r" { return 13 }
+    if ch == "\0" { return 0 }
+    if ch == " " { return 32 }
+    if ch == "!" { return 33 }
+    if ch == "\"" { return 34 }
+    if ch == "#" { return 35 }
+    if ch == "$" { return 36 }
+    if ch == "%" { return 37 }
+    if ch == "&" { return 38 }
+    if ch == "'" { return 39 }
+    if ch == "(" { return 40 }
+    if ch == ")" { return 41 }
+    if ch == "*" { return 42 }
+    if ch == "+" { return 43 }
+    if ch == "," { return 44 }
+    if ch == "-" { return 45 }
+    if ch == "." { return 46 }
+    if ch == "/" { return 47 }
+    if ch == "0" { return 48 }
+    if ch == "1" { return 49 }
+    if ch == "2" { return 50 }
+    if ch == "3" { return 51 }
+    if ch == "4" { return 52 }
+    if ch == "5" { return 53 }
+    if ch == "6" { return 54 }
+    if ch == "7" { return 55 }
+    if ch == "8" { return 56 }
+    if ch == "9" { return 57 }
+    if ch == ":" { return 58 }
+    if ch == ";" { return 59 }
+    if ch == "<" { return 60 }
+    if ch == "=" { return 61 }
+    if ch == ">" { return 62 }
+    if ch == "?" { return 63 }
+    if ch == "@" { return 64 }
+    if ch == "A" { return 65 }
+    if ch == "B" { return 66 }
+    if ch == "C" { return 67 }
+    if ch == "D" { return 68 }
+    if ch == "E" { return 69 }
+    if ch == "F" { return 70 }
+    if ch == "G" { return 71 }
+    if ch == "H" { return 72 }
+    if ch == "I" { return 73 }
+    if ch == "J" { return 74 }
+    if ch == "K" { return 75 }
+    if ch == "L" { return 76 }
+    if ch == "M" { return 77 }
+    if ch == "N" { return 78 }
+    if ch == "O" { return 79 }
+    if ch == "P" { return 80 }
+    if ch == "Q" { return 81 }
+    if ch == "R" { return 82 }
+    if ch == "S" { return 83 }
+    if ch == "T" { return 84 }
+    if ch == "U" { return 85 }
+    if ch == "V" { return 86 }
+    if ch == "W" { return 87 }
+    if ch == "X" { return 88 }
+    if ch == "Y" { return 89 }
+    if ch == "Z" { return 90 }
+    if ch == "[" { return 91 }
+    if ch == "\\" { return 92 }
+    if ch == "]" { return 93 }
+    if ch == "^" { return 94 }
+    if ch == "_" { return 95 }
+    if ch == "`" { return 96 }
+    if ch == "a" { return 97 }
+    if ch == "b" { return 98 }
+    if ch == "c" { return 99 }
+    if ch == "d" { return 100 }
+    if ch == "e" { return 101 }
+    if ch == "f" { return 102 }
+    if ch == "g" { return 103 }
+    if ch == "h" { return 104 }
+    if ch == "i" { return 105 }
+    if ch == "j" { return 106 }
+    if ch == "k" { return 107 }
+    if ch == "l" { return 108 }
+    if ch == "m" { return 109 }
+    if ch == "n" { return 110 }
+    if ch == "o" { return 111 }
+    if ch == "p" { return 112 }
+    if ch == "q" { return 113 }
+    if ch == "r" { return 114 }
+    if ch == "s" { return 115 }
+    if ch == "t" { return 116 }
+    if ch == "u" { return 117 }
+    if ch == "v" { return 118 }
+    if ch == "w" { return 119 }
+    if ch == "x" { return 120 }
+    if ch == "y" { return 121 }
+    if ch == "z" { return 122 }
+    if ch == "\{" { return 123 }
+    if ch == "|" { return 124 }
+    if ch == "\}" { return 125 }
+    if ch == "~" { return 126 }
+    0
+}
+
+fn _parse_hex(val: str, start: i64) -> i64 {
+    mut num := 0
+    mut i := start
+    while i < val.len() {
+        ch := val.charAt(i)
+        if ch != "_" {
+            mut digit := 0
+            if ch == "0" { digit = 0 } else if ch == "1" { digit = 1 } else if ch == "2" { digit = 2 } else if ch == "3" { digit = 3 } else if ch == "4" { digit = 4 } else if ch == "5" { digit = 5 } else if ch == "6" { digit = 6 } else if ch == "7" { digit = 7 } else if ch == "8" { digit = 8 } else if ch == "9" { digit = 9 } else if ch == "a" || ch == "A" { digit = 10 } else if ch == "b" || ch == "B" { digit = 11 } else if ch == "c" || ch == "C" { digit = 12 } else if ch == "d" || ch == "D" { digit = 13 } else if ch == "e" || ch == "E" { digit = 14 } else if ch == "f" || ch == "F" { digit = 15 }
+            num = num * 16 + digit
+        }
+        i = i + 1
+    }
+    num
+}
+
+fn _parse_oct(val: str, start: i64) -> i64 {
+    mut num := 0
+    mut i := start
+    while i < val.len() {
+        ch := val.charAt(i)
+        if ch != "_" {
+            mut digit := 0
+            if ch == "0" { digit = 0 } else if ch == "1" { digit = 1 } else if ch == "2" { digit = 2 } else if ch == "3" { digit = 3 } else if ch == "4" { digit = 4 } else if ch == "5" { digit = 5 } else if ch == "6" { digit = 6 } else if ch == "7" { digit = 7 }
+            num = num * 8 + digit
+        }
+        i = i + 1
+    }
+    num
+}
+
+fn _parse_bin(val: str, start: i64) -> i64 {
+    mut num := 0
+    mut i := start
+    while i < val.len() {
+        ch := val.charAt(i)
+        if ch != "_" {
+            if ch == "1" { num = num * 2 + 1 } else { num = num * 2 }
+        }
+        i = i + 1
+    }
     num
 }
 

@@ -10,15 +10,15 @@ entry {
 
     // Test 2: Full pipeline — function call test
     src := _ariaReadFile("testdata/programs/call_test.aria")
-    generate_from_source(src, "call_test.aria", "/tmp/aria_call_test")
+    generate_from_source(src, "call_test.aria", "/tmp/aria_call_test", "")
 
     // Test 3: Entry-only test
     src2 := _ariaReadFile("testdata/programs/entry_test.aria")
-    generate_from_source(src2, "entry_test.aria", "/tmp/aria_entry_test")
+    generate_from_source(src2, "entry_test.aria", "/tmp/aria_entry_test", "")
 
     // Test 4: Match expression with sum types
     src3 := _ariaReadFile("testdata/programs/match_test.aria")
-    diags3 := generate_from_source(src3, "match_test.aria", "/tmp/aria_match_test")
+    diags3 := generate_from_source(src3, "match_test.aria", "/tmp/aria_match_test", "")
     if bag_has_errors(diags3) {
         println("match_test had errors:")
         println(render_json_bag(diags3))
@@ -28,7 +28,7 @@ entry {
 
     // Test 5: Struct allocation + field access
     src5 := _ariaReadFile("testdata/programs/struct_test.aria")
-    diags5 := generate_from_source(src5, "struct_test.aria", "/tmp/aria_struct_test")
+    diags5 := generate_from_source(src5, "struct_test.aria", "/tmp/aria_struct_test", "")
     if bag_has_errors(diags5) {
         println("struct_test had errors:")
         println(render_json_bag(diags5))
@@ -38,7 +38,7 @@ entry {
 
     // Test 6: Array operations
     src6 := _ariaReadFile("testdata/programs/array_test.aria")
-    diags6 := generate_from_source(src6, "array_test.aria", "/tmp/aria_array_test")
+    diags6 := generate_from_source(src6, "array_test.aria", "/tmp/aria_array_test", "")
     if bag_has_errors(diags6) {
         println("array_test had errors:")
         println(render_json_bag(diags6))
@@ -48,7 +48,7 @@ entry {
 
     // Test 7: Integration test
     src7 := _ariaReadFile("testdata/programs/integration_test.aria")
-    diags7 := generate_from_source(src7, "integration_test.aria", "/tmp/aria_integration_test")
+    diags7 := generate_from_source(src7, "integration_test.aria", "/tmp/aria_integration_test", "")
     if bag_has_errors(diags7) {
         println("integration_test had errors:")
         println(render_json_bag(diags7))
@@ -58,7 +58,7 @@ entry {
 
     // Test 8: String operations
     src8 := _ariaReadFile("testdata/programs/string_test.aria")
-    diags8 := generate_from_source(src8, "string_test.aria", "/tmp/aria_string_test")
+    diags8 := generate_from_source(src8, "string_test.aria", "/tmp/aria_string_test", "")
     if bag_has_errors(diags8) {
         println("string_test had errors:")
         println(render_json_bag(diags8))
@@ -68,7 +68,7 @@ entry {
 
     // Test 9: Array growth
     src9 := _ariaReadFile("testdata/programs/growth_test.aria")
-    diags9 := generate_from_source(src9, "growth_test.aria", "/tmp/aria_growth_test")
+    diags9 := generate_from_source(src9, "growth_test.aria", "/tmp/aria_growth_test", "")
     if bag_has_errors(diags9) {
         println("growth_test had errors:")
         println(render_json_bag(diags9))
@@ -78,7 +78,7 @@ entry {
 
     // Test 10: Simple string concat
     src10 := _ariaReadFile("testdata/programs/str_simple.aria")
-    diags10 := generate_from_source(src10, "str_simple.aria", "/tmp/aria_str_simple")
+    diags10 := generate_from_source(src10, "str_simple.aria", "/tmp/aria_str_simple", "")
     if bag_has_errors(diags10) {
         println("str_simple had errors:")
         println(render_json_bag(diags10))
@@ -88,7 +88,7 @@ entry {
 
     // Test 11: Array index in expressions (arr[1] + arr[2])
     src11 := _ariaReadFile("testdata/programs/index_expr_test.aria")
-    diags11 := generate_from_source(src11, "index_expr_test.aria", "/tmp/aria_index_expr_test")
+    diags11 := generate_from_source(src11, "index_expr_test.aria", "/tmp/aria_index_expr_test", "")
     if bag_has_errors(diags11) {
         println("index_expr_test had errors:")
         println(render_json_bag(diags11))
