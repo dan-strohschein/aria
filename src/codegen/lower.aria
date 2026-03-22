@@ -1366,6 +1366,25 @@ fn _lower_primary(l: Lowerer) -> LT {
                     return LT{l: ll, temp: nt.temp}
                 }
             }
+            // Newtype construction: UserId(42) — allocate single-field struct
+            nt_def := reg_find_struct(ll.registry, name)
+            if nt_def.name != "" && nt_def.is_sum == false && _is_newtype(nt_def) {
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                val := _lower_expr(ll)
+                ll = val.l
+                ll = _lskip_nl(ll)
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Allocate struct with 1 slot for the value field
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 1, 0, name, 0))
+                st_id := _struct_type_id(ll.registry, name)
+                if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+                // Set value field at slot 0
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 0, "value", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
             sig := reg_find_fn(ll.registry, name)
             if sig.name != "" {
                 ll = _ladv(ll)  // skip (
@@ -2449,6 +2468,13 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     }
     ll = _lower_block(ll)
     ll
+}
+
+// --- Newtype detection ---
+
+fn _is_newtype(def: StructDef) -> bool {
+    if def.fields.len() != 2 { return false }
+    def.fields[1].name == "value"
 }
 
 // --- Variant tag lookup ---

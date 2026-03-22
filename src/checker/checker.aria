@@ -369,11 +369,37 @@ fn _pass1_types(c: Checker) -> Checker {
             cc = _register_type_decl(cc)
         } else if k == "enum" {
             cc = _register_enum_decl(cc)
+        } else if k == "alias" {
+            cc = _register_alias_decl(cc)
         } else {
             cc = _cadv(cc)
         }
         cc = _cskip_nl(cc)
     }
+    cc
+}
+
+fn _mk_newtype_def(name: str, underlying: i64) -> StructDef {
+    mut fields := [_sentinel_field()]
+    fields = fields.append(FieldInfo{name: "value", type_id: underlying})
+    new_struct_def(name, fields, false, [""])
+}
+
+fn _register_alias_decl(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip alias
+    if _ck2(cc) != "IDENT" { return cc }
+    name := _ccur(cc).text
+    cc = _cadv(cc)
+    if _ck2(cc) == "=" { cc = _cadv(cc) }
+    cc = _cskip_nl(cc)
+    // Parse underlying type
+    ft := _parse_type_ann(cc)
+    cc = ft.c
+    // Register alias as a named type pointing to the underlying type
+    // The alias type_id field stores the underlying type's ID
+    alias_info := TypeInfo{kind: TyNamed, name: name, type_id: ft.type_id, type_id2: 0, param_start: 0, param_count: 0}
+    new_st := store_add(cc.store, alias_info)
+    cc = _cset_store(cc, new_st)
     cc
 }
 
@@ -396,7 +422,7 @@ fn _register_type_decl(c: Checker) -> Checker {
     }
 
     lb := "\{"
-    // Check for sum type (= | Variant ...)
+    // Check for sum type (= | Variant ...) or newtype (= Type)
     if _ck2(cc) == "=" {
         cc = _cadv(cc)
         cc = _cskip_nl(cc)
@@ -472,6 +498,18 @@ fn _register_type_decl(c: Checker) -> Checker {
             new_st := store_add(cc.store, mk_named_type(name))
             cc = _cset_store(cc, new_st)
             def := new_sum_def(name, variants, vf_counts, vf_names, vf_types, vf_offsets)
+            cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+            return cc
+        }
+        // Newtype: type Name = UnderlyingType
+        // RHS is a type annotation (not | and not {)
+        if _ck2(cc) != lb {
+            ft := _parse_type_ann(cc)
+            cc = ft.c
+            // Register as named type with a single "value" field
+            new_st := store_add(cc.store, mk_named_type(name))
+            cc = _cset_store(cc, new_st)
+            def := _mk_newtype_def(name, ft.type_id)
             cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
             return cc
         }

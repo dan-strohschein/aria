@@ -1,0 +1,22 @@
+// Test newtypes (zero-cost wrappers)
+type UserId = i64
+type Score = i64
+
+fn get_user(id: UserId) -> i64 = id.value
+
+fn add_score(s: Score, bonus: i64) -> Score = Score(s.value + bonus)
+
+entry {
+    uid := UserId(42)
+    assert uid.value == 42
+    assert get_user(uid) == 42
+
+    s := Score(100)
+    s2 := add_score(s, 50)
+    assert s2.value == 150
+
+    // Direct construction and extraction
+    assert UserId(7).value == 7
+
+    println("newtype_test passed")
+}
