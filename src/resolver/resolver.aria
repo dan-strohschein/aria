@@ -180,6 +180,9 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)
+    // Result constructors
+    rr = _add_builtin(rr, "Ok", SkBuiltin)
+    rr = _add_builtin(rr, "Err", SkBuiltin)
     rr
 }
 
@@ -294,7 +297,7 @@ fn _pass1(r: Resolver) -> Resolver {
 // Collect sum type variant names after type Foo = | Bar | Baz
 fn _pass1_collect_variants(r: Resolver) -> Resolver {
     mut rr := r
-    // Skip generic params [T]
+    // Skip generic params [T] — just advance past them
     if _rk(rr) == "[" {
         mut d := 1
         rr = _radv(rr)
@@ -458,14 +461,24 @@ fn _resolve_fn(r: Resolver) -> Resolver {
     // Push function scope
     rr = _push_scope(rr, ScFunction, fn_name)
 
-    // Skip generic params
+    // Capture generic params and register as SkType symbols
     if _rk(rr) == "[" {
-        mut d := 1
-        rr = _radv(rr)
-        while d > 0 && _rk(rr) != "EOF" {
-            if _rk(rr) == "[" { d = d + 1 }
-            if _rk(rr) == "]" { d = d - 1 }
-            if d > 0 { rr = _radv(rr) }
+        rr = _radv(rr)  // skip [
+        while _rk(rr) != "]" && _rk(rr) != "EOF" {
+            if _rk(rr) == "IDENT" {
+                gname := _rcur(rr).text
+                gspan := _rspan(rr)
+                rr = _add_sym(rr, gname, SkType, gspan, false, false)
+                rr = _radv(rr)
+                // Skip optional trait bound ": Trait"
+                if _rk(rr) == ":" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                }
+            } else {
+                rr = _radv(rr)
+            }
+            if _rk(rr) == "," { rr = _radv(rr) }
         }
         if _rk(rr) == "]" { rr = _radv(rr) }
     }
@@ -840,7 +853,7 @@ fn _is_expr_continuation(k: str) -> bool =
     k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" || k == "~" ||
     k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
     k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
-    k == "," || k == "=>" || k == "=" || k == "?." || k == "??"
+    k == "," || k == "=>" || k == "=" || k == "?." || k == "??" || k == "catch"
 
 // --- Resolve expression tokens until statement boundary ---
 
@@ -882,8 +895,14 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             rr = _resolve_match(rr)
             return rr
         } else if k == lb {
-            // Check if this is a struct literal (preceded by a type name IDENT)
-            if consumed_value && rr.pos > 0 && token_name(rr.tokens[rr.pos - 1].kind) == "IDENT" {
+            // Check if this is a struct literal (preceded by a type name IDENT or ] for generics)
+            mut is_struct_lit := false
+            if consumed_value && rr.pos > 0 {
+                prev_k := token_name(rr.tokens[rr.pos - 1].kind)
+                if prev_k == "IDENT" { is_struct_lit = true }
+                if prev_k == "]" { is_struct_lit = true }
+            }
+            if is_struct_lit {
                 rr = _resolve_struct_lit(rr)
             } else {
                 rr = _resolve_block(rr)
@@ -912,6 +931,26 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             consumed_value = true
         } else if k == ")" || k == "]" {
             rr = _radv(rr)
+            consumed_value = true
+        } else if k == "catch" {
+            rr = _radv(rr)  // skip catch
+            // Parse |e| binding and resolve block body
+            if _rk(rr) == "|" {
+                rr = _radv(rr)  // skip |
+                if _rk(rr) == "IDENT" {
+                    ename := _rcur(rr).text
+                    espan := _rspan(rr)
+                    rr = _add_sym_warn_shadow(rr, ename, SkParameter, espan, false)
+                    rr = _radv(rr)
+                } else {
+                    rr = _radv(rr)  // skip _
+                }
+                if _rk(rr) == "|" { rr = _radv(rr) }
+            }
+            lb := "\{"
+            if _rk(rr) == lb {
+                rr = _resolve_block(rr)
+            }
             consumed_value = true
         } else {
             // Operators, opening delimiters, etc.

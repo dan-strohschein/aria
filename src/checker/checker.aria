@@ -439,16 +439,46 @@ fn _register_type_decl(c: Checker) -> Checker {
     name := _ccur(cc).text
     cc = _cadv(cc)
 
-    // Skip generic params
+    // Capture generic params
+    mut sgp_count := 0
+    mut sgp_0 := ""
+    mut sgp_1 := ""
+    mut sgp_2 := ""
     if _ck2(cc) == "[" {
-        mut d := 1
-        cc = _cadv(cc)
-        while d > 0 && _ck2(cc) != "EOF" {
-            if _ck2(cc) == "[" { d = d + 1 }
-            if _ck2(cc) == "]" { d = d - 1 }
-            if d > 0 { cc = _cadv(cc) }
+        cc = _cadv(cc)  // skip [
+        while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "IDENT" {
+                gname := _ccur(cc).text
+                if sgp_count == 0 { sgp_0 = gname }
+                if sgp_count == 1 { sgp_1 = gname }
+                if sgp_count == 2 { sgp_2 = gname }
+                sgp_count = sgp_count + 1
+                cc = _cadv(cc)
+                // Skip optional trait bound ": Trait"
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+                }
+            } else {
+                cc = _cadv(cc)
+            }
+            if _ck2(cc) == "," { cc = _cadv(cc) }
         }
         if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    // If generic, add TypeVar entries to the store
+    if sgp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(sgp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if sgp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(sgp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if sgp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(sgp_2))
+        cc = _cset_store(cc, new_st)
     }
 
     lb := "\{"
@@ -574,7 +604,10 @@ fn _register_type_decl(c: Checker) -> Checker {
 
         new_st := store_add(cc.store, mk_named_type(name))
         cc = _cset_store(cc, new_st)
-        def := new_struct_def(name, fields, false, [""])
+        mut def := new_struct_def(name, fields, false, [""])
+        if sgp_count > 0 {
+            def = new_generic_struct_def(name, fields, sgp_count, sgp_0, sgp_1, sgp_2)
+        }
         cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
         // Check for derives clause
         cc = _cskip_nl(cc)
@@ -706,21 +739,61 @@ fn _register_trait_decl(c: Checker) -> Checker {
 }
 
 fn _register_fn_sig(c: Checker) -> Checker {
+    token_start := c.pos  // save position of 'fn' keyword for re-lowering
     mut cc := _cadv(c)  // skip fn
     if _ck2(cc) != "IDENT" { return cc }
     name := _ccur(cc).text
     cc = _cadv(cc)
 
-    // Skip generic params
+    // Capture generic params and trait bounds
+    mut gp_count := 0
+    mut gp_0 := ""
+    mut gp_1 := ""
+    mut gp_2 := ""
+    mut gb_0 := ""
+    mut gb_1 := ""
+    mut gb_2 := ""
     if _ck2(cc) == "[" {
-        mut d := 1
-        cc = _cadv(cc)
-        while d > 0 && _ck2(cc) != "EOF" {
-            if _ck2(cc) == "[" { d = d + 1 }
-            if _ck2(cc) == "]" { d = d - 1 }
-            if d > 0 { cc = _cadv(cc) }
+        cc = _cadv(cc)  // skip [
+        while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "IDENT" {
+                gname := _ccur(cc).text
+                if gp_count == 0 { gp_0 = gname }
+                if gp_count == 1 { gp_1 = gname }
+                if gp_count == 2 { gp_2 = gname }
+                cc = _cadv(cc)
+                // Capture optional trait bound ": Trait"
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" {
+                        bname := _ccur(cc).text
+                        if gp_count == 0 { gb_0 = bname }
+                        if gp_count == 1 { gb_1 = bname }
+                        if gp_count == 2 { gb_2 = bname }
+                        cc = _cadv(cc)
+                    }
+                }
+                gp_count = gp_count + 1
+            } else {
+                cc = _cadv(cc)
+            }
+            if _ck2(cc) == "," { cc = _cadv(cc) }
         }
         if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    // If generic, add TypeVar entries to the store so _parse_type_ann resolves them
+    if gp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(gp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(gp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(gp_2))
+        cc = _cset_store(cc, new_st)
     }
 
     // Parse parameters
@@ -747,25 +820,35 @@ fn _register_fn_sig(c: Checker) -> Checker {
         if _ck2(cc) == ")" { cc = _cadv(cc) }
     }
 
-    // Return type
+    // Return type (may include ! ErrorType parsed by _parse_type_ann)
     mut ret := TY_UNIT
+    mut err := 0
     if _ck2(cc) == "->" {
         cc = _cadv(cc)
         rt := _parse_type_ann(cc)
         cc = rt.c
-        ret = rt.type_id
+        // Check if _parse_type_ann already consumed T ! E
+        rtinfo := store_get(cc.store, rt.type_id)
+        if type_kind_name(rtinfo.kind) == "Result" {
+            ret = rtinfo.type_id   // Ok type
+            err = rtinfo.type_id2  // Error type
+        } else {
+            ret = rt.type_id
+        }
     }
 
-    // Error type
-    mut err := 0
-    if _ck2(cc) == "!" {
+    // Error type (if not already parsed as part of return type)
+    if err == 0 && _ck2(cc) == "!" {
         cc = _cadv(cc)
         et := _parse_type_ann(cc)
         cc = et.c
         err = et.type_id
     }
 
-    sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    if gp_count > 0 {
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+    }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
 
     // Skip rest of function (body)
@@ -831,22 +914,61 @@ fn _register_impl_fns(c: Checker) -> Checker {
 // Handles `self` parameter by injecting the impl type.
 // Registers with qualified name: Type_method
 fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
+    token_start := c.pos  // save position of 'fn' keyword
     mut cc := _cadv(c)  // skip fn
     if _ck2(cc) != "IDENT" { return cc }
     raw_name := _ccur(cc).text
     name := impl_type + "_" + raw_name
     cc = _cadv(cc)
 
-    // Skip generic params
+    // Capture generic params
+    mut gp_count := 0
+    mut gp_0 := ""
+    mut gp_1 := ""
+    mut gp_2 := ""
+    mut gb_0 := ""
+    mut gb_1 := ""
+    mut gb_2 := ""
     if _ck2(cc) == "[" {
-        mut d := 1
-        cc = _cadv(cc)
-        while d > 0 && _ck2(cc) != "EOF" {
-            if _ck2(cc) == "[" { d = d + 1 }
-            if _ck2(cc) == "]" { d = d - 1 }
-            if d > 0 { cc = _cadv(cc) }
+        cc = _cadv(cc)  // skip [
+        while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "IDENT" {
+                gname := _ccur(cc).text
+                if gp_count == 0 { gp_0 = gname }
+                if gp_count == 1 { gp_1 = gname }
+                if gp_count == 2 { gp_2 = gname }
+                cc = _cadv(cc)
+                if _ck2(cc) == ":" {
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "IDENT" {
+                        bname := _ccur(cc).text
+                        if gp_count == 0 { gb_0 = bname }
+                        if gp_count == 1 { gb_1 = bname }
+                        if gp_count == 2 { gb_2 = bname }
+                        cc = _cadv(cc)
+                    }
+                }
+                gp_count = gp_count + 1
+            } else {
+                cc = _cadv(cc)
+            }
+            if _ck2(cc) == "," { cc = _cadv(cc) }
         }
         if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+
+    // If generic, add TypeVar entries
+    if gp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(gp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(gp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(gp_2))
+        cc = _cset_store(cc, new_st)
     }
 
     // Parse parameters, handling self
@@ -879,25 +1001,35 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
         if _ck2(cc) == ")" { cc = _cadv(cc) }
     }
 
-    // Return type
+    // Return type (may include ! ErrorType parsed by _parse_type_ann)
     mut ret := TY_UNIT
+    mut err := 0
     if _ck2(cc) == "->" {
         cc = _cadv(cc)
         rt := _parse_type_ann(cc)
         cc = rt.c
-        ret = rt.type_id
+        // Check if _parse_type_ann already consumed T ! E
+        rtinfo := store_get(cc.store, rt.type_id)
+        if type_kind_name(rtinfo.kind) == "Result" {
+            ret = rtinfo.type_id   // Ok type
+            err = rtinfo.type_id2  // Error type
+        } else {
+            ret = rt.type_id
+        }
     }
 
-    // Error type
-    mut err := 0
-    if _ck2(cc) == "!" {
+    // Error type (if not already parsed as part of return type)
+    if err == 0 && _ck2(cc) == "!" {
         cc = _cadv(cc)
         et := _parse_type_ann(cc)
         cc = et.c
         err = et.type_id
     }
 
-    sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    if gp_count > 0 {
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+    }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
 
     // Skip rest of function (body)
@@ -1016,6 +1148,11 @@ fn _check_fn(c: Checker) -> Checker {
     // Look up registered signature
     sig := reg_find_fn(cc.registry, name)
 
+    // Skip generic function bodies — they are checked per-specialization
+    if fn_is_generic(sig) {
+        return _skip_decl(cc)
+    }
+
     // Set function context
     cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
 
@@ -1039,7 +1176,15 @@ fn _check_fn(c: Checker) -> Checker {
         cc = result.c
         // Check return type
         if sig.return_type != TY_UNKNOWN && sig.return_type != TY_UNIT {
-            if is_assignable(cc.store, result.type_id, sig.return_type) == false && result.type_id != TY_UNKNOWN {
+            mut rt_ok := is_assignable(cc.store, result.type_id, sig.return_type)
+            if rt_ok == false && result.type_id != TY_UNKNOWN {
+                // Accept Result types in fallible functions
+                rinfo := store_get(cc.store, result.type_id)
+                if type_kind_name(rinfo.kind) == "Result" && sig.error_type > 0 {
+                    rt_ok = true
+                }
+            }
+            if rt_ok == false && result.type_id != TY_UNKNOWN {
                 q := _q()
                 cc = _cerror(cc, E0106, "expected return type " + q + format_type(cc.store, sig.return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
             }
@@ -1105,6 +1250,11 @@ fn _check_impl_fn(c: Checker, impl_type: str) -> Checker {
     // Look up registered signature by qualified name
     sig := reg_find_fn(cc.registry, name)
 
+    // Skip generic method bodies — they are checked per-specialization
+    if fn_is_generic(sig) {
+        return _skip_decl(cc)
+    }
+
     // Set function context
     cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
 
@@ -1159,7 +1309,7 @@ fn _is_cont(k: str) -> bool =
     k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" || k == "~" ||
     k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
     k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
-    k == "," || k == "=>" || k == "=" || k == "?." || k == "??"
+    k == "," || k == "=>" || k == "=" || k == "?." || k == "??" || k == "catch"
 
 fn _check_block(c: Checker) -> CE {
     lb := "\{"
@@ -1238,8 +1388,17 @@ fn _check_return(c: Checker) -> CE {
     result := _check_expr_full(cc)
     cc = result.c
     // Check against function return type
+    // For fallible functions, also accept Result types (from Ok/Err constructors)
     if cc.fn_return_type != TY_UNKNOWN && cc.fn_return_type != TY_UNIT {
-        if is_assignable(cc.store, result.type_id, cc.fn_return_type) == false && result.type_id != TY_UNKNOWN {
+        mut type_ok := is_assignable(cc.store, result.type_id, cc.fn_return_type)
+        if type_ok == false && result.type_id != TY_UNKNOWN {
+            // Accept Result types in fallible functions
+            rinfo := store_get(cc.store, result.type_id)
+            if type_kind_name(rinfo.kind) == "Result" && cc.fn_error_type > 0 {
+                type_ok = true
+            }
+        }
+        if type_ok == false && result.type_id != TY_UNKNOWN {
             q := _q()
             cc = _cerror(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
         }
@@ -1351,6 +1510,22 @@ fn _check_expr_full(c: Checker) -> CE {
             if type_kind_name(info.kind) == "Result" {
                 left_type = info.type_id
             }
+        } else if k == "catch" {
+            cc = _cadv(cc)
+            // Parse |e| binding
+            if _ck2(cc) == "|" {
+                cc = _cadv(cc)
+                if _ck2(cc) == "IDENT" || _ck2(cc) == "_" { cc = _cadv(cc) }
+                if _ck2(cc) == "|" { cc = _cadv(cc) }
+            }
+            // Check catch body block
+            cb := _check_block(cc)
+            cc = cb.c
+            // catch unwraps Result to Ok type
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Result" {
+                left_type = info.type_id
+            }
         } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
                   k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
                   k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
@@ -1402,7 +1577,39 @@ fn _check_expr_full(c: Checker) -> CE {
                 cc = _cadv(cc)
                 sig := reg_find_fn(cc.registry, fname)
                 if sig.name != "" {
-                    left_type = sig.return_type
+                    if fn_is_generic(sig) {
+                        // Infer type from piped value (single arg)
+                        mut pipe_ret := sig.return_type
+                        // Find first TypeVar param and match to left_type
+                        mut tv_id := 0
+                        if sig.generic_count > 0 {
+                            tv_id = resolve_type_name(cc.store, sig.generic_name_0)
+                        }
+                        if tv_id > 0 && pipe_ret == tv_id {
+                            pipe_ret = left_type
+                        }
+                        // Build specialized name and register if needed
+                        spec_name := fname + "_" + _type_name_suffix(cc.store, left_type)
+                        existing := reg_find_mono(cc.registry, spec_name)
+                        if existing.specialized_name == "" {
+                            mut sp_ptypes := [0]
+                            mut spi := 1
+                            while spi < sig.param_types.len() {
+                                mut pt := sig.param_types[spi]
+                                if pt == tv_id && tv_id > 0 { pt = left_type }
+                                sp_ptypes = sp_ptypes.append(pt)
+                                spi = spi + 1
+                            }
+                            sp_sig := new_fn_sig(spec_name, sig.param_names, sp_ptypes, pipe_ret, sig.error_type)
+                            cc = _cset_reg(cc, reg_add_fn(cc.registry, sp_sig))
+                            spec := MonoSpec{generic_name: sig.name, specialized_name: spec_name,
+                                             type_arg_0: left_type, type_arg_1: 0, type_arg_2: 0}
+                            cc = _cset_reg(cc, reg_add_mono(cc.registry, spec))
+                        }
+                        left_type = pipe_ret
+                    } else {
+                        left_type = sig.return_type
+                    }
                 } else {
                     left_type = TY_UNKNOWN
                 }
@@ -1506,10 +1713,38 @@ fn _check_primary(c: Checker) -> CE {
         name := _ccur(c).text
         mut cc := _cadv(c)
 
+        // Ok(value) and Err(value) — Result constructors
+        if _ck2(cc) == "(" && (name == "Ok" || name == "Err") {
+            cr := _check_call_args(cc, TY_UNKNOWN)
+            cc = cr.c
+            // Construct Result type from function context
+            if name == "Ok" {
+                if cc.fn_error_type > 0 {
+                    new_st := store_add(cc.store, mk_result_type(cr.type_id, cc.fn_error_type))
+                    cc = _cset_store(cc, new_st)
+                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                }
+                return CE{c: cc, type_id: cr.type_id}
+            }
+            if name == "Err" {
+                if cc.fn_return_type > 0 {
+                    new_st := store_add(cc.store, mk_result_type(cc.fn_return_type, cr.type_id))
+                    cc = _cset_store(cc, new_st)
+                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                }
+                return CE{c: cc, type_id: cr.type_id}
+            }
+        }
+
         // Check for function call
         if _ck2(cc) == "(" {
             sig := reg_find_fn(cc.registry, name)
             if sig.name != "" {
+                if fn_is_generic(sig) {
+                    // Infer type args from call arguments
+                    result := _check_generic_call(cc, sig)
+                    return result
+                }
                 cr := _check_call_args(cc, TY_UNKNOWN)
                 cc = cr.c
                 return CE{c: cc, type_id: sig.return_type}
@@ -1519,8 +1754,17 @@ fn _check_primary(c: Checker) -> CE {
             return CE{c: cr.c, type_id: TY_UNKNOWN}
         }
 
-        // Check for struct literal
+        // Check for generic struct literal: Name[Type]{...}
         lb := "\{"
+        if _ck2(cc) == "[" {
+            sdef := reg_find_struct(cc.registry, name)
+            if sdef.name != "" && struct_is_generic(sdef) {
+                result := _check_generic_struct_lit(cc, name, sdef)
+                return result
+            }
+        }
+
+        // Check for struct literal
         if _ck2(cc) == lb {
             // Could be struct literal
             tid := resolve_type_name(cc.store, name)
@@ -1623,6 +1867,148 @@ fn _check_call_args(c: Checker, callee_type: i64) -> CE {
     return CE{c: cc, type_id: callee_type}
 }
 
+// --- Check generic function call: infer type args, register specialization ---
+
+fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
+    mut cc := _cadv(c)  // skip (
+    cc = _cskip_nl(cc)
+    // Collect argument types (up to 8 args)
+    mut arg_type_0 := 0
+    mut arg_type_1 := 0
+    mut arg_type_2 := 0
+    mut arg_type_3 := 0
+    mut arg_type_4 := 0
+    mut arg_type_5 := 0
+    mut arg_type_6 := 0
+    mut arg_type_7 := 0
+    mut arg_count := 0
+    while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        if arg_count == 0 { arg_type_0 = result.type_id }
+        if arg_count == 1 { arg_type_1 = result.type_id }
+        if arg_count == 2 { arg_type_2 = result.type_id }
+        if arg_count == 3 { arg_type_3 = result.type_id }
+        if arg_count == 4 { arg_type_4 = result.type_id }
+        if arg_count == 5 { arg_type_5 = result.type_id }
+        if arg_count == 6 { arg_type_6 = result.type_id }
+        if arg_count == 7 { arg_type_7 = result.type_id }
+        arg_count = arg_count + 1
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == ")" { cc = _cadv(cc) }
+
+    // Infer type arguments by matching param types (TypeVars) to arg types
+    // Find the TypeVar IDs for each generic param
+    mut tv_id_0 := 0
+    mut tv_id_1 := 0
+    mut tv_id_2 := 0
+    mut concrete_0 := 0
+    mut concrete_1 := 0
+    mut concrete_2 := 0
+    if sig.generic_count > 0 {
+        tv_id_0 = resolve_type_name(cc.store, sig.generic_name_0)
+    }
+    if sig.generic_count > 1 {
+        tv_id_1 = resolve_type_name(cc.store, sig.generic_name_1)
+    }
+    if sig.generic_count > 2 {
+        tv_id_2 = resolve_type_name(cc.store, sig.generic_name_2)
+    }
+
+    // Match each param to its arg — if param type is a TypeVar, the arg provides the concrete type
+    mut pi := 1
+    while pi < sig.param_types.len() {
+        pt := sig.param_types[pi]
+        mut at := 0
+        ai := pi - 1
+        if ai == 0 { at = arg_type_0 }
+        if ai == 1 { at = arg_type_1 }
+        if ai == 2 { at = arg_type_2 }
+        if ai == 3 { at = arg_type_3 }
+        if ai == 4 { at = arg_type_4 }
+        if ai == 5 { at = arg_type_5 }
+        if ai == 6 { at = arg_type_6 }
+        if ai == 7 { at = arg_type_7 }
+        if at > 0 && at != TY_UNKNOWN {
+            if pt == tv_id_0 && tv_id_0 > 0 { concrete_0 = at }
+            if pt == tv_id_1 && tv_id_1 > 0 { concrete_1 = at }
+            if pt == tv_id_2 && tv_id_2 > 0 { concrete_2 = at }
+        }
+        pi = pi + 1
+    }
+
+    // Build specialized name
+    mut spec_name := sig.name
+    if sig.generic_count > 0 && concrete_0 > 0 {
+        spec_name = spec_name + "_" + _type_name_suffix(cc.store, concrete_0)
+    }
+    if sig.generic_count > 1 && concrete_1 > 0 {
+        spec_name = spec_name + "_" + _type_name_suffix(cc.store, concrete_1)
+    }
+    if sig.generic_count > 2 && concrete_2 > 0 {
+        spec_name = spec_name + "_" + _type_name_suffix(cc.store, concrete_2)
+    }
+
+    // Check if specialization already exists
+    existing := reg_find_mono(cc.registry, spec_name)
+    if existing.specialized_name == "" {
+        // Create specialized FnSig with substituted types
+        mut sp_ptypes := [0]
+        pi = 1
+        while pi < sig.param_types.len() {
+            mut pt := sig.param_types[pi]
+            if pt == tv_id_0 && tv_id_0 > 0 { pt = concrete_0 }
+            if pt == tv_id_1 && tv_id_1 > 0 { pt = concrete_1 }
+            if pt == tv_id_2 && tv_id_2 > 0 { pt = concrete_2 }
+            sp_ptypes = sp_ptypes.append(pt)
+            pi = pi + 1
+        }
+        mut sp_ret := sig.return_type
+        if sp_ret == tv_id_0 && tv_id_0 > 0 { sp_ret = concrete_0 }
+        if sp_ret == tv_id_1 && tv_id_1 > 0 { sp_ret = concrete_1 }
+        if sp_ret == tv_id_2 && tv_id_2 > 0 { sp_ret = concrete_2 }
+
+        sp_sig := new_fn_sig(spec_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
+        cc = _cset_reg(cc, reg_add_fn(cc.registry, sp_sig))
+
+        spec := MonoSpec{generic_name: sig.name, specialized_name: spec_name,
+                         type_arg_0: concrete_0, type_arg_1: concrete_1, type_arg_2: concrete_2}
+        cc = _cset_reg(cc, reg_add_mono(cc.registry, spec))
+    }
+
+    // Check trait bounds
+    if sig.generic_bound_0 != "" && concrete_0 > 0 && concrete_0 != TY_UNKNOWN {
+        cname := format_type(cc.store, concrete_0)
+        if treg_has_impl(cc.treg, cname, sig.generic_bound_0) == false {
+            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_0 + " for " + sig.generic_name_0)
+        }
+    }
+    if sig.generic_bound_1 != "" && concrete_1 > 0 && concrete_1 != TY_UNKNOWN {
+        cname := format_type(cc.store, concrete_1)
+        if treg_has_impl(cc.treg, cname, sig.generic_bound_1) == false {
+            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_1 + " for " + sig.generic_name_1)
+        }
+    }
+    if sig.generic_bound_2 != "" && concrete_2 > 0 && concrete_2 != TY_UNKNOWN {
+        cname := format_type(cc.store, concrete_2)
+        if treg_has_impl(cc.treg, cname, sig.generic_bound_2) == false {
+            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_2 + " for " + sig.generic_name_2)
+        }
+    }
+
+    // Determine return type
+    mut ret_type := sig.return_type
+    if ret_type == tv_id_0 && tv_id_0 > 0 { ret_type = concrete_0 }
+    if ret_type == tv_id_1 && tv_id_1 > 0 { ret_type = concrete_1 }
+    if ret_type == tv_id_2 && tv_id_2 > 0 { ret_type = concrete_2 }
+    if ret_type == 0 { ret_type = TY_UNKNOWN }
+
+    CE{c: cc, type_id: ret_type}
+}
+
 // --- Check method call ---
 
 fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
@@ -1709,6 +2095,77 @@ fn _check_struct_lit(c: Checker, name: str, type_id: i64) -> CE {
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
     CE{c: cc, type_id: type_id}
+}
+
+// --- Check generic struct literal: Name[Type]{...} ---
+
+fn _check_generic_struct_lit(c: Checker, name: str, sdef: StructDef) -> CE {
+    mut cc := _cadv(c)  // skip [
+    // Parse type arguments
+    mut ta_0 := 0
+    mut ta_1 := 0
+    mut ta_2 := 0
+    mut ta_count := 0
+    while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+        ta := _parse_type_ann(cc)
+        cc = ta.c
+        if ta_count == 0 { ta_0 = ta.type_id }
+        if ta_count == 1 { ta_1 = ta.type_id }
+        if ta_count == 2 { ta_2 = ta.type_id }
+        ta_count = ta_count + 1
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == "]" { cc = _cadv(cc) }
+
+    // Build specialized struct name: Name_Type0_Type1
+    mut spec_name := name
+    if ta_count > 0 { spec_name = spec_name + "_" + _type_name_suffix(cc.store, ta_0) }
+    if ta_count > 1 { spec_name = spec_name + "_" + _type_name_suffix(cc.store, ta_1) }
+    if ta_count > 2 { spec_name = spec_name + "_" + _type_name_suffix(cc.store, ta_2) }
+
+    // Check if specialization already exists
+    existing := reg_find_struct(cc.registry, spec_name)
+    if existing.name == "" {
+        // Create specialized StructDef with substituted field types
+        // Find TypeVar IDs for each generic param
+        mut tv_0 := 0
+        mut tv_1 := 0
+        mut tv_2 := 0
+        if sdef.generic_count > 0 { tv_0 = resolve_type_name(cc.store, sdef.generic_name_0) }
+        if sdef.generic_count > 1 { tv_1 = resolve_type_name(cc.store, sdef.generic_name_1) }
+        if sdef.generic_count > 2 { tv_2 = resolve_type_name(cc.store, sdef.generic_name_2) }
+
+        // Substitute field types
+        mut sp_fields := [_sentinel_field()]
+        mut fi := 1
+        while fi < sdef.fields.len() {
+            fld := sdef.fields[fi]
+            mut ft := fld.type_id
+            if ft == tv_0 && tv_0 > 0 { ft = ta_0 }
+            if ft == tv_1 && tv_1 > 0 { ft = ta_1 }
+            if ft == tv_2 && tv_2 > 0 { ft = ta_2 }
+            sp_fields = sp_fields.append(FieldInfo{name: fld.name, type_id: ft})
+            fi = fi + 1
+        }
+
+        sp_def := new_struct_def(spec_name, sp_fields, false, [""])
+        cc = _cset_reg(cc, reg_add_struct(cc.registry, sp_def))
+        // Register as named type
+        new_st := store_add(cc.store, mk_named_type(spec_name))
+        cc = _cset_store(cc, new_st)
+    }
+
+    // Resolve specialized type ID
+    spec_tid := resolve_type_name(cc.store, spec_name)
+
+    // Now parse the struct literal body: { field: expr, ... }
+    lb := "\{"
+    if _ck2(cc) == lb {
+        sr := _check_struct_lit(cc, spec_name, spec_tid)
+        return sr
+    }
+
+    CE{c: cc, type_id: spec_tid}
 }
 
 // --- Check if expression ---

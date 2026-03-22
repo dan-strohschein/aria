@@ -1,0 +1,14 @@
+struct Wrapper[T] {
+    label: str
+    value: T
+}
+
+fn unwrap[T](w: Wrapper[T]) -> T = w.value
+
+entry {
+    w1 := Wrapper[i64]{label: "count", value: 42}
+    assert w1.value == 42
+    assert w1.label == "count"
+
+    println("generic_struct_str_test passed")
+}

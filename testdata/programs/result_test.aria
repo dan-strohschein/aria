@@ -1,0 +1,44 @@
+fn safe_div(a: i64, b: i64) -> i64 ! str {
+    if b == 0 {
+        return Err("division by zero")
+    }
+    Ok(a / b)
+}
+
+fn chain_div(x: i64) -> i64 ! str {
+    r := safe_div(x, 2)?
+    Ok(r + 1)
+}
+
+fn always_ok() -> i64 ! str = Ok(42)
+
+entry {
+    // Test Ok construction and ! unwrap
+    r1 := always_ok()!
+    assert r1 == 42
+
+    // Test Ok path through safe_div
+    r2 := safe_div(10, 2)!
+    assert r2 == 5
+
+    // Test ? propagation through chain_div
+    r3 := chain_div(10)!
+    assert r3 == 6
+
+    // Test catch block for error recovery
+    r4 := safe_div(10, 0) catch |e| {
+        -1
+    }
+    assert r4 == -1
+
+    // Test catch on successful result
+    r5 := safe_div(10, 5) catch |_| {
+        -1
+    }
+    assert r5 == 2
+
+    // Test ! panics on error (commented out — would abort)
+    // safe_div(10, 0)!
+
+    println("result_test passed")
+}

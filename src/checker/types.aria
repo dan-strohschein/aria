@@ -231,6 +231,45 @@ fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
     return true
 }
 
+// Substitute a type variable with a concrete type.
+// Returns the substituted type ID, possibly adding new types to the store.
+fn substitute_type(store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64) -> i64 {
+    if tid == typevar_id { return concrete_id }
+    if tid <= 0 || tid >= store.types.len() { return tid }
+    info := store.types[tid]
+    kn := type_kind_name(info.kind)
+    if kn == "Array" {
+        elem := substitute_type(store, info.type_id, typevar_id, concrete_id)
+        if elem == info.type_id { return tid }
+        return elem  // caller must add new array type
+    }
+    tid
+}
+
+fn _type_name_suffix(store: TypeStore, tid: i64) -> str {
+    if tid == TY_I64 { return "i64" }
+    if tid == TY_I32 { return "i32" }
+    if tid == TY_I16 { return "i16" }
+    if tid == TY_I8 { return "i8" }
+    if tid == TY_U64 { return "u64" }
+    if tid == TY_U32 { return "u32" }
+    if tid == TY_U16 { return "u16" }
+    if tid == TY_U8 { return "u8" }
+    if tid == TY_F64 { return "f64" }
+    if tid == TY_F32 { return "f32" }
+    if tid == TY_BOOL { return "bool" }
+    if tid == TY_STR { return "str" }
+    if tid == TY_CHAR { return "char" }
+    if tid == TY_UNIT { return "unit" }
+    if tid > 0 && tid < store.types.len() {
+        info := store.types[tid]
+        kn := type_kind_name(info.kind)
+        if kn == "Named" { return info.name }
+        if kn == "Array" { return "arr_" + _type_name_suffix(store, info.type_id) }
+    }
+    "unknown"
+}
+
 fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
     if types_equal(store, src, dst) { return true }
     if src == TY_NEVER { return true }
@@ -255,11 +294,14 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
     if name == "str" { return TY_STR }
     if name == "char" { return TY_CHAR }
     if name == "unit" { return TY_UNIT }
-    // Search for named types
+    // Search for named types and type variables
     mut i := 17  // after well-known types
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {
+            return i
+        }
+        if type_kind_name(info.kind) == "TypeVar" && info.name == name {
             return i
         }
         i = i + 1
@@ -292,22 +334,38 @@ struct StructDef {
     variant_field_names: [str]
     variant_field_types: [i64]
     variant_field_offsets: [i64]
+    // Generic struct params
+    generic_count: i64
+    generic_name_0: str
+    generic_name_1: str
+    generic_name_2: str
 }
 
 fn _sentinel_struct_def() -> StructDef =
     StructDef{name: "", fields: [_sentinel_field()], is_sum: false, variant_names: [""],
               variant_field_counts: [0], variant_field_names: [""],
-              variant_field_types: [0], variant_field_offsets: [0]}
+              variant_field_types: [0], variant_field_offsets: [0],
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
 
 fn new_struct_def(name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef =
     StructDef{name: name, fields: fields, is_sum: is_sum, variant_names: variants,
               variant_field_counts: [0], variant_field_names: [""],
-              variant_field_types: [0], variant_field_offsets: [0]}
+              variant_field_types: [0], variant_field_offsets: [0],
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
+
+fn new_generic_struct_def(name: str, fields: [FieldInfo], gc: i64, gn0: str, gn1: str, gn2: str) -> StructDef =
+    StructDef{name: name, fields: fields, is_sum: false, variant_names: [""],
+              variant_field_counts: [0], variant_field_names: [""],
+              variant_field_types: [0], variant_field_offsets: [0],
+              generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2}
+
+fn struct_is_generic(def: StructDef) -> bool = def.generic_count > 0
 
 fn new_sum_def(name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf_types: [i64], vf_offsets: [i64]) -> StructDef =
     StructDef{name: name, fields: [_sentinel_field()], is_sum: true, variant_names: variants,
               variant_field_counts: vf_counts, variant_field_names: vf_names,
-              variant_field_types: vf_types, variant_field_offsets: vf_offsets}
+              variant_field_types: vf_types, variant_field_offsets: vf_offsets,
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
 
 // Look up the number of data fields for a variant by its 1-based tag
 fn variant_data_count(def: StructDef, tag: i64) -> i64 {
@@ -377,32 +435,80 @@ struct FnSig {
     param_types: [i64]
     return_type: i64
     error_type: i64
+    generic_count: i64
+    generic_name_0: str
+    generic_name_1: str
+    generic_name_2: str
+    generic_bound_0: str
+    generic_bound_1: str
+    generic_bound_2: str
+    token_start: i64
 }
 
 fn _sentinel_fn_sig() -> FnSig =
-    FnSig{name: "", param_names: [""], param_types: [0], return_type: 0, error_type: 0}
+    FnSig{name: "", param_names: [""], param_types: [0], return_type: 0, error_type: 0,
+           generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
+           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0}
 
 fn new_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig =
-    FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err}
+    FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
+           generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
+           generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0}
+
+fn new_generic_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64, gc: i64, gn0: str, gn1: str, gn2: str, gb0: str, gb1: str, gb2: str, tstart: i64) -> FnSig =
+    FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
+           generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2,
+           generic_bound_0: gb0, generic_bound_1: gb1, generic_bound_2: gb2, token_start: tstart}
+
+fn fn_is_generic(sig: FnSig) -> bool = sig.generic_count > 0
+
+// --- MonoSpec (monomorphization specialization record) ---
+
+struct MonoSpec {
+    generic_name: str
+    specialized_name: str
+    type_arg_0: i64
+    type_arg_1: i64
+    type_arg_2: i64
+}
+
+fn _sentinel_mono_spec() -> MonoSpec =
+    MonoSpec{generic_name: "", specialized_name: "", type_arg_0: 0, type_arg_1: 0, type_arg_2: 0}
 
 // --- TypeRegistry ---
 
 struct TypeRegistry {
     struct_defs: [StructDef]
     fn_sigs: [FnSig]
+    mono_specs: [MonoSpec]
 }
 
 fn new_registry() -> TypeRegistry =
     TypeRegistry{
         struct_defs: [_sentinel_struct_def()],
-        fn_sigs: [_sentinel_fn_sig()]
+        fn_sigs: [_sentinel_fn_sig()],
+        mono_specs: [_sentinel_mono_spec()]
     }
 
 fn reg_add_struct(reg: TypeRegistry, def: StructDef) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs}
+    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs}
 
 fn reg_add_fn(reg: TypeRegistry, sig: FnSig) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig)}
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig), mono_specs: reg.mono_specs}
+
+fn reg_add_mono(reg: TypeRegistry, spec: MonoSpec) -> TypeRegistry =
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs.append(spec)}
+
+fn reg_find_mono(reg: TypeRegistry, specialized_name: str) -> MonoSpec {
+    mut i := 1
+    while i < reg.mono_specs.len() {
+        if reg.mono_specs[i].specialized_name == specialized_name {
+            return reg.mono_specs[i]
+        }
+        i = i + 1
+    }
+    _sentinel_mono_spec()
+}
 
 fn reg_find_struct(reg: TypeRegistry, name: str) -> StructDef {
     mut i := 1

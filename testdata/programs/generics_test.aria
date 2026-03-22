@@ -1,0 +1,19 @@
+fn identity[T](x: T) -> T = x
+
+fn add_vals[T](a: T, b: T) -> T = a + b
+
+entry {
+    r1 := identity(42)
+    assert r1 == 42
+
+    r2 := identity(7)
+    assert r2 == 7
+
+    r3 := add_vals(3, 4)
+    assert r3 == 7
+
+    r4 := add_vals(10, 20)
+    assert r4 == 30
+
+    println("generics_test passed")
+}

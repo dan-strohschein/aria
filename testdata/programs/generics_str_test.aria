@@ -1,0 +1,19 @@
+fn identity[T](x: T) -> T = x
+
+fn first[T](a: T, b: T) -> T = a
+
+entry {
+    r1 := identity(42)
+    assert r1 == 42
+
+    r2 := identity("hello")
+    assert r2 == "hello"
+
+    r3 := first(10, 20)
+    assert r3 == 10
+
+    r4 := first("abc", "def")
+    assert r4 == "abc"
+
+    println("generics_str_test passed")
+}

@@ -1,0 +1,16 @@
+fn add_things[T: Add](a: T, b: T) -> T = a + b
+
+fn compare[T: Ord](a: T, b: T) -> bool = a < b
+
+entry {
+    r1 := add_things(10, 20)
+    assert r1 == 30
+
+    r2 := add_things("hello", " world")
+    assert r2 == "hello world"
+
+    assert compare(1, 2) == true
+    assert compare(5, 3) == false
+
+    println("trait_bound_test passed")
+}

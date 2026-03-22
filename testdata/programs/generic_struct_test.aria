@@ -1,0 +1,22 @@
+struct Box[T] {
+    value: T
+}
+
+struct Pair[T] {
+    first: T
+    second: T
+}
+
+entry {
+    b1 := Box[i64]{value: 42}
+    assert b1.value == 42
+
+    b2 := Box[i64]{value: 7}
+    assert b2.value == 7
+
+    p := Pair[i64]{first: 10, second: 20}
+    assert p.first == 10
+    assert p.second == 20
+
+    println("generic_struct_test passed")
+}

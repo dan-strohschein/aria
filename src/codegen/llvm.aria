@@ -203,6 +203,16 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
     p = p.append(nl)
 
+    // _aria_panic: print message to stderr and exit(1)
+    ob := "\{"
+    cb := "\}"
+    p = p.append("define void @_aria_panic(i8* %ptr, i64 %len) " + ob + nl)
+    p = p.append("  call void @_aria_eprintln_str(i8* %ptr, i64 %len)" + nl)
+    p = p.append("  call void @_aria_exit(i64 1)" + nl)
+    p = p.append("  unreachable" + nl)
+    p = p.append(cb + nl)
+    p = p.append(nl)
+
     // User functions — collect defined names for forward declarations
     mut defined_names := [""]
     mut fi := 1
@@ -930,6 +940,18 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%call_exit_" + _i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_exit(i64 " + v + ")")
+        return gg
+    }
+
+    if name == "_aria_panic" {
+        ptr_v := "%call_p_" + _i2s(idx)
+        len_v := "%call_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%call_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        gg = _lg_emit(gg, "call void @_aria_panic(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        gg = _lg_emit_term(gg, "unreachable")
         return gg
     }
 

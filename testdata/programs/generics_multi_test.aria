@@ -1,0 +1,27 @@
+fn identity[T](x: T) -> T = x
+
+fn pick_first[T](a: T, b: T) -> T = a
+
+fn double_it[T](x: T) -> T = x + x
+
+entry {
+    // Single type param with i64
+    assert identity(42) == 42
+    assert identity(7) == 7
+
+    // Single type param with str
+    assert identity("hello") == "hello"
+
+    // Two args, same type param
+    assert pick_first(10, 20) == 10
+    assert pick_first("abc", "def") == "abc"
+
+    // Operator usage in generic body
+    assert double_it(21) == 42
+
+    // Pipe into generic function
+    r := 99 |> identity
+    assert r == 99
+
+    println("generics_multi_test passed")
+}
