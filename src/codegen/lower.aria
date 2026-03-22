@@ -1673,7 +1673,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
-        ll = _lemit(ll, new_inst(OpStrContains, nt.temp, obj, arg.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpStrStartsWith, nt.temp, obj, arg.temp, "", 0))
         return LT{l: ll, temp: nt.temp}
     }
 

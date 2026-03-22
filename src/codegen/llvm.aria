@@ -701,6 +701,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if op == "StrContains" { return _gen_str_binop_returning_i64(g, "@_aria_str_contains", inst, idx) }
+    if op == "StrStartsWith" { return _gen_str_binop_returning_i64(g, "@_aria_str_startsWith", inst, idx) }
 
     if op == "IntToStr" {
         mut gg := g
