@@ -31,7 +31,7 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(toks, cr.store, cr.registry, rr.table, file)
+    m := lower(toks, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR and compile with clang
     generate_from_module(m, output_path, runtime_path)
@@ -165,7 +165,7 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(merged, cr.store, cr.registry, rr.table, file)
+    m := lower(merged, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR + compile
     generate_from_module(m, output_path, runtime_path)
@@ -225,7 +225,7 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // Lower with test runner generation
-    m := lower_for_tests(merged, cr.store, cr.registry, rr.table, file)
+    m := lower_for_tests(merged, cr.store, cr.registry, cr.treg, rr.table, file)
 
     generate_from_module(m, output_path, runtime_path)
 }

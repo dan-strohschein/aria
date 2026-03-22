@@ -71,6 +71,7 @@ struct CE {
 struct CheckResult {
     store: TypeStore
     registry: TypeRegistry
+    treg: TraitRegistry
     diagnostics: DiagnosticBag
 }
 
@@ -219,6 +220,11 @@ fn _parse_type_ann(c: Checker) -> CE {
             if _ck2(cc) == "IDENT" {
                 trait_name := _ccur(cc).text
                 cc = _cadv(cc)
+                // Object safety check: verify trait has no generic methods
+                tdef := treg_find_trait(cc.treg, trait_name)
+                if tdef.name == "" {
+                    cc = _cerror(cc, E0301, "unknown trait '" + trait_name + "' in dyn")
+                }
                 new_st := store_add(cc.store, TypeInfo{kind: TyTraitObject, name: trait_name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
                 cc = _cset_store(cc, new_st)
                 return CE{c: cc, type_id: store_last_id(cc.store)}
@@ -807,7 +813,7 @@ fn _register_trait_decl(c: Checker) -> Checker {
     if method_count > 2 { mnames = mnames.append(method_name_2) }
     if method_count > 3 { mnames = mnames.append(method_name_3) }
     // Register trait
-    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types}
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0]}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
@@ -836,15 +842,23 @@ fn _register_fn_sig(c: Checker) -> Checker {
                 if gp_count == 1 { gp_1 = gname }
                 if gp_count == 2 { gp_2 = gname }
                 cc = _cadv(cc)
-                // Capture optional trait bound ": Trait"
+                // Capture optional trait bound ": Trait" or ": Trait + Trait2"
                 if _ck2(cc) == ":" {
                     cc = _cadv(cc)
                     if _ck2(cc) == "IDENT" {
-                        bname := _ccur(cc).text
+                        mut bname := _ccur(cc).text
+                        cc = _cadv(cc)
+                        // Multi-bound: T: Eq + Hash + ...
+                        while _ck2(cc) == "+" {
+                            cc = _cadv(cc)  // skip +
+                            if _ck2(cc) == "IDENT" {
+                                bname = bname + "+" + _ccur(cc).text
+                                cc = _cadv(cc)
+                            }
+                        }
                         if gp_count == 0 { gb_0 = bname }
                         if gp_count == 1 { gb_1 = bname }
                         if gp_count == 2 { gb_2 = bname }
-                        cc = _cadv(cc)
                     }
                 }
                 gp_count = gp_count + 1
@@ -958,11 +972,18 @@ fn _register_fn_sig(c: Checker) -> Checker {
                 if _ck2(cc) == ":" {
                     cc = _cadv(cc)
                     if _ck2(cc) == "IDENT" {
-                        wbound := _ccur(cc).text
+                        mut wbound := _ccur(cc).text
+                        cc = _cadv(cc)
+                        while _ck2(cc) == "+" {
+                            cc = _cadv(cc)
+                            if _ck2(cc) == "IDENT" {
+                                wbound = wbound + "+" + _ccur(cc).text
+                                cc = _cadv(cc)
+                            }
+                        }
                         if wname == gp_0 && gb_0 == "" { gb_0 = wbound }
                         if wname == gp_1 && gb_1 == "" { gb_1 = wbound }
                         if wname == gp_2 && gb_2 == "" { gb_2 = wbound }
-                        cc = _cadv(cc)
                     }
                 }
                 if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
@@ -1232,11 +1253,18 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
                 if _ck2(cc) == ":" {
                     cc = _cadv(cc)
                     if _ck2(cc) == "IDENT" {
-                        wbound := _ccur(cc).text
+                        mut wbound := _ccur(cc).text
+                        cc = _cadv(cc)
+                        while _ck2(cc) == "+" {
+                            cc = _cadv(cc)
+                            if _ck2(cc) == "IDENT" {
+                                wbound = wbound + "+" + _ccur(cc).text
+                                cc = _cadv(cc)
+                            }
+                        }
                         if wname == gp_0 && gb_0 == "" { gb_0 = wbound }
                         if wname == gp_1 && gb_1 == "" { gb_1 = wbound }
                         if wname == gp_2 && gb_2 == "" { gb_2 = wbound }
-                        cc = _cadv(cc)
                     }
                 }
                 if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
@@ -2246,6 +2274,28 @@ fn _check_call_args(c: Checker, callee_type: i64) -> CE {
 
 // --- Check generic function call: infer type args, register specialization ---
 
+// Check multi-bounds: split "Eq+Hash+Clone" and verify each
+fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -> Checker {
+    mut cc := c
+    // Split bound on +
+    mut start := 0
+    mut i := 0
+    while i <= bound.len() {
+        mut at_sep := false
+        if i == bound.len() { at_sep = true }
+        if i < bound.len() && bound.charAt(i) == "+" { at_sep = true }
+        if at_sep && i > start {
+            single := bound.substring(start, i)
+            if treg_has_impl(cc.treg, type_name, single) == false {
+                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + single + " for " + param_name)
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    cc
+}
+
 fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
     mut cc := _cadv(c)  // skip (
     cc = _cskip_nl(cc)
@@ -2356,24 +2406,18 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
         cc = _cset_reg(cc, reg_add_mono(cc.registry, spec))
     }
 
-    // Check trait bounds
+    // Check trait bounds (supports multi-bounds: "Eq+Hash+Clone")
     if sig.generic_bound_0 != "" && concrete_0 > 0 && concrete_0 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_0)
-        if treg_has_impl(cc.treg, cname, sig.generic_bound_0) == false {
-            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_0 + " for " + sig.generic_name_0)
-        }
+        cc = _check_multi_bound(cc, cname, sig.generic_bound_0, sig.generic_name_0)
     }
     if sig.generic_bound_1 != "" && concrete_1 > 0 && concrete_1 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_1)
-        if treg_has_impl(cc.treg, cname, sig.generic_bound_1) == false {
-            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_1 + " for " + sig.generic_name_1)
-        }
+        cc = _check_multi_bound(cc, cname, sig.generic_bound_1, sig.generic_name_1)
     }
     if sig.generic_bound_2 != "" && concrete_2 > 0 && concrete_2 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_2)
-        if treg_has_impl(cc.treg, cname, sig.generic_bound_2) == false {
-            cc = _cerror(cc, E0106, "type " + cname + " does not satisfy bound " + sig.generic_bound_2 + " for " + sig.generic_name_2)
-        }
+        cc = _check_multi_bound(cc, cname, sig.generic_bound_2, sig.generic_name_2)
     }
 
     // Determine return type
@@ -2905,5 +2949,5 @@ fn check(tokens: [Token], table: SymbolTable, file: str) -> CheckResult {
     // Pass 3: check bodies
     c = _pass3_bodies(c)
 
-    CheckResult{store: c.store, registry: c.registry, diagnostics: c.diagnostics}
+    CheckResult{store: c.store, registry: c.registry, treg: c.treg, diagnostics: c.diagnostics}
 }

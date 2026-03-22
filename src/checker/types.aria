@@ -491,7 +491,7 @@ fn fn_is_pure(sig: FnSig) -> bool =
 
 fn _builtin_effect(name: str) -> str {
     // File system operations
-    if name == "_ariaReadFile" || name == "_ariaWriteFile" || name == "_ariaWriteBinaryFile" { return "Fs" }
+    if name == "_ariaReadFile" || name == "_ariaWriteFile" || name == "_ariaWriteBinaryFile" || name == "_ariaListDir" || name == "_ariaIsDir" { return "Fs" }
     // I/O operations
     if name == "_ariaExec" || name == "_ariaGetenv" { return "Io" }
     // Network operations

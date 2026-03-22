@@ -214,6 +214,7 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_args_get()" + nl)
     p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_to_int(i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_to_float(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_map_new(i64)" + nl)
     p = p.append("declare void @_aria_map_set(i64, i8*, i64, i64)" + nl)
     p = p.append("declare i64 @_aria_map_get(i64, i8*, i64)" + nl)

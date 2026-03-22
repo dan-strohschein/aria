@@ -161,6 +161,21 @@ struct _aria_str _aria_str_to_int(char *ptr, long len) {
     return s;
 }
 
+// Parse string to float. Returns the float bits as i64. Returns 0 on failure.
+long _aria_str_to_float(char *ptr, long len) {
+    if (len == 0) return 0;
+    char *buf = (char *)malloc((size_t)(len + 1));
+    memcpy(buf, ptr, (size_t)len);
+    buf[len] = '\0';
+    char *end;
+    double val = strtod(buf, &end);
+    free(buf);
+    if (end == buf) return 0;  // no conversion
+    long bits;
+    memcpy(&bits, &val, sizeof(double));
+    return bits;
+}
+
 // --- Float to string ---
 
 struct _aria_str _aria_float_to_str(long bits) {
