@@ -1490,6 +1490,13 @@ fn _check_primary(c: Checker) -> CE {
     if k == "INT" { return CE{c: _cadv(c), type_id: TY_I64} }
     if k == "FLOAT" { return CE{c: _cadv(c), type_id: TY_F64} }
     if k == "STRING" { return CE{c: _cadv(c), type_id: TY_STR} }
+    if k == "STRING_START" {
+        // String interpolation — skip tokens until STRING_END, result is str
+        mut cc := _cadv(c)
+        while _ck2(cc) != "STRING_END" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        if _ck2(cc) == "STRING_END" { cc = _cadv(cc) }
+        return CE{c: cc, type_id: TY_STR}
+    }
     if k == "true" || k == "false" { return CE{c: _cadv(c), type_id: TY_BOOL} }
 
     if k == "if" { return _check_if(c) }

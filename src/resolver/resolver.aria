@@ -896,6 +896,20 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
                   k == "true" || k == "false" || k == "self" || k == "Self" {
             rr = _radv(rr)
             consumed_value = true
+        } else if k == "STRING_START" {
+            // String interpolation: resolve identifiers inside
+            rr = _radv(rr)  // skip STRING_START
+            while _rk(rr) != "STRING_END" && _rk(rr) != "EOF" {
+                if _rk(rr) == "STRING_MIDDLE" {
+                    rr = _radv(rr)
+                } else if _rk(rr) == "IDENT" {
+                    rr = _resolve_ident(rr)
+                } else {
+                    rr = _radv(rr)
+                }
+            }
+            if _rk(rr) == "STRING_END" { rr = _radv(rr) }
+            consumed_value = true
         } else if k == ")" || k == "]" {
             rr = _radv(rr)
             consumed_value = true

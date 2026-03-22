@@ -1,0 +1,31 @@
+// Test string interpolation
+
+entry {
+    // Simple variable interpolation
+    name := "world"
+    msg := "Hello, {name}!"
+    assert msg == "Hello, world!"
+
+    // Integer interpolation
+    x := 42
+    num_msg := "The answer is {x}"
+    assert num_msg == "The answer is 42"
+
+    // Multiple interpolations
+    a := "Aria"
+    v := 1
+    info := "{a} v{v}"
+    assert info == "Aria v1"
+
+    // Expression interpolation
+    result := "sum = {3 + 4}"
+    assert result == "sum = 7"
+
+    // Adjacent interpolations
+    first := "hello"
+    second := "world"
+    both := "{first} {second}"
+    assert both == "hello world"
+
+    println("interp_string_test passed")
+}

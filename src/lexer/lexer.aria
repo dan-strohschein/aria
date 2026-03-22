@@ -294,17 +294,25 @@ fn _scan_number(lex: Lexer) -> Lexer {
 // --- Scan string literal ---
 
 fn _scan_string(lex: Lexer) -> Lexer {
+    _scan_string_impl(lex, false)
+}
+
+// Core string scanning: handles both initial string and continuation after interpolation
+fn _scan_string_impl(lex: Lexer, is_continuation: bool) -> Lexer {
     start := lex.pos
     start_col := lex.col
     start_line := lex.line
-    mut l := _advance(lex)  // consume opening "
+    mut l := lex
+    if is_continuation == false {
+        l = _advance(l)  // consume opening "
+    }
     mut text := ""
-    mut has_interp := false
+    lb := "\{"
+    rb := "\}"
 
     while _at_end(l) == false && _peek(l) != "\"" {
         c := _peek(l)
         if c == "\\" {
-            // Escape sequence
             l = _advance(l)
             if _at_end(l) {
                 l = _add_error(l, E0002, "unterminated string literal")
@@ -323,10 +331,25 @@ fn _scan_string(lex: Lexer) -> Lexer {
                 text = text + "\""
             } else if esc == "0" {
                 text = text + "\0"
+            } else if esc == lb {
+                text = text + lb
+            } else if esc == rb {
+                text = text + rb
             } else {
                 text = text + esc
             }
             l = _advance(l)
+        } else if c == lb {
+            // Start interpolation: emit string part and return to main loop
+            if is_continuation {
+                l = _add_token(l, TkStringMiddle, text, start_line, start_col, start)
+            } else {
+                l = _add_token(l, TkStringStart, text, start_line, start_col, start)
+            }
+            l = _advance(l)  // consume {
+            // Set interp_depth so main loop knows to call continuation on }
+            l = _set_interp(l, l.interp_depth + 1)
+            return l
         } else if c == "\n" {
             l = _add_error(l, E0002, "unterminated string literal")
             return l
@@ -342,8 +365,13 @@ fn _scan_string(lex: Lexer) -> Lexer {
     }
 
     l = _advance(l)  // consume closing "
-    _add_token(l, TkStringLit, text, start_line, start_col, start)
+    if is_continuation {
+        _add_token(l, TkStringEnd, text, start_line, start_col, start)
+    } else {
+        _add_token(l, TkStringLit, text, start_line, start_col, start)
+    }
 }
+
 
 // --- Scan line comment ---
 
@@ -532,11 +560,18 @@ fn tokenize(source: str, file: str) -> Lexer {
             lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth + 1)
             lex = _advance(lex)
         } else if c == "\}" {
-            lex = _add_token(lex, TkRBrace, "\}", lex.line, lex.col, lex.pos)
-            if lex.brace_depth > 0 {
-                lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth - 1)
+            if lex.interp_depth > 0 {
+                // End of interpolation expression — advance past } and continue scanning string
+                lex = _advance(lex)
+                lex = _set_interp(lex, lex.interp_depth - 1)
+                lex = _scan_string_impl(lex, true)
+            } else {
+                lex = _add_token(lex, TkRBrace, "\}", lex.line, lex.col, lex.pos)
+                if lex.brace_depth > 0 {
+                    lex = _set_depth(lex, lex.paren_depth, lex.bracket_depth, lex.brace_depth - 1)
+                }
+                lex = _advance(lex)
             }
-            lex = _advance(lex)
         } else {
             lex = _add_error(lex, E0001, "unexpected character")
             lex = _add_token(lex, TkIllegal, c, lex.line, lex.col, lex.pos)
