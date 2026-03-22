@@ -985,9 +985,30 @@ fn _resolve_match(r: Resolver) -> Resolver {
         parent_scope := rr.current_scope
         rr = _push_scope(rr, ScBlock, "match_arm")
 
-        // Pattern: skip variant name or wildcard
+        // Pattern: variant name, wildcard, literal, or binding
         if _rk(rr) == "IDENT" {
+            pat_name := _rcur(rr).text
+            if pat_name != "_" {
+                // Check if this is a variant name
+                existing := lookup(rr.table, rr.current_scope, pat_name)
+                if existing.name == "" || sk_eq(existing.kind, SkVariant) == false {
+                    // Not a variant — it's a binding pattern: bind subject to this name
+                    span := _rspan(rr)
+                    rr = _add_sym_warn_shadow(rr, pat_name, SkVariable, span, false)
+                }
+            }
             rr = _radv(rr)
+        } else if _rk(rr) == "INT" || _rk(rr) == "STRING" || _rk(rr) == "true" || _rk(rr) == "false" {
+            // Literal pattern — just skip
+            rr = _radv(rr)
+        }
+
+        // Or-patterns: skip | VariantName sequences
+        while _rk(rr) == "|" {
+            rr = _radv(rr)  // skip |
+            rr = _rskip_nl(rr)
+            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+            rr = _rskip_nl(rr)
         }
 
         // Destructuring bindings: Circle(r) or Pair(a, b)
@@ -1010,7 +1031,19 @@ fn _resolve_match(r: Resolver) -> Resolver {
             if _rk(rr) == ")" { rr = _radv(rr) }
         }
 
-        // Skip remaining pattern tokens until =>
+        // Guard clause: `if <expr>` — resolve identifiers in the guard expression
+        if _rk(rr) == "if" {
+            rr = _radv(rr)  // skip `if`
+            // Resolve guard expression identifiers until =>
+            while _rk(rr) != "=>" && _rk(rr) != "EOF" {
+                if _rk(rr) == "IDENT" {
+                    rr = _resolve_ident(rr)
+                } else {
+                    rr = _radv(rr)
+                }
+            }
+        }
+        // Skip any remaining tokens until =>
         while _rk(rr) != "=>" && _rk(rr) != "EOF" {
             rr = _radv(rr)
         }

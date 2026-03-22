@@ -1,0 +1,29 @@
+// Test binding patterns in match expressions
+
+fn double_or_zero(n: i64) -> i64 = match n {
+    0 => 0
+    x => x * 2
+}
+
+type Color =
+    | Red
+    | Green
+    | Blue
+
+fn color_code(c: Color) -> i64 = match c {
+    Red => 1
+    Green => 2
+    other => 0
+}
+
+entry {
+    assert double_or_zero(0) == 0
+    assert double_or_zero(5) == 10
+    assert double_or_zero(21) == 42
+
+    assert color_code(Red) == 1
+    assert color_code(Green) == 2
+    assert color_code(Blue) == 0
+
+    println("binding_match_test passed")
+}

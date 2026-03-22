@@ -1480,9 +1480,40 @@ fn _check_match(c: Checker) -> CE {
     cc = _cadv(cc)  // skip {
     cc = _cskip_nl(cc)
 
+    // Exhaustiveness tracking
+    mut has_wildcard := false
+    // Track covered variant names (up to 16 variants)
+    mut covered_0 := ""
+    mut covered_1 := ""
+    mut covered_2 := ""
+    mut covered_3 := ""
+    mut covered_4 := ""
+    mut covered_5 := ""
+    mut covered_6 := ""
+    mut covered_7 := ""
+    mut covered_count := 0
+
     mut arm_type := TY_UNKNOWN
     mut arm_count := 0
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        // Read pattern name for exhaustiveness tracking
+        if _ck2(cc) == "IDENT" {
+            pat_name := _ccur(cc).text
+            if pat_name == "_" {
+                has_wildcard = true
+            } else {
+                // Track covered variant
+                if covered_count == 0 { covered_0 = pat_name }
+                if covered_count == 1 { covered_1 = pat_name }
+                if covered_count == 2 { covered_2 = pat_name }
+                if covered_count == 3 { covered_3 = pat_name }
+                if covered_count == 4 { covered_4 = pat_name }
+                if covered_count == 5 { covered_5 = pat_name }
+                if covered_count == 6 { covered_6 = pat_name }
+                if covered_count == 7 { covered_7 = pat_name }
+                covered_count = covered_count + 1
+            }
+        }
         // Skip pattern
         while _ck2(cc) != "=>" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
         if _ck2(cc) == "=>" { cc = _cadv(cc) }
@@ -1502,6 +1533,36 @@ fn _check_match(c: Checker) -> CE {
         cc = _cskip_nl(cc)
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
+
+    // Exhaustiveness check: if subject is a sum type, verify all variants covered
+    if has_wildcard == false {
+        info := store_get(cc.store, subj_type)
+        if type_kind_name(info.kind) == "Named" {
+            def := reg_find_struct(cc.registry, info.name)
+            if def.is_sum && def.variant_names.len() > 1 {
+                // Check each variant is covered
+                mut vi := 1
+                mut all_covered := true
+                while vi < def.variant_names.len() {
+                    vname := def.variant_names[vi]
+                    mut found := false
+                    if covered_count > 0 && covered_0 == vname { found = true }
+                    if covered_count > 1 && covered_1 == vname { found = true }
+                    if covered_count > 2 && covered_2 == vname { found = true }
+                    if covered_count > 3 && covered_3 == vname { found = true }
+                    if covered_count > 4 && covered_4 == vname { found = true }
+                    if covered_count > 5 && covered_5 == vname { found = true }
+                    if covered_count > 6 && covered_6 == vname { found = true }
+                    if covered_count > 7 && covered_7 == vname { found = true }
+                    if found == false { all_covered = false }
+                    vi = vi + 1
+                }
+                if all_covered == false {
+                    cc = _cwarning(cc, "W0010", "non-exhaustive match: not all variants covered and no wildcard '_' arm")
+                }
+            }
+        }
+    }
 
     CE{c: cc, type_id: arm_type}
 }

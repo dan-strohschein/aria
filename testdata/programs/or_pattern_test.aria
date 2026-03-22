@@ -1,0 +1,31 @@
+type Color =
+    | Red
+    | Green
+    | Blue
+    | Yellow
+
+fn is_primary(c: Color) -> bool = match c {
+    Red | Blue | Yellow => true
+    _ => false
+}
+
+fn category(c: Color) -> str = match c {
+    Red | Blue => "cool or warm"
+    Green => "nature"
+    Yellow => "bright"
+    _ => "other"
+}
+
+entry {
+    assert is_primary(Red) == true
+    assert is_primary(Blue) == true
+    assert is_primary(Yellow) == true
+    assert is_primary(Green) == false
+
+    assert category(Red) == "cool or warm"
+    assert category(Blue) == "cool or warm"
+    assert category(Green) == "nature"
+    assert category(Yellow) == "bright"
+
+    println("or_pattern_test passed")
+}

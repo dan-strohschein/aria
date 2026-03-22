@@ -1,0 +1,26 @@
+// Test literal patterns in match expressions
+
+fn classify(n: i64) -> str = match n {
+    0 => "zero"
+    1 => "one"
+    42 => "answer"
+    _ => "other"
+}
+
+fn bool_name(b: bool) -> str = match b {
+    true => "yes"
+    false => "no"
+    _ => "unknown"
+}
+
+entry {
+    assert classify(0) == "zero"
+    assert classify(1) == "one"
+    assert classify(42) == "answer"
+    assert classify(99) == "other"
+
+    assert bool_name(true) == "yes"
+    assert bool_name(false) == "no"
+
+    println("literal_match_test passed")
+}

@@ -1,0 +1,32 @@
+// Test guard clauses in match expressions
+
+fn classify(n: i64) -> str = match n {
+    0 => "zero"
+    x if x > 0 => "positive"
+    x if x < 0 => "negative"
+    _ => "unknown"
+}
+
+type Shape =
+    | Circle(i64)
+    | Empty
+
+fn valid_area(s: Shape) -> i64 = match s {
+    Circle(r) if r > 0 => r * r * 3
+    Circle(r) => 0
+    Empty => 0
+    _ => 0
+}
+
+entry {
+    assert classify(0) == "zero"
+    assert classify(5) == "positive"
+    assert classify(-3) == "negative"
+
+    assert valid_area(Circle(5)) == 75
+    assert valid_area(Circle(0)) == 0
+    assert valid_area(Circle(-1)) == 0
+    assert valid_area(Empty) == 0
+
+    println("guard_match_test passed")
+}
