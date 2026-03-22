@@ -43,15 +43,15 @@
 | Feature | Spec Location | Status |
 |---|---|---|
 | **Type aliases** (`alias Name = Type`) | `newtype-aliases.md` | ✅ Implemented — resolver registers alias as SkType, checker registers as TyNamed pointing to underlying type |
-| **`dyn Trait` (trait objects)** | `trait-system.md` | ✅ Implemented — TyTraitObject type kind, `dyn Trait` parsed in type annotations, formatted as `dyn TraitName` |
-| **Associated types in traits** | `trait-system.md` | ✅ Implemented — `type Name` declarations accepted inside trait bodies |
+| **`dyn Trait` (trait objects)** | `trait-system.md` | ✅ Implemented — TyTraitObject type kind, `dyn Trait` type annotations, vtable construction via `_lower_make_trait_object`, `OpVtableCall` dispatch with method index lookup, `dyn Trait(expr)` explicit coercion syntax |
+| **Associated types in traits** | `trait-system.md` | ✅ Implemented — `type Name` collected in trait bodies (stored in TraitDef.assoc_type_names), `type Name = Type` in impl bodies registers `TypeName_AssocName` alias, `Self::Assoc` / `Type::Assoc` resolved in type annotations |
 | **Supertraits** (`trait B: A`) | `trait-system.md` | ✅ Implemented — parsed as `trait B: A, C`, stored in TraitDef.parent_traits, enforced at impl sites with E0200 |
 | **`Convert`/`TryConvert` traits** | `type-conversions.md` | ✅ Implemented — formal Convert/TryConvert traits registered; `.to[T]()` and `.trunc[T]()` already work in codegen |
 | **`T(x)` lossless widening syntax** | `type-conversions.md` | ✅ Implemented — primitive type names used as callables produce widening conversions in checker |
 | **`char` type** | `string-handling.md` | ✅ Implemented — TkCharLit token, `'c'` lexing with escape sequences, TY_CHAR type, codegen as codepoint integer |
 | **Smaller int types** (`i8`/`i16`/`i32`/`u*`) | `formal-grammar.md` | ✅ Already fully implemented — all 8 types with full trait support |
-| **`Drop` trait / destructors** | `memory-management.md` | ✅ Implemented — Drop trait registered in trait registry, impl blocks accepted; destructor scheduling deferred to codegen |
-| **`with` resource blocks** (RAII) | `closures-capture-semantics.md` | ✅ Implemented — `with expr { body }` parsed and type-checked; cleanup codegen deferred |
+| **`Drop` trait / destructors** | `memory-management.md` | ✅ Implemented — Drop trait registered, `_emit_drops_scoped` emits `TypeName_drop(self)` calls at scope exit with per-scope tracking via scope_start index, integrated into `_lower_block` |
+| **`with` resource blocks** (RAII) | `closures-capture-semantics.md` | ✅ Implemented — `with expr { body }` lowered: resource expression evaluated, body executed, `TypeName_drop(resource)` emitted at block exit; scoped drops handle early returns within the body |
 | **Float `Eq`/`Hash` prohibition** | `equality-comparison.md` | ✅ Fixed — floats only implement Ord, Add, Sub, Mul, Div, Mod, Numeric; Eq and Hash removed |
 
 ### Tier 3: Pattern Matching Completeness

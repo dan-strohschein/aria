@@ -226,6 +226,40 @@ fn _parse_type_ann(c: Checker) -> CE {
             return CE{c: cc, type_id: TY_UNKNOWN}
         }
         mut cc := _cadv(c)
+        // Check for qualified name: Type::Assoc (associated type resolution)
+        if _ck2(cc) == ":" && cc.pos + 1 < cc.tokens.len() && token_name(cc.tokens[cc.pos + 1].kind) == ":" {
+            cc = _cadv(_cadv(cc))  // skip ::
+            if _ck2(cc) == "IDENT" {
+                assoc_name := _ccur(cc).text
+                cc = _cadv(cc)
+                // Resolve Self::Assoc by looking up current impl type
+                mut lookup_name := name + "_" + assoc_name
+                if name == "Self" {
+                    // Extract impl type from fn_current_name (e.g., "IntBox_get" → "IntBox")
+                    mut impl_name := ""
+                    mut ui := 0
+                    while ui < cc.fn_current_name.len() {
+                        ch := cc.fn_current_name.charAt(ui)
+                        if ch == "_" { impl_name = cc.fn_current_name.substring(0, ui) }
+                        ui = ui + 1
+                    }
+                    if impl_name != "" {
+                        lookup_name = impl_name + "_" + assoc_name
+                    }
+                }
+                tid := resolve_type_name(cc.store, lookup_name)
+                if tid != TY_UNKNOWN {
+                    // Follow the alias to the underlying type
+                    ainfo := store_get(cc.store, tid)
+                    if type_kind_name(ainfo.kind) == "Named" && ainfo.type_id > 0 {
+                        return CE{c: cc, type_id: ainfo.type_id}
+                    }
+                    return CE{c: cc, type_id: tid}
+                }
+                // Fallback: return unknown
+                return CE{c: cc, type_id: TY_UNKNOWN}
+            }
+        }
         // Check for array type [T]
         if _ck2(cc) == "[" {
             // Generic type like Map[K, V] — skip for now

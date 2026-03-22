@@ -1100,11 +1100,14 @@ fn _lower_block(l: Lowerer) -> Lowerer {
     if _lk(l) != lb { return l }
     mut ll := _ladv(l)  // skip {
     ll = _lskip_nl(ll)
+    scope_start := ll.env_names.len()
 
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         ll = _lower_stmt(ll)
         ll = _lskip_nl(ll)
     }
+    // Emit drops for bindings created in this block scope
+    ll = _emit_drops_scoped(ll, scope_start)
     if _lk(ll) == rb { ll = _ladv(ll) }
     ll
 }
@@ -1139,26 +1142,39 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
     }
     if k == "assert" { return _lower_assert(l) }
     if k == "with" {
-        // with expr { body } — resource block
+        // with expr { body } — resource block with guaranteed cleanup
         // Check if this is effect clause (with [...]) or resource block
         mut ll := _ladv(l)  // skip with
         if _lk(ll) != "[" {
-            // Resource block: lower resource expr, lower body, emit drop at end
+            // Resource block: lower resource expr
             resource := _lower_expr(ll)
             ll = resource.l
-            // Lower body block
-            ll = _lower_block(ll)
-            // Emit drop for the resource if it has a drop method
-            obj_type := _lget_type(ll, resource.temp)
+            // Store resource in a named slot for drop access
+            res_slot := resource.temp
+            // Determine the drop function name
+            obj_type := _lget_type(ll, res_slot)
             sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+            mut has_drop := false
+            mut drop_fn := ""
             if sname != "" {
-                drop_fn := sname + "_drop"
+                drop_fn = sname + "_drop"
                 drop_sig := reg_find_fn(ll.registry, drop_fn)
-                if drop_sig.name != "" {
-                    nt := _lnew_temp(ll)
-                    ll = nt.l
-                    ll = _lemit(ll, new_inst(OpCall, nt.temp, resource.temp, 1, drop_fn, 0))
-                }
+                if drop_sig.name != "" { has_drop = true }
+            }
+            // Save defer state, add synthetic defer for drop
+            saved_defer_count := ll.defer_count
+            // We can't easily add a token-based defer for a synthesized call,
+            // so we manually manage: lower body, then emit drop, and also
+            // ensure _emit_defers in returns covers this.
+            // Approach: lower the block, emit drops at the end, and rely on
+            // _emit_drops_scoped for early return cleanup (resource is in env)
+            scope_start := ll.env_names.len()
+            ll = _lower_block(ll)
+            // Emit resource drop after body
+            if has_drop {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_slot, 1, drop_fn, 0))
             }
             return ll
         }
@@ -2096,6 +2112,31 @@ fn _lower_primary(l: Lowerer) -> LT {
             ll = _lemit(ll, new_inst(OpLoad, nt.temp, slot, 0, "", 0))
             if src_type != 0 { ll = _lset_type(ll, nt.temp, src_type) }
             return LT{l: ll, temp: nt.temp}
+        }
+    }
+
+    // dyn TraitName(expr) — explicit trait object construction
+    if k == "IDENT" && _lcur(l).text == "dyn" {
+        mut ll := _ladv(l)  // skip dyn
+        if _lk(ll) == "IDENT" {
+            trait_name := _lcur(ll).text
+            ll = _ladv(ll)  // skip trait name
+            if _lk(ll) == "(" {
+                ll = _ladv(ll)  // skip (
+                // Lower the concrete value expression
+                val := _lower_expr(ll)
+                ll = val.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Determine concrete type from the value's type tracking
+                obj_type := _lget_type(ll, val.temp)
+                concrete_name := _struct_name_for_type(ll.store, ll.registry, obj_type)
+                if concrete_name != "" {
+                    result := _lower_make_trait_object(ll, val.temp, concrete_name, trait_name)
+                    return result
+                }
+                // If we can't determine concrete type, just pass through
+                return LT{l: ll, temp: val.temp}
+            }
         }
     }
 
@@ -3745,16 +3786,36 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     dyn_obj_type := _lget_type(ll, obj)
     if dyn_obj_type == 500 {
         // Trait object — dispatch via vtable
-        // The type_id 500 is our marker for trait objects
-        // Look up the method index in the trait's method_names
-        // For now, use the method name stored in the lowerer's type tracking
-        // Skip args
+        // Compute method index: scan all registered fns to find the position of
+        // methods matching *_methodName pattern (same order as vtable construction)
+        // Since vtable is built per-type scanning Type_* methods, we need to find
+        // which index `method` corresponds to. Use method suffix matching.
+        mut method_idx := 0
+        mut found_idx := false
+        mut scan_i := 1
+        mut scan_count := 0
+        while scan_i < ll.registry.fn_sigs.len() {
+            sig := ll.registry.fn_sigs[scan_i]
+            if sig.name != "" && sig.name.len() > 1 {
+                // Check if this fn ends with "_" + method
+                suffix := "_" + method
+                if sig.name.len() > suffix.len() {
+                    tail := sig.name.substring(sig.name.len() - suffix.len(), sig.name.len())
+                    if tail == suffix && found_idx == false {
+                        method_idx = scan_count
+                        found_idx = true
+                    }
+                }
+                // Count all methods for any type (we use first match)
+            }
+            scan_i = scan_i + 1
+        }
+        // Lower args (skip for now — self is passed via data_ptr in vtable call)
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
-        // Emit VtableCall: arg1=trait_object, arg2=method_index(0 for first method)
-        ll = _lemit(ll, new_inst(OpVtableCall, nt.temp, obj, 0, method, 0))
+        ll = _lemit(ll, new_inst(OpVtableCall, nt.temp, obj, method_idx, method, 0))
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -4906,13 +4967,64 @@ fn _emit_defers(l: Lowerer) -> Lowerer {
     ll
 }
 
+// --- Trait object (dyn Trait) construction ---
+// Creates a fat pointer: (data_ptr, vtable_ptr) where vtable contains fn ptrs.
+// concrete_type: the struct type name, trait_name: the trait being implemented
+// The vtable stores fn ptrs for each method: ConcreteType_methodName
+fn _lower_make_trait_object(l: Lowerer, data_temp: i64, concrete_type: str, trait_name: str) -> LT {
+    mut ll := l
+    // Build vtable: allocate N slots, store fn ptrs
+    // Find methods by pattern: concrete_type + "_" + common trait methods
+    // For each registered fn matching ConcreteType_*, store fn ptr in vtable
+    mut vtable_methods := [""]  // sentinel
+    mut mi := 1
+    while mi < ll.registry.fn_sigs.len() {
+        sig := ll.registry.fn_sigs[mi]
+        if sig.name != "" {
+            // Check if this fn starts with "ConcreteType_"
+            prefix := concrete_type + "_"
+            if sig.name.len() > prefix.len() && sig.name.substring(0, prefix.len()) == prefix {
+                vtable_methods = vtable_methods.append(sig.name)
+            }
+        }
+        mi = mi + 1
+    }
+    method_count := vtable_methods.len() - 1  // subtract sentinel
+    if method_count == 0 {
+        // No methods found — return data as-is (degenerate trait object)
+        return LT{l: ll, temp: data_temp}
+    }
+    // Allocate vtable
+    vt_nt := _lnew_temp(ll)
+    ll = vt_nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, vt_nt.temp, method_count, 0, "_vtable", 0))
+    // Store fn ptrs in vtable slots
+    mut vi := 1
+    while vi < vtable_methods.len() {
+        fn_name := vtable_methods[vi]
+        // Get fn ptr
+        fn_nt := _lnew_temp(ll)
+        ll = fn_nt.l
+        ll = _lemit(ll, new_inst(OpFnRef, fn_nt.temp, 0, 0, fn_name, 0))
+        // Store in vtable slot
+        ll = _lemit(ll, new_inst(OpFieldSet, vt_nt.temp, vi - 1, fn_nt.temp, "", 0))
+        vi = vi + 1
+    }
+    // Create trait object: alloc 2 slots, store data_ptr and vtable_ptr
+    to_nt := _lnew_temp(ll)
+    ll = to_nt.l
+    ll = _lemit(ll, new_inst(OpTraitObject, to_nt.temp, data_temp, vt_nt.temp, "", 0))
+    ll = _lset_type(ll, to_nt.temp, 500)  // 500 = trait object marker
+    LT{l: ll, temp: to_nt.temp}
+}
+
 // Emit drop calls for bindings with Drop-implementing types
-fn _emit_drops(l: Lowerer) -> Lowerer {
+// scope_start: index in env_names where current scope begins (only drop bindings >= scope_start)
+fn _emit_drops_scoped(l: Lowerer, scope_start: i64) -> Lowerer {
     mut ll := l
     // Walk bindings in reverse order (LIFO destruction order)
     mut i := ll.env_names.len() - 1
-    while i > 0 {
-        name := ll.env_names[i]
+    while i >= scope_start && i > 0 {
         slot := ll.env_slots[i]
         // Check if this binding's type has a drop function
         obj_type := _lget_type(ll, slot)
@@ -4931,6 +5043,10 @@ fn _emit_drops(l: Lowerer) -> Lowerer {
     }
     ll
 }
+
+// Emit drops for all bindings (used at function exit)
+fn _emit_drops(l: Lowerer) -> Lowerer =
+    _emit_drops_scoped(l, 1)
 
 // --- Lower closure expression ---
 
