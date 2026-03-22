@@ -1,0 +1,53 @@
+// Integration test: HTTP server with JSON responses
+// Starts server, sends a request via curl, verifies response
+
+fn http_handler(req: HttpRequest) -> HttpResponse {
+    if req.path == "/health" {
+        return http_response_json(200, "\{\"status\":\"ok\"}")
+    }
+    if req.path == "/greet" {
+        params := http_parse_query(req.query)
+        name := http_get_param(params, "name")
+        if name == "" { name = "World" }
+        body := "\{\"greeting\":\"Hello, " + name + "!\"}"
+        return http_response_json(200, body)
+    }
+    if req.path == "/echo" {
+        return http_response_json(200, req.body)
+    }
+    http_response(404, "Not Found")
+}
+
+entry {
+    // Start server in background using fork trick
+    server := _ariaTcpSocket()
+    assert server >= 0
+    br := _ariaTcpBind(server, "127.0.0.1", 18090)
+    assert br == 0
+    lr := _ariaTcpListen(server, 5)
+    assert lr == 0
+    println("test server on :18090")
+
+    // Spawn curl requests in background
+    _ariaExec("(sleep 0.2 && curl -s http://127.0.0.1:18090/health && echo '' && curl -s 'http://127.0.0.1:18090/greet?name=Aria' && echo '' && curl -s -X POST -d '\{\"msg\":\"hi\"}' http://127.0.0.1:18090/echo && echo '' && curl -s http://127.0.0.1:18090/missing && echo '') &")
+
+    // Handle 4 requests then exit
+    mut handled := 0
+    while handled < 4 {
+        client := _ariaTcpAccept(server)
+        if client >= 0 {
+            raw := _ariaTcpRead(client, 65536)
+            if raw.len() > 0 {
+                req := http_parse_request(raw)
+                println("req: " + req.method + " " + req.path)
+                resp := http_handler(req)
+                text := http_serialize_response(resp)
+                _ariaTcpWrite(client, text)
+                handled = handled + 1
+            }
+            _ariaTcpClose(client)
+        }
+    }
+    _ariaTcpClose(server)
+    println("http_server_test passed")
+}

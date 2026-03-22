@@ -1,0 +1,43 @@
+// Required handler for http_serve (not called in this test)
+fn http_handler(req: HttpRequest) -> HttpResponse =
+    http_response(200, "ok")
+
+// Test HTTP library — request parsing and response building
+entry {
+    // Test request parsing
+    raw := "GET /hello?name=world HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: text/plain\r\n\r\nbody here"
+    req := http_parse_request(raw)
+    assert req.method == "GET"
+    assert req.path == "/hello"
+    assert req.query == "name=world"
+    assert req.body == "body here"
+    println("parse request ok")
+
+    // Test response building
+    resp := http_response(200, "Hello, World!")
+    text := http_serialize_response(resp)
+    assert text.contains("HTTP/1.1 200 OK")
+    assert text.contains("Content-Length: 13")
+    assert text.contains("Hello, World!")
+    println("response ok: " + text.substring(0, 30))
+
+    // Test JSON response
+    resp2 := http_response_json(200, "\{\"status\":\"ok\"}")
+    text2 := http_serialize_response(resp2)
+    assert text2.contains("application/json")
+    println("json response ok")
+
+    // Test adding header
+    resp3 := http_add_header(resp, "X-Custom: test123")
+    text3 := http_serialize_response(resp3)
+    assert text3.contains("X-Custom: test123")
+    println("custom header ok")
+
+    // Test status texts
+    r404 := http_response(404, "not found")
+    t404 := http_serialize_response(r404)
+    assert t404.contains("404 Not Found")
+    println("status text ok")
+
+    println("http_test passed")
+}

@@ -1,0 +1,78 @@
+// Test JSON library
+entry {
+    // Parse primitives
+    v1 := json_parse("\"hello\"")
+    assert json_kind(v1) == JSON_STRING
+    assert json_str_val(v1) == "hello"
+    println("parse string ok")
+
+    v2 := json_parse("42")
+    assert json_kind(v2) == JSON_INT
+    assert json_int_val(v2) == 42
+    println("parse int ok")
+
+    v3 := json_parse("-7")
+    assert json_kind(v3) == JSON_INT
+    assert json_int_val(v3) == -7
+    println("parse neg int ok")
+
+    v4 := json_parse("true")
+    assert json_kind(v4) == JSON_BOOL
+    assert json_int_val(v4) == 1
+    println("parse true ok")
+
+    v5 := json_parse("false")
+    assert json_kind(v5) == JSON_BOOL
+    assert json_int_val(v5) == 0
+    println("parse false ok")
+
+    v6 := json_parse("null")
+    assert json_kind(v6) == JSON_NULL
+    println("parse null ok")
+
+    v7 := json_parse("3.14")
+    assert json_kind(v7) == JSON_FLOAT
+    assert json_str_val(v7) == "3.14"
+    println("parse float ok")
+
+    // Emit primitives
+    assert json_emit(json_new_null()) == "null"
+    assert json_emit(json_new_bool(true)) == "true"
+    assert json_emit(json_new_bool(false)) == "false"
+    assert json_emit(json_new_int(42)) == "42"
+    assert json_emit(json_new_string("hi")) == "\"hi\""
+    println("emit primitives ok")
+
+    // Parse object
+    obj := json_parse("\{\"name\":\"Aria\",\"version\":1}")
+    assert json_kind(obj) == JSON_OBJECT
+    assert json_get_str(obj, "name") == "Aria"
+    assert json_get_int(obj, "version") == 1
+    println("parse object ok")
+
+    // Parse array
+    arr := json_parse("[1,2,3]")
+    assert json_kind(arr) == JSON_ARRAY
+    assert json_array_len(arr) == 3
+    assert json_int_val(json_array_get(arr, 0)) == 1
+    assert json_int_val(json_array_get(arr, 1)) == 2
+    assert json_int_val(json_array_get(arr, 2)) == 3
+    println("parse array ok")
+
+    // Emit round-trip
+    input := "\{\"key\":\"value\",\"num\":42}"
+    parsed := json_parse(input)
+    output := json_emit(parsed)
+    println("round-trip: " + output)
+
+    // Parse nested
+    nested := json_parse("\{\"data\":[1,2],\"meta\":\{\"count\":2}}")
+    assert json_kind(nested) == JSON_OBJECT
+    data_arr := json_object_get(nested, "data")
+    assert json_array_len(data_arr) == 2
+    meta := json_object_get(nested, "meta")
+    assert json_get_int(meta, "count") == 2
+    println("parse nested ok")
+
+    println("json_test passed")
+}

@@ -1,0 +1,558 @@
+// ============================================================
+// JSON Library for Aria
+// Standalone parser and emitter.
+//
+// Design: All JsonValues are stored in a global pool (array).
+// References are indices into this pool. This avoids needing
+// raw pointer manipulation that the current compiler can't do.
+//
+// Usage:
+//   val := json_parse("{\"name\": \"Aria\"}")
+//   name := json_get_str(val, "name")
+//   out := json_emit(val)
+// ============================================================
+
+// --- JSON Value Kinds ---
+const JSON_NULL: i64 = 0
+const JSON_BOOL: i64 = 1
+const JSON_INT: i64 = 2
+const JSON_FLOAT: i64 = 3
+const JSON_STRING: i64 = 4
+const JSON_ARRAY: i64 = 5
+const JSON_OBJECT: i64 = 6
+
+// --- JSON Value Pool ---
+// All values are stored as parallel arrays indexed by id.
+// id 0 = null sentinel.
+
+struct JsonPool {
+    kinds: [i64]
+    ints: [i64]
+    strs: [str]
+    // For arrays: children is [i64] where elements are value ids
+    // For objects: children is [i64] with paired key_id, val_id entries
+    //             obj_keys is [str] with key names in insertion order
+    child_arrays: [i64]   // pool_id → array-of-ids ptr
+    obj_key_lists: [i64]  // pool_id → str-array ptr for key order
+}
+
+fn _jp_new_pool() -> JsonPool =
+    JsonPool{kinds: [0], ints: [0], strs: [""],
+             child_arrays: [0], obj_key_lists: [0]}
+
+fn _jp_alloc(pool: JsonPool, kind: i64, int_val: i64, str_val: str) -> i64 {
+    // Returns the new id (= length before append, since index 0 is sentinel)
+    id := pool.kinds.len()
+    // Note: we can't mutate the pool directly, caller must rebuild
+    id
+}
+
+// Global pool — mutable
+// We use a struct wrapper so it can be passed through functions
+
+struct _JPool {
+    kinds: [i64]
+    ints: [i64]
+    strs: [str]
+    children: [i64]
+    key_lists: [i64]
+}
+
+// Global singleton pool — initialized once
+fn _jpool_init() -> _JPool =
+    _JPool{kinds: [0], ints: [0], strs: [""], children: [0], key_lists: [0]}
+
+fn _jpool_add(p: _JPool, kind: i64, iv: i64, sv: str, ch: i64, kl: i64) -> _JPool {
+    _JPool{
+        kinds: p.kinds.append(kind),
+        ints: p.ints.append(iv),
+        strs: p.strs.append(sv),
+        children: p.children.append(ch),
+        key_lists: p.key_lists.append(kl)
+    }
+}
+
+fn _jpool_id(p: _JPool) -> i64 = p.kinds.len() - 1
+
+// --- JsonValue = index into pool ---
+// We wrap it in a struct for type safety
+
+struct JsonValue {
+    id: i64
+    pool: _JPool
+}
+
+// --- Constructors (each returns value + updated pool) ---
+
+struct _JV {
+    val: JsonValue
+    pool: _JPool
+}
+
+fn _jv_null(p: _JPool) -> _JV {
+    np := _jpool_add(p, JSON_NULL, 0, "", 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_bool(p: _JPool, b: bool) -> _JV {
+    mut v := 0
+    if b { v = 1 }
+    np := _jpool_add(p, JSON_BOOL, v, "", 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_int(p: _JPool, n: i64) -> _JV {
+    np := _jpool_add(p, JSON_INT, n, "", 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_float(p: _JPool, s: str) -> _JV {
+    np := _jpool_add(p, JSON_FLOAT, 0, s, 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_string(p: _JPool, s: str) -> _JV {
+    np := _jpool_add(p, JSON_STRING, 0, s, 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_array(p: _JPool, child_arr: [i64]) -> _JV {
+    // child_arr is array of value ids (sentinel at 0)
+    // We store the array length in int_val (count of elements, excluding sentinel)
+    count := child_arr.len() - 1
+    // Store child_arr as a "pointer" — actually just append and remember index
+    // We can't store arrays as i64 easily... use the Map trick
+    // Actually: store element ids comma-separated in str_val as a hack
+    // Better: store count in int_val, element ids in sequential pool entries
+    // Simplest: just store as comma-separated ids in str_val
+    mut s := ""
+    mut i := 1
+    while i < child_arr.len() {
+        if i > 1 { s = s + "," }
+        s = s + child_arr[i].toStr()
+        i = i + 1
+    }
+    np := _jpool_add(p, JSON_ARRAY, count, s, 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+fn _jv_object(p: _JPool, keys: [str], val_ids: [i64]) -> _JV {
+    // Store keys as comma-separated in str_val
+    // Store val_ids as comma-separated in... we need a second string
+    // Use children field for val_ids encoded as string
+    mut ks := ""
+    mut vs := ""
+    mut i := 1
+    while i < keys.len() {
+        if i > 1 {
+            ks = ks + "\x01"  // use \x01 as separator (not in JSON keys)
+            vs = vs + ","
+        }
+        ks = ks + keys[i]
+        vs = vs + val_ids[i].toStr()
+        i = i + 1
+    }
+    count := keys.len() - 1
+    // Store: str_val = keys (sep by \x01), int_val = count
+    // Need second string for val_ids... store in a creative way
+    // Use a two-part encoding: "keys\x00val_ids"
+    encoded := ks + "\x00" + vs
+    np := _jpool_add(p, JSON_OBJECT, count, encoded, 0, 0)
+    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+}
+
+// --- Accessors ---
+
+fn json_kind(v: JsonValue) -> i64 = v.pool.kinds[v.id]
+fn json_int_val(v: JsonValue) -> i64 = v.pool.ints[v.id]
+fn json_str_val(v: JsonValue) -> str = v.pool.strs[v.id]
+fn json_is_null(v: JsonValue) -> bool = json_kind(v) == JSON_NULL
+
+fn json_array_len(v: JsonValue) -> i64 = v.pool.ints[v.id]
+
+fn json_array_get(v: JsonValue, idx: i64) -> JsonValue {
+    // Parse element ids from str_val
+    s := v.pool.strs[v.id]
+    if s.len() == 0 { return JsonValue{id: 0, pool: v.pool} }
+    parts := s.split(",")
+    if idx + 1 >= parts.len() { return JsonValue{id: 0, pool: v.pool} }
+    eid := _jp_parse_int(parts[idx + 1])
+    JsonValue{id: eid, pool: v.pool}
+}
+
+fn json_object_get(v: JsonValue, key: str) -> JsonValue {
+    encoded := v.pool.strs[v.id]
+    // Split on \x00 to get keys_part and vals_part
+    sep_idx := encoded.indexOf("\x00")
+    if sep_idx < 0 { return JsonValue{id: 0, pool: v.pool} }
+    keys_part := encoded.substring(0, sep_idx)
+    vals_part := encoded.substring(sep_idx + 1, encoded.len())
+    // Split keys by \x01
+    keys := keys_part.split("\x01")
+    vals := vals_part.split(",")
+    mut i := 1
+    while i < keys.len() {
+        if keys[i] == key {
+            eid := _jp_parse_int(vals[i])
+            return JsonValue{id: eid, pool: v.pool}
+        }
+        i = i + 1
+    }
+    JsonValue{id: 0, pool: v.pool}
+}
+
+fn json_object_has(v: JsonValue, key: str) -> bool {
+    result := json_object_get(v, key)
+    result.id != 0
+}
+
+// Convenience
+fn json_get_str(v: JsonValue, key: str) -> str {
+    child := json_object_get(v, key)
+    json_str_val(child)
+}
+
+fn json_get_int(v: JsonValue, key: str) -> i64 {
+    child := json_object_get(v, key)
+    json_int_val(child)
+}
+
+fn json_get_bool(v: JsonValue, key: str) -> bool {
+    child := json_object_get(v, key)
+    json_int_val(child) != 0
+}
+
+// ============================================================
+// JSON Parser
+// ============================================================
+
+struct _JP {
+    pool: _JPool
+    pos: i64
+    val: JsonValue
+}
+
+fn json_parse(input: str) -> JsonValue {
+    pool := _jpool_init()
+    // Add null at index 0
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jp_value(pool, input, 0)
+    r.val
+}
+
+fn _jp_value(pool: _JPool, src: str, pos: i64) -> _JP {
+    p := _jp_skip_ws(src, pos)
+    if p >= src.len() {
+        r := _jv_null(pool)
+        return _JP{pool: r.pool, pos: p, val: r.val}
+    }
+    ch := src.charAt(p)
+    lb := "\{"
+
+    if ch == "\"" { return _jp_string(pool, src, p) }
+    if ch == lb { return _jp_object(pool, src, p) }
+    if ch == "[" { return _jp_array(pool, src, p) }
+    if ch == "t" {
+        r := _jv_bool(pool, true)
+        return _JP{pool: r.pool, pos: p + 4, val: r.val}
+    }
+    if ch == "f" {
+        r := _jv_bool(pool, false)
+        return _JP{pool: r.pool, pos: p + 5, val: r.val}
+    }
+    if ch == "n" {
+        r := _jv_null(pool)
+        return _JP{pool: r.pool, pos: p + 4, val: r.val}
+    }
+    if ch == "-" || _jp_is_digit(ch) { return _jp_number(pool, src, p) }
+
+    r := _jv_null(pool)
+    _JP{pool: r.pool, pos: p, val: r.val}
+}
+
+fn _jp_skip_ws(src: str, pos: i64) -> i64 {
+    mut p := pos
+    while p < src.len() {
+        c := src.charAt(p)
+        if c != " " && c != "\t" && c != "\n" && c != "\r" { return p }
+        p = p + 1
+    }
+    p
+}
+
+fn _jp_string(pool: _JPool, src: str, pos: i64) -> _JP {
+    mut p := pos + 1
+    mut result := ""
+    while p < src.len() {
+        ch := src.charAt(p)
+        if ch == "\"" {
+            r := _jv_string(pool, result)
+            return _JP{pool: r.pool, pos: p + 1, val: r.val}
+        }
+        if ch == "\\" {
+            p = p + 1
+            if p < src.len() {
+                esc := src.charAt(p)
+                if esc == "\"" {
+                    result = result + "\""
+                } else {
+                    if esc == "\\" { result = result + "\\" }
+                    if esc == "/" { result = result + "/" }
+                    if esc == "n" { result = result + "\n" }
+                    if esc == "t" { result = result + "\t" }
+                    if esc == "r" { result = result + "\r" }
+                    if esc != "\"" && esc != "\\" && esc != "/" && esc != "n" && esc != "t" && esc != "r" { result = result + esc }
+                }
+            }
+        } else {
+            result = result + ch
+        }
+        p = p + 1
+    }
+    r := _jv_string(pool, result)
+    _JP{pool: r.pool, pos: p, val: r.val}
+}
+
+fn _jp_number(pool: _JPool, src: str, pos: i64) -> _JP {
+    mut p := pos
+    mut is_float := false
+    if p < src.len() && src.charAt(p) == "-" { p = p + 1 }
+    while p < src.len() && _jp_is_digit(src.charAt(p)) { p = p + 1 }
+    if p < src.len() && src.charAt(p) == "." {
+        is_float = true
+        p = p + 1
+        while p < src.len() && _jp_is_digit(src.charAt(p)) { p = p + 1 }
+    }
+    if p < src.len() {
+        ec := src.charAt(p)
+        if ec == "e" || ec == "E" {
+            is_float = true
+            p = p + 1
+            if p < src.len() {
+                sc := src.charAt(p)
+                if sc == "+" || sc == "-" { p = p + 1 }
+            }
+            while p < src.len() && _jp_is_digit(src.charAt(p)) { p = p + 1 }
+        }
+    }
+    text := src.substring(pos, p)
+    if is_float {
+        r := _jv_float(pool, text)
+        return _JP{pool: r.pool, pos: p, val: r.val}
+    }
+    r := _jv_int(pool, _jp_parse_int(text))
+    _JP{pool: r.pool, pos: p, val: r.val}
+}
+
+fn _jp_object(pool: _JPool, src: str, pos: i64) -> _JP {
+    mut p := _jp_skip_ws(src, pos + 1)
+    mut pl := pool
+    rb := "\}"
+    mut keys := [""]
+    mut val_ids := [0]
+
+    if p < src.len() && src.charAt(p) == rb {
+        r := _jv_object(pl, keys, val_ids)
+        return _JP{pool: r.pool, pos: p + 1, val: r.val}
+    }
+    mut running := true
+    while running {
+        p = _jp_skip_ws(src, p)
+        kr := _jp_string(pl, src, p)
+        pl = kr.pool
+        key := json_str_val(kr.val)
+        p = _jp_skip_ws(src, kr.pos)
+        if p < src.len() && src.charAt(p) == ":" { p = p + 1 }
+        vr := _jp_value(pl, src, p)
+        pl = vr.pool
+        p = vr.pos
+        keys = keys.append(key)
+        val_ids = val_ids.append(vr.val.id)
+        p = _jp_skip_ws(src, p)
+        if p < src.len() && src.charAt(p) == "," {
+            p = p + 1
+        } else {
+            running = false
+        }
+    }
+    p = _jp_skip_ws(src, p)
+    if p < src.len() && src.charAt(p) == rb { p = p + 1 }
+    r := _jv_object(pl, keys, val_ids)
+    _JP{pool: r.pool, pos: p, val: r.val}
+}
+
+fn _jp_array(pool: _JPool, src: str, pos: i64) -> _JP {
+    mut p := _jp_skip_ws(src, pos + 1)
+    mut pl := pool
+    mut ids := [0]
+
+    if p < src.len() && src.charAt(p) == "]" {
+        r := _jv_array(pl, ids)
+        return _JP{pool: r.pool, pos: p + 1, val: r.val}
+    }
+    mut running := true
+    while running {
+        vr := _jp_value(pl, src, p)
+        pl = vr.pool
+        p = vr.pos
+        ids = ids.append(vr.val.id)
+        p = _jp_skip_ws(src, p)
+        if p < src.len() && src.charAt(p) == "," {
+            p = p + 1
+        } else {
+            running = false
+        }
+    }
+    p = _jp_skip_ws(src, p)
+    if p < src.len() && src.charAt(p) == "]" { p = p + 1 }
+    r := _jv_array(pl, ids)
+    _JP{pool: r.pool, pos: p, val: r.val}
+}
+
+fn _jp_parse_int(s: str) -> i64 {
+    mut num := 0
+    mut i := 0
+    mut neg := false
+    if s.len() > 0 && s.charAt(0) == "-" {
+        neg = true
+        i = 1
+    }
+    while i < s.len() {
+        ch := s.charAt(i)
+        mut d := 0
+        if ch == "1" { d = 1 }
+        if ch == "2" { d = 2 }
+        if ch == "3" { d = 3 }
+        if ch == "4" { d = 4 }
+        if ch == "5" { d = 5 }
+        if ch == "6" { d = 6 }
+        if ch == "7" { d = 7 }
+        if ch == "8" { d = 8 }
+        if ch == "9" { d = 9 }
+        num = num * 10 + d
+        i = i + 1
+    }
+    if neg { return 0 - num }
+    num
+}
+
+fn _jp_is_digit(ch: str) -> bool =
+    ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4" ||
+    ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9"
+
+// ============================================================
+// JSON Emitter
+// ============================================================
+
+fn json_emit(v: JsonValue) -> str {
+    k := json_kind(v)
+    if k == JSON_NULL { return "null" }
+    if k == JSON_BOOL {
+        if json_int_val(v) != 0 { return "true" }
+        return "false"
+    }
+    if k == JSON_INT { return json_int_val(v).toStr() }
+    if k == JSON_FLOAT { return json_str_val(v) }
+    if k == JSON_STRING { return _json_escape(json_str_val(v)) }
+    if k == JSON_ARRAY { return _json_emit_arr(v) }
+    if k == JSON_OBJECT { return _json_emit_obj(v) }
+    "null"
+}
+
+fn _json_escape(s: str) -> str {
+    mut r := "\""
+    mut i := 0
+    while i < s.len() {
+        ch := s.charAt(i)
+        if ch == "\"" {
+            r = r + "\\\""
+        } else {
+            if ch == "\\" {
+                r = r + "\\\\"
+            } else {
+                if ch == "\n" {
+                    r = r + "\\n"
+                } else {
+                    if ch == "\t" {
+                        r = r + "\\t"
+                    } else {
+                        if ch == "\r" {
+                            r = r + "\\r"
+                        } else {
+                            r = r + ch
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    r + "\""
+}
+
+fn _json_emit_arr(v: JsonValue) -> str {
+    n := json_array_len(v)
+    if n == 0 { return "[]" }
+    mut r := "["
+    mut i := 0
+    while i < n {
+        if i > 0 { r = r + "," }
+        item := json_array_get(v, i)
+        r = r + json_emit(item)
+        i = i + 1
+    }
+    r + "]"
+}
+
+fn _json_emit_obj(v: JsonValue) -> str {
+    n := json_int_val(v)  // count stored in int_val
+    rb := "\}"
+    if n == 0 { return "\{" + rb }
+    encoded := json_str_val(v)
+    sep_idx := encoded.indexOf("\x00")
+    if sep_idx < 0 { return "\{" + rb }
+    keys_part := encoded.substring(0, sep_idx)
+    vals_part := encoded.substring(sep_idx + 1, encoded.len())
+    keys := keys_part.split("\x01")
+    vals := vals_part.split(",")
+    mut r := "\{"
+    mut i := 1
+    while i < keys.len() {
+        if i > 1 { r = r + "," }
+        r = r + _json_escape(keys[i]) + ":" + json_emit(JsonValue{id: _jp_parse_int(vals[i]), pool: v.pool})
+        i = i + 1
+    }
+    r + rb
+}
+
+// ============================================================
+// Builder API (construct JSON without parsing)
+// ============================================================
+
+fn json_new_null() -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)  // sentinel at 0
+    r := _jv_null(pool)
+    r.val
+}
+
+fn json_new_bool(b: bool) -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jv_bool(pool, b)
+    r.val
+}
+
+fn json_new_int(n: i64) -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jv_int(pool, n)
+    r.val
+}
+
+fn json_new_string(s: str) -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jv_string(pool, s)
+    r.val
+}

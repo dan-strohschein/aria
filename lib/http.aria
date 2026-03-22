@@ -1,0 +1,224 @@
+// ============================================================
+// HTTP Library for Aria
+// Request parsing, response building, and a simple server loop.
+//
+// Usage:
+//   entry {
+//       http_serve("0.0.0.0", 8080)
+//   }
+//
+// Override http_handler to provide custom logic:
+//   fn http_handler(req: HttpRequest) -> HttpResponse {
+//       if req.path == "/hello" {
+//           return http_response(200, "Hello!")
+//       }
+//       http_response(404, "Not Found")
+//   }
+// ============================================================
+
+// --- HTTP Request ---
+
+struct HttpRequest {
+    method: str
+    path: str
+    version: str
+    body: str
+    query: str
+    raw_headers: str
+}
+
+// --- HTTP Response ---
+
+struct HttpResponse {
+    status: i64
+    status_text: str
+    headers: [str]
+    body: str
+}
+
+// --- Response constructors ---
+
+fn http_response(status: i64, body: str) -> HttpResponse {
+    st := _http_status_text(status)
+    HttpResponse{status: status, status_text: st, headers: [""], body: body}
+}
+
+fn http_response_json(status: i64, json_body: str) -> HttpResponse {
+    st := _http_status_text(status)
+    headers := [""].append("Content-Type: application/json")
+    HttpResponse{status: status, status_text: st, headers: headers, body: json_body}
+}
+
+fn http_add_header(resp: HttpResponse, header: str) -> HttpResponse =
+    HttpResponse{status: resp.status, status_text: resp.status_text,
+                 headers: resp.headers.append(header), body: resp.body}
+
+fn _http_status_text(code: i64) -> str {
+    if code == 200 { return "OK" }
+    if code == 201 { return "Created" }
+    if code == 204 { return "No Content" }
+    if code == 301 { return "Moved Permanently" }
+    if code == 302 { return "Found" }
+    if code == 400 { return "Bad Request" }
+    if code == 401 { return "Unauthorized" }
+    if code == 403 { return "Forbidden" }
+    if code == 404 { return "Not Found" }
+    if code == 405 { return "Method Not Allowed" }
+    if code == 500 { return "Internal Server Error" }
+    "Unknown"
+}
+
+// --- Request parsing ---
+
+fn http_parse_request(raw: str) -> HttpRequest {
+    // Split into header section and body at \r\n\r\n
+    mut header_end := raw.indexOf("\r\n\r\n")
+    mut body := ""
+    mut header_section := raw
+    if header_end >= 0 {
+        header_section = raw.substring(0, header_end)
+        body = raw.substring(header_end + 4, raw.len())
+    }
+
+    // First line
+    first_line_end := header_section.indexOf("\r\n")
+    mut request_line := header_section
+    mut raw_headers := ""
+    if first_line_end >= 0 {
+        request_line = header_section.substring(0, first_line_end)
+        raw_headers = header_section.substring(first_line_end + 2, header_section.len())
+    }
+
+    // Parse request line: METHOD PATH VERSION
+    mut method := ""
+    mut path := ""
+    mut version := ""
+    mut query := ""
+    parts := request_line.split(" ")
+    if parts.len() > 1 { method = parts[1] }
+    if parts.len() > 2 {
+        full_path := parts[2]
+        qidx := full_path.indexOf("?")
+        if qidx >= 0 {
+            path = full_path.substring(0, qidx)
+            query = full_path.substring(qidx + 1, full_path.len())
+        } else {
+            path = full_path
+        }
+    }
+    if parts.len() > 3 { version = parts[3] }
+
+    HttpRequest{method: method, path: path, version: version,
+                body: body, query: query, raw_headers: raw_headers}
+}
+
+// --- Header access ---
+
+fn http_get_header(req: HttpRequest, name: str) -> str {
+    // Search raw_headers for "Name: value\r\n" pattern
+    search := name + ": "
+    idx := req.raw_headers.indexOf(search)
+    if idx < 0 { return "" }
+    start := idx + search.len()
+    end := req.raw_headers.indexOf("\r\n")
+    // Find the \r\n after this header
+    mut p := start
+    while p < req.raw_headers.len() {
+        if req.raw_headers.charAt(p) == "\r" { return req.raw_headers.substring(start, p) }
+        p = p + 1
+    }
+    req.raw_headers.substring(start, req.raw_headers.len())
+}
+
+// --- Query parameter parsing ---
+
+fn http_parse_query(query: str) -> [str] {
+    // Returns alternating [sentinel, key1, val1, key2, val2, ...]
+    if query.len() == 0 { return [""] }
+    pairs := query.split("&")
+    mut result := [""]
+    mut i := 1
+    while i < pairs.len() {
+        pair := pairs[i]
+        eq := pair.indexOf("=")
+        if eq >= 0 {
+            result = result.append(pair.substring(0, eq))
+            result = result.append(pair.substring(eq + 1, pair.len()))
+        } else {
+            result = result.append(pair)
+            result = result.append("")
+        }
+        i = i + 1
+    }
+    result
+}
+
+fn http_get_param(params: [str], key: str) -> str {
+    // Search alternating key/value pairs
+    mut i := 1
+    while i + 1 < params.len() {
+        if params[i] == key { return params[i + 1] }
+        i = i + 2
+    }
+    ""
+}
+
+// --- Response serialization ---
+
+fn http_serialize_response(resp: HttpResponse) -> str {
+    mut r := "HTTP/1.1 " + resp.status.toStr() + " " + resp.status_text + "\r\n"
+    r = r + "Content-Length: " + resp.body.len().toStr() + "\r\n"
+
+    // User headers
+    mut i := 1
+    while i < resp.headers.len() {
+        r = r + resp.headers[i] + "\r\n"
+        i = i + 1
+    }
+
+    r = r + "Connection: close\r\n"
+    r = r + "\r\n"
+    r = r + resp.body
+    r
+}
+
+// --- Server ---
+
+// Simple serve loop — calls http_handler for each request.
+// Define http_handler in your program before calling this.
+fn http_serve(addr: str, port: i64) -> i64 {
+    server := _ariaTcpSocket()
+    if server < 0 {
+        println("ERROR: failed to create socket")
+        return 1
+    }
+    br := _ariaTcpBind(server, addr, port)
+    if br < 0 {
+        println("ERROR: failed to bind to " + addr + ":" + port.toStr())
+        _ariaTcpClose(server)
+        return 1
+    }
+    lr := _ariaTcpListen(server, 128)
+    if lr < 0 {
+        println("ERROR: failed to listen")
+        _ariaTcpClose(server)
+        return 1
+    }
+
+    println("Aria HTTP server listening on " + addr + ":" + port.toStr())
+
+    loop {
+        client := _ariaTcpAccept(server)
+        if client >= 0 {
+            raw := _ariaTcpRead(client, 65536)
+            if raw.len() > 0 {
+                req := http_parse_request(raw)
+                resp := http_handler(req)
+                response_text := http_serialize_response(resp)
+                _ariaTcpWrite(client, response_text)
+            }
+            _ariaTcpClose(client)
+        }
+    }
+    return 0
+}
