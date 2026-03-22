@@ -2615,6 +2615,301 @@ fn _lower_primary(l: Lowerer) -> LT {
                 return LT{l: ll, temp: nt.temp}
             }
 
+            // --- PostgreSQL ---
+            if name == "_ariaPgConnect" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_pg_connect", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgClose" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_close", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgStatus" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_status", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgError" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_error", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgExec" {
+                ll = _ladv(ll)  // skip (
+                conn_arg := _lower_expr(ll)
+                ll = conn_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                query_arg := _lower_expr(ll)
+                ll = query_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // conn (1 temp) + str (2 temps) = 3 consecutive temps
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, conn_arg.temp, 3, "_aria_pg_exec", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgExecParams" {
+                ll = _ladv(ll)  // skip (
+                conn_arg := _lower_expr(ll)
+                ll = conn_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                query_arg := _lower_expr(ll)
+                ll = query_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                params_arg := _lower_expr(ll)
+                ll = params_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // conn (1) + str (2) + arr handle (1) = 4 consecutive temps
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, conn_arg.temp, 4, "_aria_pg_exec_params", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgResultStatus" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_result_status", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgResultError" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_result_error", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgNrows" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_nrows", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgNcols" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_ncols", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgFieldName" {
+                ll = _ladv(ll)  // skip (
+                res_arg := _lower_expr(ll)
+                ll = res_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                col_arg := _lower_expr(ll)
+                ll = col_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_arg.temp, 2, "_aria_pg_field_name", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgGetValue" {
+                ll = _ladv(ll)  // skip (
+                res_arg := _lower_expr(ll)
+                ll = res_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                row_arg := _lower_expr(ll)
+                ll = row_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                col_arg := _lower_expr(ll)
+                ll = col_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_arg.temp, 3, "_aria_pg_get_value", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgIsNull" {
+                ll = _ladv(ll)  // skip (
+                res_arg := _lower_expr(ll)
+                ll = res_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                row_arg := _lower_expr(ll)
+                ll = row_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                col_arg := _lower_expr(ll)
+                ll = col_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_arg.temp, 3, "_aria_pg_is_null", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgClear" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_clear", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // --- Concurrency ---
+            if name == "_ariaSpawn" {
+                ll = _ladv(ll)  // skip (
+                // One arg: closure (fat pointer = fn_ptr + env_ptr)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Extract fn_ptr (slot 0) and env_ptr (slot 1) from closure
+                fn_ptr_nt := _lnew_temp(ll)
+                ll = fn_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, arg.temp, 0, "_fn", 0))
+                env_ptr_nt := _lnew_temp(ll)
+                ll = env_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, arg.temp, 1, "_env", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr_nt.temp, 2, "_aria_spawn", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTaskAwait" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_task_await", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaChanNew" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_chan_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaChanSend" {
+                ll = _ladv(ll)  // skip (
+                ch_arg := _lower_expr(ll)
+                ll = ch_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                val_arg := _lower_expr(ll)
+                ll = val_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Pack into consecutive temps
+                pack0 := _lnew_temp(ll)
+                ll = pack0.l
+                ll = _lemit(ll, new_inst(OpStore, pack0.temp, ch_arg.temp, 0, "", 0))
+                pack1 := _lnew_temp(ll)
+                ll = pack1.l
+                ll = _lemit(ll, new_inst(OpStore, pack1.temp, val_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_send", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaChanRecv" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_chan_recv", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaChanClose" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_chan_close", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaMutexNew" {
+                ll = _ladv(ll)  // skip (
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_mutex_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaMutexLock" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_mutex_lock", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaMutexUnlock" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_mutex_unlock", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+
             // Check if it's a closure/function variable — indirect call
             fn_slot := _lenv_lookup(ll, name)
             if fn_slot >= 0 {
@@ -4588,9 +4883,10 @@ fn _lower_closure(l: Lowerer) -> LT {
         if _lk(ll) == ")" { ll = _ladv(ll) }
     }
     // Skip return type annotation
+    lb2 := "\{"
     if _lk(ll) == "->" {
         ll = _ladv(ll)
-        while _lk(ll) != "=>" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        while _lk(ll) != "=>" && _lk(ll) != lb2 && _lk(ll) != "EOF" { ll = _ladv(ll) }
     }
     // Skip =>
     if _lk(ll) == "=>" { ll = _ladv(ll) }
@@ -4743,10 +5039,17 @@ fn _lower_closure(l: Lowerer) -> LT {
 
     // Lower body
     ll = _lset_pos(ll, body_start)
+    lb3 := "\{"
     if body_start < body_end {
-        result := _lower_expr(ll)
-        ll = result.l
-        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
+        if _lk(ll) == lb3 {
+            // Block body: use _lower_fn_body which handles multi-statement blocks
+            // and emits OpRet for the last expression
+            ll = _lower_fn_body(ll, 1)
+        } else {
+            result := _lower_expr(ll)
+            ll = result.l
+            ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
+        }
     }
 
     // Finish closure function

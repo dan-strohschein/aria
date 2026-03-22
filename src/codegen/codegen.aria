@@ -50,7 +50,7 @@ fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> Dia
     _ariaWriteFile(ll_path, ll_text)
 
     // Compile with clang
-    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module 2>&1"
+    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module -lpq -I/opt/homebrew/opt/libpq/include -L/opt/homebrew/opt/libpq/lib 2>&1"
     exit_code := _ariaExec(cmd)
 
     if exit_code != 0 {

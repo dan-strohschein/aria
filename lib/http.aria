@@ -210,14 +210,17 @@ fn http_serve(addr: str, port: i64) -> i64 {
     loop {
         client := _ariaTcpAccept(server)
         if client >= 0 {
-            raw := _ariaTcpRead(client, 65536)
-            if raw.len() > 0 {
-                req := http_parse_request(raw)
-                resp := http_handler(req)
-                response_text := http_serialize_response(resp)
-                _ariaTcpWrite(client, response_text)
-            }
-            _ariaTcpClose(client)
+            _ariaSpawn(fn() -> i64 {
+                raw := _ariaTcpRead(client, 65536)
+                if raw.len() > 0 {
+                    req := http_parse_request(raw)
+                    resp := http_handler(req)
+                    response_text := http_serialize_response(resp)
+                    _ariaTcpWrite(client, response_text)
+                }
+                _ariaTcpClose(client)
+                0
+            })
         }
     }
     return 0

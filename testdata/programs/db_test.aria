@@ -1,0 +1,85 @@
+// PostgreSQL integration test
+// Requires: local PostgreSQL with a "test" database
+//   createdb test
+
+entry {
+    // Connect
+    conn := db_connect("host=localhost dbname=test")
+    if db_connected(conn) == false {
+        println("SKIP: Could not connect to PostgreSQL: " + db_error(conn))
+        db_close(conn)
+        return
+    }
+
+    // Setup: drop + create table
+    r1 := db_exec(conn, "DROP TABLE IF EXISTS aria_test")
+    db_clear(r1)
+
+    r2 := db_exec(conn, "CREATE TABLE aria_test (id SERIAL PRIMARY KEY, name TEXT, value TEXT)")
+    if db_ok(r2) == false {
+        println("FAIL: CREATE TABLE: " + db_result_error(r2))
+        db_clear(r2)
+        db_close(conn)
+        return
+    }
+    db_clear(r2)
+
+    // Insert with parameterized queries
+    r3 := db_query(conn, "INSERT INTO aria_test (name, value) VALUES ($1, $2)", ["alpha", "100"])
+    if db_ok(r3) == false {
+        println("FAIL: INSERT 1: " + db_result_error(r3))
+        db_clear(r3)
+        db_close(conn)
+        return
+    }
+    db_clear(r3)
+
+    r4 := db_query(conn, "INSERT INTO aria_test (name, value) VALUES ($1, $2)", ["beta", "200"])
+    db_clear(r4)
+
+    // Insert a NULL value
+    r5 := db_query(conn, "INSERT INTO aria_test (name, value) VALUES ($1, NULL)", ["gamma"])
+    db_clear(r5)
+
+    // Query all rows
+    r6 := db_exec(conn, "SELECT name, value FROM aria_test ORDER BY name")
+    if db_ok(r6) == false {
+        println("FAIL: SELECT: " + db_result_error(r6))
+        db_clear(r6)
+        db_close(conn)
+        return
+    }
+
+    // Verify row count
+    nrows := db_rows(r6)
+    assert nrows == 3
+
+    // Verify column names
+    assert db_field_name(r6, 0) == "name"
+    assert db_field_name(r6, 1) == "value"
+
+    // Verify data
+    assert db_get(r6, 0, 0) == "alpha"
+    assert db_get(r6, 0, 1) == "100"
+    assert db_get(r6, 1, 0) == "beta"
+    assert db_get(r6, 1, 1) == "200"
+    assert db_get(r6, 2, 0) == "gamma"
+
+    // NULL check
+    assert db_is_null(r6, 2, 1) == true
+    assert db_is_null(r6, 0, 1) == false
+
+    // Row helper
+    row := db_row(r6, 1)
+    assert db_row_get(row, 0) == "beta"
+
+    db_clear(r6)
+
+    // Cleanup
+    r7 := db_exec(conn, "DROP TABLE aria_test")
+    db_clear(r7)
+
+    db_close(conn)
+
+    println("PostgreSQL tests passed")
+}

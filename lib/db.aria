@@ -1,0 +1,123 @@
+// ============================================================
+// PostgreSQL Database Library for Aria
+// Wraps libpq via runtime builtins.
+//
+// Usage:
+//   conn := db_connect("host=localhost dbname=mydb")
+//   if db_connected(conn) {
+//       result := db_exec(conn, "SELECT 1")
+//       if db_ok(result) {
+//           println(db_get(result, 0, 0))
+//       }
+//       db_clear(result)
+//   }
+//   db_close(conn)
+//
+// Requires: brew install libpq
+// ============================================================
+
+// --- Connection ---
+
+struct DbConn {
+    handle: i64
+}
+
+struct DbResult {
+    handle: i64
+}
+
+struct DbRow {
+    result: i64
+    row: i64
+    ncols: i64
+}
+
+// Connect to PostgreSQL using a connection string.
+fn db_connect(connstr: str) -> DbConn {
+    h := _ariaPgConnect(connstr)
+    DbConn{handle: h}
+}
+
+// Close the connection.
+fn db_close(conn: DbConn) {
+    _ariaPgClose(conn.handle)
+}
+
+// Check if the connection is healthy.
+fn db_connected(conn: DbConn) -> bool {
+    _ariaPgStatus(conn.handle) == 1
+}
+
+// Get the last error message from the connection.
+fn db_error(conn: DbConn) -> str {
+    _ariaPgError(conn.handle)
+}
+
+// --- Queries ---
+
+// Execute a simple SQL query (no parameters).
+fn db_exec(conn: DbConn, query: str) -> DbResult {
+    h := _ariaPgExec(conn.handle, query)
+    DbResult{handle: h}
+}
+
+// Execute a parameterized query ($1, $2, ...).
+fn db_query(conn: DbConn, query: str, params: [str]) -> DbResult {
+    h := _ariaPgExecParams(conn.handle, query, params)
+    DbResult{handle: h}
+}
+
+// --- Result inspection ---
+
+// Check if the result succeeded (COMMAND_OK or TUPLES_OK).
+fn db_ok(result: DbResult) -> bool {
+    _ariaPgResultStatus(result.handle) == 0
+}
+
+// Get the error message from a failed result.
+fn db_result_error(result: DbResult) -> str {
+    _ariaPgResultError(result.handle)
+}
+
+// Number of rows in the result.
+fn db_rows(result: DbResult) -> i64 {
+    _ariaPgNrows(result.handle)
+}
+
+// Number of columns in the result.
+fn db_cols(result: DbResult) -> i64 {
+    _ariaPgNcols(result.handle)
+}
+
+// Get the name of column `col`.
+fn db_field_name(result: DbResult, col: i64) -> str {
+    _ariaPgFieldName(result.handle, col)
+}
+
+// Get the value at (row, col) as a string.
+fn db_get(result: DbResult, row: i64, col: i64) -> str {
+    _ariaPgGetValue(result.handle, row, col)
+}
+
+// Check if the value at (row, col) is NULL.
+fn db_is_null(result: DbResult, row: i64, col: i64) -> bool {
+    _ariaPgIsNull(result.handle, row, col) == 1
+}
+
+// Free the result memory.
+fn db_clear(result: DbResult) {
+    _ariaPgClear(result.handle)
+}
+
+// --- Row helper ---
+
+// Get a row accessor for convenient column access.
+fn db_row(result: DbResult, row: i64) -> DbRow {
+    nc := _ariaPgNcols(result.handle)
+    DbRow{result: result.handle, row: row, ncols: nc}
+}
+
+// Get a column value from a row.
+fn db_row_get(r: DbRow, col: i64) -> str {
+    _ariaPgGetValue(r.result, r.row, col)
+}

@@ -805,6 +805,311 @@ long _aria_tcp_set_timeout(long fd, long kind, long ms) {
     return 0;
 }
 
+// --- PostgreSQL (libpq) ---
+
+#include <libpq-fe.h>
+
+// Connect to PostgreSQL. Returns connection handle (cast PGconn* to long).
+long _aria_pg_connect(char *ptr, long len) {
+    char *connstr = (char *)malloc((size_t)(len + 1));
+    memcpy(connstr, ptr, (size_t)len);
+    connstr[len] = '\0';
+    PGconn *conn = PQconnectdb(connstr);
+    free(connstr);
+    return (long)conn;
+}
+
+// Close connection.
+void _aria_pg_close(long conn) {
+    if (conn != 0) PQfinish((PGconn *)conn);
+}
+
+// Check connection status. Returns 1 if OK, 0 if bad.
+long _aria_pg_status(long conn) {
+    if (conn == 0) return 0;
+    return PQstatus((PGconn *)conn) == CONNECTION_OK ? 1 : 0;
+}
+
+// Get error message from connection.
+struct _aria_str _aria_pg_error(long conn) {
+    if (conn == 0) {
+        struct _aria_str s = {"no connection", 13};
+        return s;
+    }
+    char *msg = PQerrorMessage((PGconn *)conn);
+    long mlen = (long)strlen(msg);
+    char *result = (char *)malloc((size_t)(mlen + 1));
+    memcpy(result, msg, (size_t)(mlen + 1));
+    struct _aria_str s = {result, mlen};
+    return s;
+}
+
+// Execute a simple query. Returns result handle.
+long _aria_pg_exec(long conn, char *qptr, long qlen) {
+    char *query = (char *)malloc((size_t)(qlen + 1));
+    memcpy(query, qptr, (size_t)qlen);
+    query[qlen] = '\0';
+    PGresult *res = PQexec((PGconn *)conn, query);
+    free(query);
+    return (long)res;
+}
+
+// Execute parameterized query. params_arr is an Aria [str] array handle.
+long _aria_pg_exec_params(long conn, char *qptr, long qlen, long params_arr) {
+    char *query = (char *)malloc((size_t)(qlen + 1));
+    memcpy(query, qptr, (size_t)qlen);
+    query[qlen] = '\0';
+
+    // Read Aria array: header is [length, capacity, data_ptr]
+    long *header = (long *)params_arr;
+    long arr_len = header[0];  // includes sentinel at index 0
+    long *data = (long *)header[2];
+
+    // Real params start at index 1 (skip sentinel)
+    int nparams = (int)(arr_len - 1);
+    if (nparams < 0) nparams = 0;
+
+    const char **paramValues = NULL;
+    if (nparams > 0) {
+        paramValues = (const char **)malloc((size_t)nparams * sizeof(char *));
+        for (int i = 0; i < nparams; i++) {
+            // Each element is a pointer to a 2-word struct {ptr, len}
+            long *str_struct = (long *)data[i + 1];
+            char *sptr = (char *)str_struct[0];
+            long slen = str_struct[1];
+            // Null-terminate for libpq
+            char *param = (char *)malloc((size_t)(slen + 1));
+            memcpy(param, sptr, (size_t)slen);
+            param[slen] = '\0';
+            paramValues[i] = param;
+        }
+    }
+
+    PGresult *res = PQexecParams((PGconn *)conn, query, nparams,
+                                  NULL, paramValues, NULL, NULL, 0);
+    free(query);
+    if (paramValues) {
+        for (int i = 0; i < nparams; i++) free((void *)paramValues[i]);
+        free(paramValues);
+    }
+    return (long)res;
+}
+
+// Check result status. Returns 0 for PGRES_COMMAND_OK or PGRES_TUPLES_OK.
+long _aria_pg_result_status(long result) {
+    if (result == 0) return -1;
+    ExecStatusType st = PQresultStatus((PGresult *)result);
+    if (st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK) return 0;
+    return (long)st;
+}
+
+// Get result error message.
+struct _aria_str _aria_pg_result_error(long result) {
+    if (result == 0) {
+        struct _aria_str s = {"no result", 9};
+        return s;
+    }
+    char *msg = PQresultErrorMessage((PGresult *)result);
+    long mlen = (long)strlen(msg);
+    char *r = (char *)malloc((size_t)(mlen + 1));
+    memcpy(r, msg, (size_t)(mlen + 1));
+    struct _aria_str s = {r, mlen};
+    return s;
+}
+
+// Row count.
+long _aria_pg_nrows(long result) {
+    if (result == 0) return 0;
+    return (long)PQntuples((PGresult *)result);
+}
+
+// Column count.
+long _aria_pg_ncols(long result) {
+    if (result == 0) return 0;
+    return (long)PQnfields((PGresult *)result);
+}
+
+// Column name.
+struct _aria_str _aria_pg_field_name(long result, long col) {
+    if (result == 0) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    char *name = PQfname((PGresult *)result, (int)col);
+    if (name == NULL) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    long nlen = (long)strlen(name);
+    char *r = (char *)malloc((size_t)(nlen + 1));
+    memcpy(r, name, (size_t)(nlen + 1));
+    struct _aria_str s = {r, nlen};
+    return s;
+}
+
+// Get cell value as string.
+struct _aria_str _aria_pg_get_value(long result, long row, long col) {
+    if (result == 0) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    char *val = PQgetvalue((PGresult *)result, (int)row, (int)col);
+    if (val == NULL) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    long vlen = (long)strlen(val);
+    char *r = (char *)malloc((size_t)(vlen + 1));
+    memcpy(r, val, (size_t)(vlen + 1));
+    struct _aria_str s = {r, vlen};
+    return s;
+}
+
+// NULL check. Returns 1 if NULL, 0 otherwise.
+long _aria_pg_is_null(long result, long row, long col) {
+    if (result == 0) return 1;
+    return PQgetisnull((PGresult *)result, (int)row, (int)col) ? 1 : 0;
+}
+
+// Free result.
+void _aria_pg_clear(long result) {
+    if (result != 0) PQclear((PGresult *)result);
+}
+
+// --- Concurrency (pthreads) ---
+
+#include <pthread.h>
+
+// Spawn thread argument struct
+struct _aria_spawn_arg {
+    long (*fn_ptr)(long);
+    long env_ptr;
+};
+
+static void *_aria_spawn_trampoline(void *arg) {
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)arg;
+    long result = sa->fn_ptr(sa->env_ptr);
+    free(sa);
+    return (void *)result;
+}
+
+// Spawn a new thread running closure (fn_ptr, env_ptr). Returns task handle.
+long _aria_spawn(long fn_ptr, long env_ptr) {
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)malloc(sizeof(struct _aria_spawn_arg));
+    sa->fn_ptr = (long (*)(long))fn_ptr;
+    sa->env_ptr = env_ptr;
+    pthread_t *th = (pthread_t *)malloc(sizeof(pthread_t));
+    if (pthread_create(th, NULL, _aria_spawn_trampoline, sa) != 0) {
+        free(sa);
+        free(th);
+        return -1;
+    }
+    return (long)th;
+}
+
+// Wait for task to finish, return its result.
+long _aria_task_await(long handle) {
+    if (handle <= 0) return -1;
+    pthread_t *th = (pthread_t *)handle;
+    void *retval = NULL;
+    pthread_join(*th, &retval);
+    free(th);
+    return (long)retval;
+}
+
+// --- Channel (mutex-protected ring buffer) ---
+// Layout: [mutex, cond_send, cond_recv, buf_ptr, capacity, head, tail, count, closed]
+
+struct _aria_chan {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond_send;
+    pthread_cond_t cond_recv;
+    long *buf;
+    long capacity;
+    long head;
+    long tail;
+    long count;
+    int closed;
+};
+
+long _aria_chan_new(long capacity) {
+    if (capacity < 1) capacity = 1;
+    struct _aria_chan *ch = (struct _aria_chan *)calloc(1, sizeof(struct _aria_chan));
+    pthread_mutex_init(&ch->mutex, NULL);
+    pthread_cond_init(&ch->cond_send, NULL);
+    pthread_cond_init(&ch->cond_recv, NULL);
+    ch->buf = (long *)calloc((size_t)capacity, sizeof(long));
+    ch->capacity = capacity;
+    ch->head = 0;
+    ch->tail = 0;
+    ch->count = 0;
+    ch->closed = 0;
+    return (long)ch;
+}
+
+// Send value to channel. Returns 0 on success, -1 if closed.
+long _aria_chan_send(long handle, long value) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    pthread_mutex_lock(&ch->mutex);
+    while (ch->count == ch->capacity && !ch->closed) {
+        pthread_cond_wait(&ch->cond_send, &ch->mutex);
+    }
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mutex);
+        return -1;
+    }
+    ch->buf[ch->tail] = value;
+    ch->tail = (ch->tail + 1) % ch->capacity;
+    ch->count++;
+    pthread_cond_signal(&ch->cond_recv);
+    pthread_mutex_unlock(&ch->mutex);
+    return 0;
+}
+
+// Receive value from channel. Returns value, or 0 if closed+empty.
+long _aria_chan_recv(long handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    pthread_mutex_lock(&ch->mutex);
+    while (ch->count == 0 && !ch->closed) {
+        pthread_cond_wait(&ch->cond_recv, &ch->mutex);
+    }
+    if (ch->count == 0 && ch->closed) {
+        pthread_mutex_unlock(&ch->mutex);
+        return 0;
+    }
+    long value = ch->buf[ch->head];
+    ch->head = (ch->head + 1) % ch->capacity;
+    ch->count--;
+    pthread_cond_signal(&ch->cond_send);
+    pthread_mutex_unlock(&ch->mutex);
+    return value;
+}
+
+void _aria_chan_close(long handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    pthread_mutex_lock(&ch->mutex);
+    ch->closed = 1;
+    pthread_cond_broadcast(&ch->cond_send);
+    pthread_cond_broadcast(&ch->cond_recv);
+    pthread_mutex_unlock(&ch->mutex);
+}
+
+// --- Mutex ---
+
+long _aria_mutex_new(void) {
+    pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(m, NULL);
+    return (long)m;
+}
+
+void _aria_mutex_lock(long handle) {
+    pthread_mutex_lock((pthread_mutex_t *)handle);
+}
+
+void _aria_mutex_unlock(long handle) {
+    pthread_mutex_unlock((pthread_mutex_t *)handle);
+}
+
 // --- Entry point ---
 
 extern void _aria_entry(void);

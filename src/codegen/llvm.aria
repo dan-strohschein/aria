@@ -228,6 +228,31 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare void @_aria_tcp_close(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_tcp_peer_addr(i64)" + nl)
     p = p.append("declare i64 @_aria_tcp_set_timeout(i64, i64, i64)" + nl)
+    // PostgreSQL
+    p = p.append("declare i64 @_aria_pg_connect(i8*, i64)" + nl)
+    p = p.append("declare void @_aria_pg_close(i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_status(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_pg_error(i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_exec(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_exec_params(i64, i8*, i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_result_status(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_pg_result_error(i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_nrows(i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_ncols(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_pg_field_name(i64, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_pg_get_value(i64, i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_pg_is_null(i64, i64, i64)" + nl)
+    p = p.append("declare void @_aria_pg_clear(i64)" + nl)
+    // Concurrency
+    p = p.append("declare i64 @_aria_spawn(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_task_await(i64)" + nl)
+    p = p.append("declare i64 @_aria_chan_new(i64)" + nl)
+    p = p.append("declare i64 @_aria_chan_send(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_chan_recv(i64)" + nl)
+    p = p.append("declare void @_aria_chan_close(i64)" + nl)
+    p = p.append("declare i64 @_aria_mutex_new()" + nl)
+    p = p.append("declare void @_aria_mutex_lock(i64)" + nl)
+    p = p.append("declare void @_aria_mutex_unlock(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
     p = p.append(nl)
 
@@ -1439,6 +1464,246 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%call_tst_r_" + _i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_set_timeout(i64 " + fd_v + ", i64 " + k_v + ", i64 " + ms_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    // --- PostgreSQL ---
+    if name == "_aria_pg_connect" {
+        // str arg (ptr, len) → i64
+        ptr_v := "%call_pgc_p_" + _i2s(idx)
+        len_v := "%call_pgc_l_" + _i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptrc := "%call_pgc_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
+        res := "%call_pgc_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_connect(i8* " + ptrc + ", i64 " + len_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_close" {
+        h_v := "%call_pgcl_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_pg_close(i64 " + h_v + ")")
+        return gg
+    }
+
+    if name == "_aria_pg_status" {
+        h_v := "%call_pgs_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_pgs_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_status(i64 " + h_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_error" {
+        h_v := "%call_pge_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        srt := _str_ret_type()
+        res := "%call_pge_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_error(i64 " + h_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_pge")
+        return gg
+    }
+
+    if name == "_aria_pg_exec" {
+        // conn (i64) + query str (ptr, len) = 3 temps
+        conn_v := "%call_pgex_c_" + _i2s(idx)
+        ptr_v := "%call_pgex_p_" + _i2s(idx)
+        len_v := "%call_pgex_l_" + _i2s(idx)
+        gg = _lg_emit(gg, conn_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 2))
+        ptrc := "%call_pgex_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
+        res := "%call_pgex_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_exec(i64 " + conn_v + ", i8* " + ptrc + ", i64 " + len_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_exec_params" {
+        // conn (i64) + query str (ptr, len) + params arr (i64) = 4 temps
+        conn_v := "%call_pgep_c_" + _i2s(idx)
+        ptr_v := "%call_pgep_p_" + _i2s(idx)
+        len_v := "%call_pgep_l_" + _i2s(idx)
+        arr_v := "%call_pgep_a_" + _i2s(idx)
+        gg = _lg_emit(gg, conn_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 2))
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1 + 3))
+        ptrc := "%call_pgep_pc_" + _i2s(idx)
+        gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
+        res := "%call_pgep_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_exec_params(i64 " + conn_v + ", i8* " + ptrc + ", i64 " + len_v + ", i64 " + arr_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_result_status" {
+        h_v := "%call_pgrs_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_pgrs_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_result_status(i64 " + h_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_result_error" {
+        h_v := "%call_pgre_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        srt := _str_ret_type()
+        res := "%call_pgre_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_result_error(i64 " + h_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_pgre")
+        return gg
+    }
+
+    if name == "_aria_pg_nrows" {
+        h_v := "%call_pgnr_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_pgnr_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_nrows(i64 " + h_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_ncols" {
+        h_v := "%call_pgnc_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_pgnc_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_ncols(i64 " + h_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_field_name" {
+        // result handle + col index = 2 temps
+        h_v := "%call_pgfn_h_" + _i2s(idx)
+        c_v := "%call_pgfn_c_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        srt := _str_ret_type()
+        res := "%call_pgfn_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_field_name(i64 " + h_v + ", i64 " + c_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_pgfn")
+        return gg
+    }
+
+    if name == "_aria_pg_get_value" {
+        // result handle + row + col = 3 temps
+        h_v := "%call_pggv_h_" + _i2s(idx)
+        r_v := "%call_pggv_r_" + _i2s(idx)
+        c_v := "%call_pggv_c_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, r_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 2))
+        srt := _str_ret_type()
+        res := "%call_pggv_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_get_value(i64 " + h_v + ", i64 " + r_v + ", i64 " + c_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_pggv")
+        return gg
+    }
+
+    if name == "_aria_pg_is_null" {
+        // result handle + row + col = 3 temps
+        h_v := "%call_pgin_h_" + _i2s(idx)
+        r_v := "%call_pgin_r_" + _i2s(idx)
+        c_v := "%call_pgin_c_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, r_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 2))
+        res := "%call_pgin_res_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_pg_is_null(i64 " + h_v + ", i64 " + r_v + ", i64 " + c_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_pg_clear" {
+        h_v := "%call_pgcr_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_pg_clear(i64 " + h_v + ")")
+        return gg
+    }
+
+    // --- Concurrency ---
+    if name == "_aria_spawn" {
+        // args: fn_ptr, env_ptr — 2 consecutive i64 temps
+        fp_v := "%call_sp_fp_" + _i2s(idx)
+        ep_v := "%call_sp_ep_" + _i2s(idx)
+        gg = _lg_emit(gg, fp_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, ep_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        res := "%call_sp_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_spawn(i64 " + fp_v + ", i64 " + ep_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_task_await" {
+        h_v := "%call_ta_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_ta_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_task_await(i64 " + h_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_chan_new" {
+        cap_v := "%call_cn_c_" + _i2s(idx)
+        gg = _lg_emit(gg, cap_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_cn_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_chan_new(i64 " + cap_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_chan_send" {
+        ch_v := "%call_cs_ch_" + _i2s(idx)
+        val_v := "%call_cs_v_" + _i2s(idx)
+        gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, val_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        res := "%call_cs_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_chan_send(i64 " + ch_v + ", i64 " + val_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_chan_recv" {
+        ch_v := "%call_cr_ch_" + _i2s(idx)
+        gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_cr_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_chan_recv(i64 " + ch_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_chan_close" {
+        ch_v := "%call_cc_ch_" + _i2s(idx)
+        gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_chan_close(i64 " + ch_v + ")")
+        return gg
+    }
+
+    if name == "_aria_mutex_new" {
+        res := "%call_mn_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_mutex_new()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_mutex_lock" {
+        m_v := "%call_ml_m_" + _i2s(idx)
+        gg = _lg_emit(gg, m_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_mutex_lock(i64 " + m_v + ")")
+        return gg
+    }
+
+    if name == "_aria_mutex_unlock" {
+        m_v := "%call_mu_m_" + _i2s(idx)
+        gg = _lg_emit(gg, m_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_mutex_unlock(i64 " + m_v + ")")
         return gg
     }
 
