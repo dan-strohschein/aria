@@ -1,0 +1,39 @@
+// Test multiple const declarations in the same file
+const A: i64 = 10
+const B: i64 = 20
+const C: i64 = 30
+const NAME: str = "aria"
+const VERSION: str = "1.0"
+const MAX: i64 = 9999
+
+fn sum_consts() -> i64 = A + B + C
+
+fn full_name() -> str = NAME + " v" + VERSION
+
+entry {
+    // All integer constants accessible
+    assert A == 10
+    assert B == 20
+    assert C == 30
+    assert MAX == 9999
+
+    // Constants in expressions
+    assert A + B == 30
+    assert A * B == 200
+    assert sum_consts() == 60
+
+    // String constants
+    assert NAME == "aria"
+    assert VERSION == "1.0"
+    assert full_name() == "aria v1.0"
+
+    // Constants in conditions
+    x := 50
+    if x < MAX {
+        assert true
+    } else {
+        assert false
+    }
+
+    println("multi_const_test passed")
+}

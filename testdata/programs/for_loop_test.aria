@@ -1,0 +1,13 @@
+// Test for loop (note: currently a stub that just runs the body once with var=0)
+// This test documents current behavior rather than ideal behavior
+entry {
+    // For loop runs body (simplified: loop var starts at 0, runs once)
+    mut ran := false
+    for x in [0] {
+        ran = true
+    }
+    // The for loop should at least enter the body
+    assert ran == true
+
+    println("for_loop_test passed")
+}

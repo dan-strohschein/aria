@@ -1,0 +1,17 @@
+// Test eprintln and print (vs println)
+entry {
+    // print without newline, then println
+    print("hello ")
+    println("world")
+
+    // eprintln goes to stderr
+    eprintln("this is stderr")
+
+    // Multiple prints building a line
+    print("a")
+    print("b")
+    print("c")
+    println("")
+
+    println("print_variants_test passed")
+}

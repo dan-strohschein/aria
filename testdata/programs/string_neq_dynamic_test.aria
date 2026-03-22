@@ -1,0 +1,41 @@
+// Test string != after dynamic concatenation
+entry {
+    a := "hel" + "lo"
+    b := "wor" + "ld"
+
+    // != on dynamically built strings
+    assert a != b
+    assert a != ""
+    assert "" != a
+
+    // != when equal
+    c := "hel" + "lo"
+    if a != c {
+        assert false
+    }
+
+    // != in if/else
+    name := "alice"
+    if name != "bob" {
+        assert true
+    } else {
+        assert false
+    }
+
+    // != in while loop
+    mut items := [""]
+    items = items.append("cat")
+    items = items.append("dog")
+    items = items.append("cat")
+    mut non_cat := 0
+    mut i := 1
+    while i < items.len() {
+        if items[i] != "cat" {
+            non_cat = non_cat + 1
+        }
+        i = i + 1
+    }
+    assert non_cat == 1
+
+    println("string_neq_dynamic_test passed")
+}
