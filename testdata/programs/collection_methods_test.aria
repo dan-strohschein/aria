@@ -1,0 +1,29 @@
+entry {
+    // Map creation and basic operations
+    m := Map()
+    m.set("name", 42)
+    m.set("age", 30)
+    m.set("score", 100)
+
+    assert m.get("name") == 42
+    assert m.get("age") == 30
+    assert m.get("score") == 100
+    assert m.len() == 3
+
+    assert m.has("name") == true
+    assert m.has("missing") == false
+
+    // Update existing key
+    m.set("score", 200)
+    assert m.get("score") == 200
+    assert m.len() == 3
+
+    // Multiple maps coexist
+    m2 := Map()
+    m2.set("a", 1)
+    m2.set("b", 2)
+    assert m2.len() == 2
+    assert m.len() == 3
+
+    println("collection_methods_test passed")
+}

@@ -57,6 +57,12 @@ type IrOp =
     | OpStrStartsWith
     | OpIntToStr
     | OpStrToInt
+    | OpMapNew
+    | OpMapSet
+    | OpMapGet
+    | OpMapContains
+    | OpMapLen
+    | OpMapKeys
     | OpJump
     | OpBranchTrue
     | OpBranchFalse
@@ -112,6 +118,12 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrStartsWith => "StrStartsWith"
     OpIntToStr => "IntToStr"
     OpStrToInt => "StrToInt"
+    OpMapNew => "MapNew"
+    OpMapSet => "MapSet"
+    OpMapGet => "MapGet"
+    OpMapContains => "MapContains"
+    OpMapLen => "MapLen"
+    OpMapKeys => "MapKeys"
     OpJump => "Jump"
     OpBranchTrue => "BranchTrue"
     OpBranchFalse => "BranchFalse"

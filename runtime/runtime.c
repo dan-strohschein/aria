@@ -277,6 +277,155 @@ long _aria_array_append(long arr_ptr, long value) {
     return arr_ptr;
 }
 
+// --- Map (hash table) ---
+// Header: [size, capacity, keys_ptr, values_ptr, states_ptr]
+// states: 0=empty, 1=occupied, 2=deleted
+
+static unsigned long _fnv_hash_str(char *ptr, long len) {
+    unsigned long h = 14695981039346656037ULL;
+    for (long i = 0; i < len; i++) {
+        h ^= (unsigned char)ptr[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+long _aria_map_new(long capacity) {
+    if (capacity < 8) capacity = 8;
+    long *header = (long *)calloc(1, 40);  // 5 * 8 bytes
+    header[0] = 0;          // size
+    header[1] = capacity;   // capacity
+    header[2] = (long)calloc((size_t)capacity, 8);  // keys
+    header[3] = (long)calloc((size_t)capacity, 8);  // values
+    header[4] = (long)calloc((size_t)capacity, 1);  // states (1 byte each)
+    return (long)header;
+}
+
+void _aria_map_set(long map_ptr, long key_ptr, long key_len, long value) {
+    long *header = (long *)map_ptr;
+    long size = header[0];
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    long *values = (long *)header[3];
+    char *states = (char *)header[4];
+
+    // Grow if load factor > 0.7
+    if (size * 10 > capacity * 7) {
+        long new_cap = capacity * 2;
+        long *new_keys = (long *)calloc((size_t)new_cap, 8);
+        long *new_values = (long *)calloc((size_t)new_cap, 8);
+        char *new_states = (char *)calloc((size_t)new_cap, 1);
+        // Rehash
+        for (long i = 0; i < capacity; i++) {
+            if (states[i] == 1) {
+                // Recompute hash for this key
+                // Key is stored as [ptr, len] pair: keys[i*2], keys[i*2+1]
+                long kp = keys[i * 2];
+                long kl = keys[i * 2 + 1];
+                unsigned long h = _fnv_hash_str((char *)kp, kl) % (unsigned long)new_cap;
+                while (new_states[h] == 1) { h = (h + 1) % (unsigned long)new_cap; }
+                new_keys[h * 2] = kp;
+                new_keys[h * 2 + 1] = kl;
+                new_values[h] = values[i];
+                new_states[h] = 1;
+            }
+        }
+        free(keys); free(values); free(states);
+        header[1] = new_cap;
+        header[2] = (long)new_keys;
+        header[3] = (long)new_values;
+        header[4] = (long)new_states;
+        capacity = new_cap;
+        keys = new_keys;
+        values = new_values;
+        states = new_states;
+    }
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    while (states[h] == 1) {
+        // Check if same key
+        if (keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            // Update existing
+            values[h] = value;
+            return;
+        }
+        h = (h + 1) % (unsigned long)capacity;
+    }
+    keys[h * 2] = key_ptr;
+    keys[h * 2 + 1] = key_len;
+    values[h] = value;
+    states[h] = 1;
+    header[0] = size + 1;
+}
+
+// Returns value, or 0 if not found. Use _aria_map_contains to check existence.
+long _aria_map_get(long map_ptr, long key_ptr, long key_len) {
+    long *header = (long *)map_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    long *values = (long *)header[3];
+    char *states = (char *)header[4];
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    long probes = 0;
+    while (states[h] != 0 && probes < capacity) {
+        if (states[h] == 1 && keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            return values[h];
+        }
+        h = (h + 1) % (unsigned long)capacity;
+        probes++;
+    }
+    return 0;
+}
+
+long _aria_map_contains(long map_ptr, long key_ptr, long key_len) {
+    long *header = (long *)map_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[4];
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    long probes = 0;
+    while (states[h] != 0 && probes < capacity) {
+        if (states[h] == 1 && keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            return 1;
+        }
+        h = (h + 1) % (unsigned long)capacity;
+        probes++;
+    }
+    return 0;
+}
+
+long _aria_map_len(long map_ptr) {
+    if (map_ptr == 0) return 0;
+    long *header = (long *)map_ptr;
+    return header[0];
+}
+
+// Return array of keys (each key is [ptr, len] pair stored as string array)
+long _aria_map_keys(long map_ptr) {
+    long *header = (long *)map_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[4];
+
+    long arr = _aria_array_new(header[0] * 2 + 2);
+    _aria_array_append(arr, 0);  // sentinel
+    for (long i = 0; i < capacity; i++) {
+        if (states[i] == 1) {
+            // Pack key as string: append ptr then len
+            long *str_struct = (long *)malloc(16);
+            str_struct[0] = keys[i * 2];      // ptr
+            str_struct[1] = keys[i * 2 + 1];  // len
+            _aria_array_append(arr, (long)str_struct);
+        }
+    }
+    return arr;
+}
+
 // --- Command line args ---
 
 static long _aria_args_array = 0;

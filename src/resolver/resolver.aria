@@ -183,6 +183,8 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     // Result constructors
     rr = _add_builtin(rr, "Ok", SkBuiltin)
     rr = _add_builtin(rr, "Err", SkBuiltin)
+    // Built-in constructors
+    rr = _add_builtin(rr, "Map", SkBuiltin)
     // Effect names
     rr = _add_builtin(rr, "Io", SkBuiltin)
     rr = _add_builtin(rr, "Fs", SkBuiltin)

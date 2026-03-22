@@ -202,6 +202,12 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_args_get()" + nl)
     p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_to_int(i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_map_new(i64)" + nl)
+    p = p.append("declare void @_aria_map_set(i64, i8*, i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_map_get(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_map_contains(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_map_len(i64)" + nl)
+    p = p.append("declare i64 @_aria_map_keys(i64)" + nl)
     p = p.append(nl)
 
     // _aria_panic: print message to stderr and exit(1)
@@ -796,6 +802,86 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         gg = _lg_emit(gg, "store i64 " + val_int + ", i64* " + _t(inst.dest))
         dest_suc := inst.dest + 1
         gg = _lg_emit(gg, "store i64 " + suc + ", i64* " + _t(dest_suc))
+        return gg
+    }
+
+    if op == "MapNew" {
+        mut gg := g
+        cap_v := "%mnew_cap_" + _i2s(idx)
+        gg = _lg_emit(gg, cap_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%mnew_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_map_new(i64 " + cap_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "MapSet" {
+        // arg1 = map ptr, arg2 = key (str temp), type_id = value temp
+        mut gg := g
+        map_v := "%mset_m_" + _i2s(idx)
+        gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%mset_kp_" + _i2s(idx)
+        key_l := "%mset_kl_" + _i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%mset_kpc_" + _i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        val_v := "%mset_v_" + _i2s(idx)
+        gg = _lg_emit(gg, val_v + " = load i64, i64* " + _t(inst.type_id))
+        gg = _lg_emit(gg, "call void @_aria_map_set(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ", i64 " + val_v + ")")
+        return gg
+    }
+
+    if op == "MapGet" {
+        // arg1 = map ptr, arg2 = key (str temp), dest = result
+        mut gg := g
+        map_v := "%mget_m_" + _i2s(idx)
+        gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%mget_kp_" + _i2s(idx)
+        key_l := "%mget_kl_" + _i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%mget_kpc_" + _i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        res := "%mget_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_map_get(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "MapContains" {
+        mut gg := g
+        map_v := "%mhas_m_" + _i2s(idx)
+        gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%mhas_kp_" + _i2s(idx)
+        key_l := "%mhas_kl_" + _i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%mhas_kpc_" + _i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        res := "%mhas_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_map_contains(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "MapLen" {
+        mut gg := g
+        map_v := "%mlen_m_" + _i2s(idx)
+        gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%mlen_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_map_len(i64 " + map_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "MapKeys" {
+        mut gg := g
+        map_v := "%mkeys_m_" + _i2s(idx)
+        gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%mkeys_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_map_keys(i64 " + map_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
