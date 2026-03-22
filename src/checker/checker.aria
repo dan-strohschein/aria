@@ -2363,6 +2363,12 @@ fn _check_match(c: Checker) -> CE {
             if pat_name == "_" {
                 has_wildcard = true
             } else {
+                // Lowercase-starting names are binding patterns (catch-all)
+                // Variant names start with uppercase (PascalCase)
+                first_char := pat_name.charAt(0)
+                if first_char >= "a" && first_char <= "z" {
+                    has_wildcard = true
+                }
                 // Track covered variant
                 if covered_count == 0 { covered_0 = pat_name }
                 if covered_count == 1 { covered_1 = pat_name }
@@ -2419,6 +2425,8 @@ fn _check_match(c: Checker) -> CE {
                     vi = vi + 1
                 }
                 if all_covered == false {
+                    // TODO: upgrade to _cerror once match arm parsing is fixed
+                    // (currently produces false positives on multi-arm matches)
                     cc = _cwarning(cc, "W0010", "non-exhaustive match: not all variants covered and no wildcard '_' arm")
                 }
             }

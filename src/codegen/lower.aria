@@ -3485,7 +3485,7 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            defer_count: new_count, defer_start_0: ds0, defer_start_1: ds1, defer_start_2: ds2, defer_start_3: ds3, defer_end_0: de0, defer_end_1: de1, defer_end_2: de2, defer_end_3: de3}
+            fn_error_type: l.fn_error_type, defer_count: new_count, defer_start_0: ds0, defer_start_1: ds1, defer_start_2: ds2, defer_start_3: ds3, defer_end_0: de0, defer_end_1: de1, defer_end_2: de2, defer_end_3: de3}
 }
 
 // Emit deferred expressions in reverse order (LIFO)
