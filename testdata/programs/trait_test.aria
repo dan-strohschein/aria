@@ -1,0 +1,47 @@
+// Test trait declarations, impl trait for type, and derives
+
+trait Describable {
+    fn describe(self) -> str
+}
+
+struct Dog {
+    name: str
+    age: i64
+}
+
+impl Describable for Dog {
+    fn describe(self) -> str = "Dog: " + self.name
+}
+
+struct Cat {
+    name: str
+}
+
+impl Describable for Cat {
+    fn describe(self) -> str = "Cat: " + self.name
+}
+
+// Test inherent impl (no trait)
+impl Dog {
+    fn is_old(self) -> bool = self.age > 10
+}
+
+// Test derives (registers trait impls)
+struct Point {
+    x: i64
+    y: i64
+} derives [Eq, Hash]
+
+entry {
+    d := Dog{name: "Rex", age: 5}
+    assert d.describe() == "Dog: Rex"
+    assert d.is_old() == false
+
+    c := Cat{name: "Whiskers"}
+    assert c.describe() == "Cat: Whiskers"
+
+    old_dog := Dog{name: "Max", age: 15}
+    assert old_dog.is_old() == true
+
+    println("trait_test passed")
+}

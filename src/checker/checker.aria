@@ -147,6 +147,13 @@ fn _cset_fn_ctx(c: Checker, ret: i64, err: i64) -> Checker =
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: ret, fn_error_type: err, in_loop: c.in_loop}
 
+fn _cset_treg(c: Checker, treg: TraitRegistry) -> Checker =
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file,
+            env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, in_loop: c.in_loop}
+
 fn _cset_loop(c: Checker, in_loop: bool) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
@@ -379,6 +386,29 @@ fn _pass1_types(c: Checker) -> Checker {
     cc
 }
 
+// Parse `derives [Trait1, Trait2]` clause and register trait impls
+fn _parse_derives(c: Checker, type_name: str) -> Checker {
+    if _ck2(c) != "derives" { return c }
+    mut cc := _cadv(c)  // skip derives
+    if _ck2(cc) != "[" { return cc }
+    cc = _cadv(cc)  // skip [
+    cc = _cskip_nl(cc)
+    while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+        if _ck2(cc) == "IDENT" {
+            tname := _ccur(cc).text
+            cc = _cadv(cc)
+            cc = _cset_treg(cc, treg_add_impl(cc.treg, ImplDef{trait_name: tname, type_name: type_name}))
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == "]" { cc = _cadv(cc) }
+    cc
+}
+
 fn _mk_newtype_def(name: str, underlying: i64) -> StructDef {
     mut fields := [_sentinel_field()]
     fields = fields.append(FieldInfo{name: "value", type_id: underlying})
@@ -499,6 +529,8 @@ fn _register_type_decl(c: Checker) -> Checker {
             cc = _cset_store(cc, new_st)
             def := new_sum_def(name, variants, vf_counts, vf_names, vf_types, vf_offsets)
             cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+            cc = _cskip_nl(cc)
+            cc = _parse_derives(cc, name)
             return cc
         }
         // Newtype: type Name = UnderlyingType
@@ -544,6 +576,9 @@ fn _register_type_decl(c: Checker) -> Checker {
         cc = _cset_store(cc, new_st)
         def := new_struct_def(name, fields, false, [""])
         cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+        // Check for derives clause
+        cc = _cskip_nl(cc)
+        cc = _parse_derives(cc, name)
     }
     cc
 }
@@ -600,6 +635,8 @@ fn _pass2_fns(c: Checker) -> Checker {
             cc = _register_fn_sig(cc)
         } else if k == "impl" {
             cc = _register_impl_fns(cc)
+        } else if k == "trait" {
+            cc = _register_trait_decl(cc)
         } else if k == "const" {
             cc = _register_const(cc)
         } else {
@@ -607,6 +644,64 @@ fn _pass2_fns(c: Checker) -> Checker {
         }
         cc = _cskip_nl(cc)
     }
+    cc
+}
+
+fn _register_trait_decl(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip trait
+    if _ck2(cc) != "IDENT" { return cc }
+    trait_name := _ccur(cc).text
+    cc = _cadv(cc)
+    lb := "\{"
+    rb := "\}"
+    // Skip to opening brace
+    while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+    if _ck2(cc) != lb { return cc }
+    cc = _cadv(cc)  // skip {
+    cc = _cskip_nl(cc)
+    // Collect method names
+    mut method_name_0 := ""
+    mut method_name_1 := ""
+    mut method_name_2 := ""
+    mut method_name_3 := ""
+    mut method_count := 0
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "fn" {
+            cc = _cadv(cc)  // skip fn
+            if _ck2(cc) == "IDENT" {
+                mname := _ccur(cc).text
+                if method_count == 0 { method_name_0 = mname }
+                if method_count == 1 { method_name_1 = mname }
+                if method_count == 2 { method_name_2 = mname }
+                if method_count == 3 { method_name_3 = mname }
+                method_count = method_count + 1
+            }
+            // Skip to end of method signature
+            while _ck2(cc) != "NEWLINE" && _ck2(cc) != rb && _ck2(cc) != "EOF" {
+                if _ck2(cc) == lb {
+                    cc = _skip_braces2(cc)
+                } else {
+                    cc = _cadv(cc)
+                }
+            }
+        } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
+            // done
+        } else {
+            cc = _cadv(cc)
+        }
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    // Build method names list
+    mut mnames := [""]
+    if method_count > 0 { mnames = mnames.append(method_name_0) }
+    if method_count > 1 { mnames = mnames.append(method_name_1) }
+    if method_count > 2 { mnames = mnames.append(method_name_2) }
+    if method_count > 3 { mnames = mnames.append(method_name_3) }
+    // Register trait
+    tdef := TraitDef{name: trait_name, method_names: mnames}
+    cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
 
@@ -688,20 +783,27 @@ fn _register_fn_sig(c: Checker) -> Checker {
 
 fn _register_impl_fns(c: Checker) -> Checker {
     mut cc := _cadv(c)  // skip impl
-    // Capture the type name after "impl"
+    // Capture names: "impl TypeName {" or "impl TraitName for TypeName {"
+    mut first_name := ""
     mut impl_type := ""
-    // Could be "impl TypeName {" or "impl TraitName for TypeName {"
+    mut impl_trait := ""
     if _ck2(cc) == "IDENT" {
-        impl_type = _ccur(cc).text
+        first_name = _ccur(cc).text
+        impl_type = first_name
         cc = _cadv(cc)
     }
     // Check for "for TypeName" pattern (impl Trait for Type)
     if _ck2(cc) == "for" {
+        impl_trait = first_name
         cc = _cadv(cc)
         if _ck2(cc) == "IDENT" {
             impl_type = _ccur(cc).text
             cc = _cadv(cc)
         }
+    }
+    // Register trait impl in trait registry
+    if impl_trait != "" && impl_type != "" {
+        cc = _cset_treg(cc, treg_add_impl(cc.treg, ImplDef{trait_name: impl_trait, type_name: impl_type}))
     }
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -727,10 +829,12 @@ fn _register_impl_fns(c: Checker) -> Checker {
 
 // Register a function signature from inside an impl block.
 // Handles `self` parameter by injecting the impl type.
+// Registers with qualified name: Type_method
 fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
     mut cc := _cadv(c)  // skip fn
     if _ck2(cc) != "IDENT" { return cc }
-    name := _ccur(cc).text
+    raw_name := _ccur(cc).text
+    name := impl_type + "_" + raw_name
     cc = _cadv(cc)
 
     // Skip generic params
@@ -955,6 +1059,19 @@ fn _check_fn(c: Checker) -> Checker {
 
 fn _check_impl(c: Checker) -> Checker {
     mut cc := _cadv(c)  // skip impl
+    // Capture impl type for qualified fn lookup
+    mut impl_type := ""
+    if _ck2(cc) == "IDENT" {
+        impl_type = _ccur(cc).text
+        cc = _cadv(cc)
+    }
+    if _ck2(cc) == "for" {
+        cc = _cadv(cc)
+        if _ck2(cc) == "IDENT" {
+            impl_type = _ccur(cc).text
+            cc = _cadv(cc)
+        }
+    }
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
     if _ck2(cc) != lb { return cc }
@@ -965,7 +1082,7 @@ fn _check_impl(c: Checker) -> Checker {
         cc = _cskip_nl(cc)
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
         if _ck2(cc) == "fn" {
-            cc = _check_fn(cc)
+            cc = _check_impl_fn(cc, impl_type)
         } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
             return cc
         } else {
@@ -974,6 +1091,45 @@ fn _check_impl(c: Checker) -> Checker {
         cc = _cskip_nl(cc)
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
+// Check a function inside an impl block — uses qualified name for sig lookup
+fn _check_impl_fn(c: Checker, impl_type: str) -> Checker {
+    mut cc := _cadv(c)  // skip fn
+    if _ck2(cc) != "IDENT" { return cc }
+    raw_name := _ccur(cc).text
+    name := impl_type + "_" + raw_name
+    cc = _cadv(cc)
+
+    // Look up registered signature by qualified name
+    sig := reg_find_fn(cc.registry, name)
+
+    // Set function context
+    cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
+
+    // Register params in env
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        cc = _env_add(cc, sig.param_names[pi], sig.param_types[pi], 0)
+        pi = pi + 1
+    }
+
+    // Skip to body
+    lb := "\{"
+    while _ck2(cc) != "=" && _ck2(cc) != lb && _ck2(cc) != "EOF" {
+        cc = _cadv(cc)
+    }
+
+    if _ck2(cc) == "=" {
+        cc = _cadv(cc)
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+    } else if _ck2(cc) == lb {
+        result := _check_block(cc)
+        cc = result.c
+    }
     cc
 }
 

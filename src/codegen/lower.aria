@@ -671,6 +671,19 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
 
 fn _lower_impl(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip impl
+    // Capture impl type name for qualified method names
+    mut impl_type := ""
+    if _lk(ll) == "IDENT" {
+        impl_type = _lcur(ll).text
+        ll = _ladv(ll)
+    }
+    if _lk(ll) == "for" {
+        ll = _ladv(ll)
+        if _lk(ll) == "IDENT" {
+            impl_type = _lcur(ll).text
+            ll = _ladv(ll)
+        }
+    }
     lb := "\{"
     rb := "\}"
     while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
@@ -681,7 +694,7 @@ fn _lower_impl(l: Lowerer) -> Lowerer {
         ll = _lskip_nl(ll)
         if _lk(ll) == "pub" { ll = _ladv(ll) }
         if _lk(ll) == "fn" {
-            ll = _lower_fn(ll)
+            ll = _lower_impl_fn(ll, impl_type)
         } else if _lk(ll) == rb || _lk(ll) == "EOF" {
             return ll
         } else {
@@ -691,6 +704,74 @@ fn _lower_impl(l: Lowerer) -> Lowerer {
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
     return ll
+}
+
+// Lower a function inside an impl block — uses qualified name Type_method
+fn _lower_impl_fn(l: Lowerer, impl_type: str) -> Lowerer {
+    mut ll := _ladv(l)  // skip fn
+    if _lk(ll) != "IDENT" { return ll }
+    raw_name := _lcur(ll).text
+    name := impl_type + "_" + raw_name
+    ll = _ladv(ll)
+
+    sig := reg_find_fn(ll.registry, name)
+    if sig.name == "" { return _skip_to_next_l(ll) }
+
+    // Count actual register args (strings take 2 regs each)
+    mut actual_param_count := 0
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+            actual_param_count = actual_param_count + 2
+        } else {
+            actual_param_count = actual_param_count + 1
+        }
+        pi = pi + 1
+    }
+
+    ll = _lset_func(ll, new_ir_func(name, actual_param_count, sig.return_type))
+
+    // Allocate temps for parameters
+    pi = 1
+    while pi < sig.param_names.len() {
+        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+            ll = _lset_type(ll, nt.temp, 12)
+        } else {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+            if pi <= sig.param_types.len() - 1 && sig.param_types[pi] > 0 {
+                pt := sig.param_types[pi]
+                if _is_str_array_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 13)
+                } else {
+                    ll = _lset_type(ll, nt.temp, pt)
+                }
+            }
+        }
+        pi = pi + 1
+    }
+
+    // Skip to body
+    lb := "\{"
+    while _lk(ll) != "=" && _lk(ll) != lb && _lk(ll) != "EOF" {
+        ll = _ladv(ll)
+    }
+
+    if _lk(ll) == "=" {
+        ll = _ladv(ll)
+        ll = _lskip_nl(ll)
+        result := _lower_expr(ll)
+        ll = result.l
+        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
+    } else if _lk(ll) == lb {
+        ll = _lower_fn_body(ll)
+    }
+    ll = _lfinish_func(ll)
+    ll
 }
 
 // --- Lower function body block { ... } with implicit return ---
@@ -1839,9 +1920,20 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    // Try user-defined method: check both plain name and qualified name
-    // First try plain method name in registry (impl methods registered as plain fns)
-    method_sig := reg_find_fn(ll.registry, method)
+    // Try user-defined method: qualified name first (Type_method), then plain name
+    // Determine object type for qualified lookup
+    obj_type := _lget_type(ll, obj)
+    obj_sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+    mut qualified_method := method
+    if obj_sname != "" {
+        qualified_method = obj_sname + "_" + method
+    }
+    mut method_sig := reg_find_fn(ll.registry, qualified_method)
+    if method_sig.name == "" {
+        // Fallback to plain method name
+        method_sig = reg_find_fn(ll.registry, method)
+        qualified_method = method
+    }
     if method_sig.name != "" {
         // Call as method: obj is first arg (self)
         mut first_arg := obj
@@ -1867,9 +1959,14 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             ll = nt.l
             nt_temp = nt.temp
         }
-        ll = _lemit(ll, new_inst(OpCall, nt_temp, first_arg, arg_count, method, 0))
+        ll = _lemit(ll, new_inst(OpCall, nt_temp, first_arg, arg_count, qualified_method, 0))
         if method_sig.return_type == 12 {
             ll = _lset_type(ll, nt_temp, 12)
+        } else if method_sig.return_type > 16 {
+            // Struct/named return type — track for method dispatch
+            ret_sname := format_type(ll.store, method_sig.return_type)
+            ret_st_id := _struct_type_id(ll.registry, ret_sname)
+            if ret_st_id > 0 { ll = _lset_type(ll, nt_temp, ret_st_id) }
         }
         return LT{l: ll, temp: nt_temp}
     }
