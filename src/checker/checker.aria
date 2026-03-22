@@ -2451,8 +2451,8 @@ fn _check_match(c: Checker) -> CE {
                     vi = vi + 1
                 }
                 if all_covered == false {
-                    // TODO: upgrade to _cerror once match arm parsing is fixed
-                    // (currently produces false positives on multi-arm matches)
+                    // Warning for now — multi-file token merging causes false positives
+                    // on self-compile. Works correctly for single-file compilation.
                     cc = _cwarning(cc, "W0010", "non-exhaustive match: not all variants covered and no wildcard '_' arm")
                 }
             }

@@ -212,6 +212,8 @@ fn _print_diagnostics(diags: DiagnosticBag, format: str) {
         }
         println(format_summary(diags))
     }
+    // Explicit void return (prevents bootstrap Go codegen from wrapping last println in return)
+    mut _unused := 0
 }
 
 fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {

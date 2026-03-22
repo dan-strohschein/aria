@@ -1,0 +1,58 @@
+// Test match exhaustiveness: all variants covered, binding patterns as catch-all
+
+type Color =
+    | Red
+    | Green
+    | Blue
+
+// All variants explicitly covered — no warning
+fn color_name(c: Color) -> str = match c {
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
+}
+
+// Binding pattern as catch-all — no warning
+fn color_code(c: Color) -> i64 = match c {
+    Red => 1
+    Green => 2
+    other => 0
+}
+
+// Wildcard catch-all — no warning
+fn is_red(c: Color) -> bool = match c {
+    Red => true
+    _ => false
+}
+
+type Shape =
+    | Circle
+    | Rect
+    | Triangle
+    | Pentagon
+
+// All 4 variants covered
+fn sides(s: Shape) -> i64 = match s {
+    Circle => 0
+    Rect => 4
+    Triangle => 3
+    Pentagon => 5
+}
+
+entry {
+    assert color_name(Red) == "red"
+    assert color_name(Green) == "green"
+    assert color_name(Blue) == "blue"
+
+    assert color_code(Red) == 1
+    assert color_code(Green) == 2
+    assert color_code(Blue) == 0
+
+    assert is_red(Red) == true
+    assert is_red(Blue) == false
+
+    assert sides(Circle) == 0
+    assert sides(Pentagon) == 5
+
+    println("exhaustive_match_test passed")
+}
