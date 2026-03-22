@@ -1,0 +1,29 @@
+// Test compound assignment operators
+
+entry {
+    mut x := 10
+    x += 5
+    assert x == 15
+
+    x -= 3
+    assert x == 12
+
+    x *= 2
+    assert x == 24
+
+    x /= 4
+    assert x == 6
+
+    x %= 4
+    assert x == 2
+
+    // Compound with expressions
+    mut y := 100
+    y += 10 * 2
+    assert y == 120
+
+    y -= 5 + 5
+    assert y == 110
+
+    println("compound_assign_test passed")
+}

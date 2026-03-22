@@ -1,0 +1,44 @@
+// Test for-in loop with proper array iteration
+
+fn sum_array(arr: [i64]) -> i64 {
+    mut total := 0
+    for x in arr {
+        total += x
+    }
+    return total
+}
+
+entry {
+    // Basic iteration
+    assert sum_array([1, 2, 3]) == 6
+    assert sum_array([10, 20, 30, 40]) == 100
+
+    // For-in with break
+    mut found := false
+    for x in [1, 2, 3, 4, 5] {
+        if x == 3 {
+            found = true
+            break
+        }
+    }
+    assert found == true
+
+    // Nested for-in
+    mut product := 0
+    for a in [1, 2, 3] {
+        for b in [10, 20] {
+            product += a * b
+        }
+    }
+    // (1*10 + 1*20) + (2*10 + 2*20) + (3*10 + 3*20) = 30 + 60 + 90 = 180
+    assert product == 180
+
+    // For-in counting
+    mut count := 0
+    for x in [0, 0, 0, 0, 0] {
+        count += 1
+    }
+    assert count == 5
+
+    println("for_iter_test passed")
+}

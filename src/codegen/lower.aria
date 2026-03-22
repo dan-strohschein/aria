@@ -989,6 +989,35 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
                 ll = _lenv_add(ll, name, result.temp)
                 return ll
             }
+            // Compound assignment: += -= *= /= %=
+            if (next_k == "+" || next_k == "-" || next_k == "*" || next_k == "/" || next_k == "%") {
+                // Check if followed by =
+                eq_pos := l.pos + 2
+                if eq_pos < l.tokens.len() && token_name(l.tokens[eq_pos].kind) == "=" {
+                    op_k := next_k
+                    mut ll := _ladv(l)   // skip name
+                    ll = _ladv(ll)       // skip op
+                    ll = _ladv(ll)       // skip =
+                    // Desugar: x += expr → x = x + expr
+                    slot := _lenv_lookup(ll, name)
+                    if slot >= 0 {
+                        // Load current value
+                        cur_nt := _lnew_temp(ll)
+                        ll = cur_nt.l
+                        ll = _lemit(ll, new_inst(OpLoad, cur_nt.temp, slot, 0, "", 0))
+                        // Evaluate RHS
+                        rhs := _lower_expr(ll)
+                        ll = rhs.l
+                        // Apply operation
+                        res_nt := _lnew_temp(ll)
+                        ll = res_nt.l
+                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
+                        // Store back
+                        ll = _lemit(ll, new_inst(OpStore, slot, res_nt.temp, 0, "", 0))
+                    }
+                    return ll
+                }
+            }
             if next_k == "=" {
                 // Assignment: name = expr
                 mut ll := _ladv(l)   // skip name
@@ -2618,28 +2647,86 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     }
     if _lk(ll) == "in" { ll = _ladv(ll) }
 
-    // Lower iterator expression
-    mut iter := _lower_primary(ll)
+    // Lower iterator expression (the array)
+    iter := _lower_expr(ll)
     ll = iter.l
     // Skip remaining until {
-    while _lk(ll) != lb && _lk(ll) != "EOF" {
-        if _is_cont_l(_lk(ll)) {
-            ll = _ladv(ll)
-            extra := _lower_primary(ll)
-            ll = extra.l
-        } else {
-            ll = _ladv(ll)
-        }
+    while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+
+    // Get array length
+    len_nt := _lnew_temp(ll)
+    ll = len_nt.l
+    ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, iter.temp, 0, "", 0))
+
+    // Initialize index to 0
+    idx_nt := _lnew_temp(ll)
+    ll = idx_nt.l
+    ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
+
+    // Labels
+    loop_lbl := _lnew_label(ll)
+    ll = loop_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+
+    // Loop start
+    ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+
+    // Condition: idx < len
+    cond_nt := _lnew_temp(ll)
+    ll = cond_nt.l
+    ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
+
+    // Load arr[idx] into loop variable
+    if var_name != "" {
+        elem_nt := _lnew_temp(ll)
+        ll = elem_nt.l
+        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+        ll = _lenv_add(ll, var_name, elem_nt.temp)
     }
 
-    // For now, just lower the body (simplified — no actual iteration)
-    if var_name != "" {
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
-        ll = _lenv_add(ll, var_name, nt.temp)
-    }
+    // Set break/continue labels
+    prev_start := ll.loop_start
+    prev_end := ll.loop_end
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types}
+
+    // Body
     ll = _lower_block(ll)
+
+    // Restore loop labels
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: prev_start, loop_end: prev_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types}
+
+    // Increment index: idx = idx + 1
+    one_nt := _lnew_temp(ll)
+    ll = one_nt.l
+    ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+    inc_nt := _lnew_temp(ll)
+    ll = inc_nt.l
+    ll = _lemit(ll, new_inst(OpAdd, inc_nt.temp, idx_nt.temp, one_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, idx_nt.temp, inc_nt.temp, 0, "", 0))
+
+    // Jump back
+    ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+
+    // End label
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
     ll
 }
 
