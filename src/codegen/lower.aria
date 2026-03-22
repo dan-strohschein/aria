@@ -1701,6 +1701,86 @@ fn _lower_expr(l: Lowerer) -> LT {
             // End
             ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
             left = final_nt.temp
+        } else if k == "??" {
+            // Null coalesce: left ?? default — if Some, unwrap; else use default
+            ll = _ladv(ll)
+            default_val := _lower_additive(ll)
+            ll = default_val.l
+            // Check tag: 0 = None, 1 = Some
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
+            some_lbl := _lnew_label(ll)
+            ll = some_lbl.l
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            final_nt := _lnew_temp(ll)
+            ll = final_nt.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, tag_nt.temp, some_lbl.temp, "", 0))
+            // None path: use default
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, default_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            // Some path: unwrap value from slot 1
+            ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+            some_val := _lnew_temp(ll)
+            ll = some_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, some_val.temp, left, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, some_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            left = final_nt.temp
+        } else if k == "?." {
+            // Optional chaining: left?.field — if None, return None; else access field
+            ll = _ladv(ll)
+            if _lk(ll) == "IDENT" {
+                field := _lcur(ll).text
+                ll = _ladv(ll)
+                // Check tag
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
+                some_lbl := _lnew_label(ll)
+                ll = some_lbl.l
+                end_lbl := _lnew_label(ll)
+                ll = end_lbl.l
+                final_nt := _lnew_temp(ll)
+                ll = final_nt.l
+                ll = _lemit(ll, new_inst(OpBranchTrue, 0, tag_nt.temp, some_lbl.temp, "", 0))
+                // None path: result is None (alloc None optional)
+                none_nt := _lnew_temp(ll)
+                ll = none_nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, none_nt.temp, 1, 0, "_Optional", 0))
+                none_tag := _lnew_temp(ll)
+                ll = none_tag.l
+                ll = _lemit(ll, new_inst(OpConst, none_tag.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, none_nt.temp, none_tag.temp, 0, "_tag", 0))
+                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, none_nt.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                // Some path: unwrap, access field, wrap in Some
+                ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+                inner := _lnew_temp(ll)
+                ll = inner.l
+                ll = _lemit(ll, new_inst(OpFieldGet, inner.temp, left, 1, "_val", 0))
+                // Access field on inner value
+                inner_type := _lget_type(ll, left)
+                // For now, use _field_index_any to find the field
+                fidx := _field_index_any(ll.registry, field)
+                field_val := _lnew_temp(ll)
+                ll = field_val.l
+                ll = _lemit(ll, new_inst(OpFieldGet, field_val.temp, inner, fidx, field, 0))
+                // Wrap in Some
+                some_result := _lnew_temp(ll)
+                ll = some_result.l
+                ll = _lemit(ll, new_inst(OpAlloc, some_result.temp, 2, 0, "_Optional", 0))
+                some_tag := _lnew_temp(ll)
+                ll = some_tag.l
+                ll = _lemit(ll, new_inst(OpConst, some_tag.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, some_result.temp, some_tag.temp, 0, "_tag", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, some_result.temp, field_val.temp, 1, "_val", 0))
+                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, some_result.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+                ll = _lset_type(ll, final_nt.temp, 201)
+                left = final_nt.temp
+            }
         } else if k == "[" {
             // Array index
             ll = _ladv(ll)
@@ -1945,6 +2025,35 @@ fn _lower_primary(l: Lowerer) -> LT {
                 }
                 // Mark as Result so implicit Ok wrapping is skipped
                 ll = _lset_type(ll, nt.temp, 200)
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // Some(value) — Optional construction
+            if name == "Some" {
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                val := _lower_expr(ll)
+                ll = val.l
+                ll = _lskip_nl(ll)
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                val_type := _lget_type(ll, val.temp)
+                mut opt_slots := 2
+                if val_type == 12 { opt_slots = 3 }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, opt_slots, 0, "_Optional", 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                if val_type == 12 {
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 1, "_val", 0))
+                    val_len := val.temp + 1
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val_len, 2, "_val_len", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 1, "_val", 0))
+                }
+                ll = _lset_type(ll, nt.temp, 201)  // type 201 = Optional
                 return LT{l: ll, temp: nt.temp}
             }
 
@@ -2413,6 +2522,19 @@ fn _lower_primary(l: Lowerer) -> LT {
             if sdef.name != "" {
                 return _lower_struct_lit(ll, name)
             }
+        }
+
+        // None — Optional empty value
+        if name == "None" {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 1, 0, "_Optional", 0))
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+            ll = _lset_type(ll, nt.temp, 201)
+            return LT{l: ll, temp: nt.temp}
         }
 
         // Variable reference

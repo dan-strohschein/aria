@@ -1,0 +1,31 @@
+// Test Optional type: Some, None, ??, ?.
+
+fn find_value(key: i64) -> i64 {
+    if key == 1 { return 42 }
+    if key == 2 { return 100 }
+    return 0
+}
+
+entry {
+    // Some construction and ?? coalesce
+    a := Some(42)
+    v1 := a ?? 0
+    assert v1 == 42
+
+    // None construction and ?? coalesce
+    b := None
+    v2 := b ?? -1
+    assert v2 == -1
+
+    // Some with string
+    c := Some(99)
+    v3 := c ?? 0
+    assert v3 == 99
+
+    // Nested coalesce
+    d := None
+    v4 := d ?? 100
+    assert v4 == 100
+
+    println("optional_test passed")
+}

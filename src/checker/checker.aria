@@ -1622,6 +1622,26 @@ fn _check_expr_full(c: Checker) -> CE {
             if type_kind_name(info.kind) == "Result" {
                 left_type = info.type_id
             }
+        } else if k == "??" {
+            // Null coalesce: unwrap Optional or use default
+            cc = _cadv(cc)
+            right := _check_primary(cc)
+            cc = right.c
+            // Result type is the inner type of the Optional
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Optional" {
+                left_type = info.type_id
+            } else {
+                left_type = right.type_id
+            }
+        } else if k == "?." {
+            // Optional chaining: unwrap Optional and access field
+            cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" {
+                cc = _cadv(cc)
+                // Result is Optional of the field type
+                // For simplicity, keep as Optional
+            }
         } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
                   k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
                   k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
@@ -1809,6 +1829,15 @@ fn _check_primary(c: Checker) -> CE {
         name := _ccur(c).text
         mut cc := _cadv(c)
 
+        // Some(value) — Optional constructor
+        if _ck2(cc) == "(" && name == "Some" {
+            cr := _check_call_args(cc, TY_UNKNOWN)
+            cc = cr.c
+            new_st := store_add(cc.store, mk_optional_type(cr.type_id))
+            cc = _cset_store(cc, new_st)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
+        }
+
         // Ok(value) and Err(value) — Result constructors
         if _ck2(cc) == "(" && (name == "Ok" || name == "Err") {
             cr := _check_call_args(cc, TY_UNKNOWN)
@@ -1897,6 +1926,13 @@ fn _check_primary(c: Checker) -> CE {
                 sr := _check_struct_lit(cc, name, tid)
                 return sr
             }
+        }
+
+        // None — empty Optional
+        if name == "None" {
+            new_st := store_add(cc.store, mk_optional_type(TY_UNKNOWN))
+            cc = _cset_store(cc, new_st)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
         }
 
         // Variable lookup
