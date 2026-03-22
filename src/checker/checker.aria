@@ -1414,6 +1414,11 @@ fn _check_fn(c: Checker) -> Checker {
                     rt_ok = true
                 }
             }
+            // Also accept array-of-unknown
+            if rt_ok == false && result.type_id != TY_UNKNOWN {
+                rinfo2 := store_get(cc.store, result.type_id)
+                if type_kind_name(rinfo2.kind) == "Array" && rinfo2.type_id == TY_UNKNOWN { rt_ok = true }
+            }
             if rt_ok == false && result.type_id != TY_UNKNOWN {
                 q := _q()
                 cc = _cerror(cc, E0106, "expected return type " + q + format_type(cc.store, sig.return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
@@ -1645,6 +1650,11 @@ fn _check_return(c: Checker) -> CE {
             if type_kind_name(rinfo.kind) == "Result" && cc.fn_error_type > 0 {
                 type_ok = true
             }
+        }
+        // Also accept array-of-unknown as matching any array return type
+        if type_ok == false && result.type_id != TY_UNKNOWN {
+            rinfo := store_get(cc.store, result.type_id)
+            if type_kind_name(rinfo.kind) == "Array" && rinfo.type_id == TY_UNKNOWN { type_ok = true }
         }
         if type_ok == false && result.type_id != TY_UNKNOWN {
             q := _q()
@@ -2066,19 +2076,19 @@ fn _check_primary(c: Checker) -> CE {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" {
                         if sig.has_io && fn_has_effect(caller_sig, "Io") == false {
-                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
+                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
                         }
                         if sig.has_fs && fn_has_effect(caller_sig, "Fs") == false {
-                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Fs] but " + cc.fn_current_name + " is missing [Fs]")
+                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Fs] but " + cc.fn_current_name + " is missing [Fs]")
                         }
                         if sig.has_net && fn_has_effect(caller_sig, "Net") == false {
-                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Net] but " + cc.fn_current_name + " is missing [Net]")
+                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Net] but " + cc.fn_current_name + " is missing [Net]")
                         }
                         if sig.has_ffi && fn_has_effect(caller_sig, "Ffi") == false {
-                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Ffi] but " + cc.fn_current_name + " is missing [Ffi]")
+                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Ffi] but " + cc.fn_current_name + " is missing [Ffi]")
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
-                            cc = _cerror(cc, E0106, "function " + name + " requires effect [Async] but " + cc.fn_current_name + " is missing [Async]")
+                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Async] but " + cc.fn_current_name + " is missing [Async]")
                         }
                     }
                 }
@@ -2105,7 +2115,7 @@ fn _check_primary(c: Checker) -> CE {
                 if builtin_eff != "" {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" && fn_has_effect(caller_sig, builtin_eff) == false {
-                        cc = _cerror(cc, E0106, name + " requires effect [" + builtin_eff + "] but " + cc.fn_current_name + " is missing [" + builtin_eff + "]")
+                        cc = _cwarning(cc, "W0100", name + " requires effect [" + builtin_eff + "] but " + cc.fn_current_name + " is missing [" + builtin_eff + "]")
                     }
                 }
             }
@@ -2621,9 +2631,22 @@ fn _check_match(c: Checker) -> CE {
     mut arm_count := 0
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         // Read pattern for exhaustiveness tracking
+        // Note: `is` type-check in guards is reserved for future versions (not in v0.1 spec)
         mut arm_is_guarded := false
+        // Float, tuple (, and array [ patterns are never exhaustive on their own
+        // Just skip to => for these pattern types
         if _ck2(cc) == "IDENT" {
             pat_name := _ccur(cc).text
+            // Check for named pattern: name @ Pattern — skip name and @ to get real pattern
+            mut real_name := pat_name
+            atp := cc.pos + 1
+            if atp < cc.tokens.len() && token_name(cc.tokens[atp].kind) == "@" {
+                // Skip past name and @ to find real pattern
+                atp2 := atp + 1
+                if atp2 < cc.tokens.len() && token_name(cc.tokens[atp2].kind) == "IDENT" {
+                    real_name = cc.tokens[atp2].text
+                }
+            }
             if pat_name == "_" {
                 // Check if guarded: scan ahead to => looking for "if"
                 mut scan := cc
@@ -2634,14 +2657,20 @@ fn _check_match(c: Checker) -> CE {
                 }
                 if found_guard == false { has_wildcard = true }
                 arm_is_guarded = found_guard
-            } else if pat_name == "true" {
+            } else if real_name == "true" {
                 has_true = true
-            } else if pat_name == "false" {
+            } else if real_name == "false" {
                 has_false = true
             } else {
                 // Lowercase-starting names are binding patterns (catch-all)
-                first_char := pat_name.charAt(0)
-                if first_char >= "a" && first_char <= "z" {
+                // unless followed by @ (named pattern — not a catch-all)
+                first_char := real_name.charAt(0)
+                mut is_named_pat := false
+                np := cc.pos + 1
+                if np < cc.tokens.len() && token_name(cc.tokens[np].kind) == "@" {
+                    is_named_pat = true
+                }
+                if first_char >= "a" && first_char <= "z" && is_named_pat == false {
                     // Check if guarded
                     mut scan := cc
                     mut found_guard := false
@@ -2655,7 +2684,7 @@ fn _check_match(c: Checker) -> CE {
                 // Track covered variant (only if not guarded)
                 // Also handle or-patterns: A | B => ...
                 if arm_is_guarded == false {
-                    covered = covered.append(pat_name)
+                    covered = covered.append(real_name)
                 }
             }
         }

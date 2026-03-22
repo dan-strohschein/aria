@@ -1,0 +1,23 @@
+// Test: Array/slice patterns in match expressions
+
+entry {
+    arr := [10, 20, 30]
+
+    // Test exact length array pattern
+    result := match arr {
+        [a, b] => a + b
+        [a, b, c] => a + b + c
+        _ => 0
+    }
+    assert result == 60
+
+    // Test with rest pattern
+    arr2 := [1, 2, 3, 4, 5]
+    result2 := match arr2 {
+        [first, ..rest] => first
+        _ => 0
+    }
+    assert result2 == 1
+
+    print("array_pattern: all tests passed")
+}

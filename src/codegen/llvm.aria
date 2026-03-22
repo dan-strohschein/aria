@@ -208,6 +208,9 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_array_get(i64, i64)" + nl)
     p = p.append("declare void @_aria_array_set(i64, i64, i64)" + nl)
     p = p.append("declare i64 @_aria_array_append(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_array_slice(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_list_dir(i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_is_dir(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_args_get()" + nl)
     p = p.append("declare i64 @_aria_exec(i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_to_int(i8*, i64)" + nl)
@@ -845,6 +848,19 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         } else {
             gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
         }
+        return gg
+    }
+
+    if op == "ArraySlice" {
+        // ArraySlice: dest = slice(arg1=array, arg2=start_index)
+        mut gg := g
+        asl_arr := "%aslice_arr_" + _i2s(idx)
+        gg = _lg_emit(gg, asl_arr + " = load i64, i64* " + _t(inst.arg1))
+        asl_idx := "%aslice_idx_" + _i2s(idx)
+        gg = _lg_emit(gg, asl_idx + " = load i64, i64* " + _t(inst.arg2))
+        asl_res := "%aslice_" + _i2s(idx)
+        gg = _lg_emit(gg, asl_res + " = call i64 @_aria_array_slice(i64 " + asl_arr + ", i64 " + asl_idx + ")")
+        gg = _lg_emit(gg, "store i64 " + asl_res + ", i64* " + _t(inst.dest))
         return gg
     }
 

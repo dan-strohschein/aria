@@ -174,6 +174,62 @@ fn print_help() -> i64 {
     0
 }
 
+// --- Directory expansion ---
+// If a file argument is a directory, recursively find all .aria files in it
+
+fn _ends_with_aria(s: str) -> bool {
+    if s.len() < 6 { return false }
+    s.substring(s.len() - 5, s.len()) == ".aria"
+}
+
+fn _expand_dir(path: str) -> [str] {
+    mut result := [""]
+    entries := _ariaListDir(path)
+    mut i := 1
+    while i < entries.len() {
+        ename := entries[i]
+        mut full := path
+        // Ensure path ends with /
+        if path.len() > 0 && path.charAt(path.len() - 1) != "/" {
+            full = path + "/"
+        }
+        full = full + ename
+        if _ariaIsDir(full) == 1 {
+            // Recurse into subdirectory
+            sub := _expand_dir(full)
+            mut si := 1
+            while si < sub.len() {
+                result = result.append(sub[si])
+                si = si + 1
+            }
+        } else if _ends_with_aria(ename) {
+            result = result.append(full)
+        }
+        i = i + 1
+    }
+    result
+}
+
+fn expand_files(files: [str]) -> [str] {
+    mut result := [""]
+    mut i := 1
+    while i < files.len() {
+        file := files[i]
+        if _ariaIsDir(file) == 1 {
+            expanded := _expand_dir(file)
+            mut ei := 1
+            while ei < expanded.len() {
+                result = result.append(expanded[ei])
+                ei = ei + 1
+            }
+        } else {
+            result = result.append(file)
+        }
+        i = i + 1
+    }
+    result
+}
+
 // --- Pipeline skeleton ---
 
 fn check_source(source: str, file: str) -> DiagnosticBag {
@@ -189,7 +245,8 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
     return cr.diagnostics
 }
 
-fn run_check(files: [str], format: str) -> i64 {
+fn run_check(raw_files: [str], format: str) -> i64 {
+    files := expand_files(raw_files)
     if files.len() <= 1 {
         println("error: no input files")
         return 1
@@ -224,17 +281,41 @@ fn _print_diagnostics(diags: DiagnosticBag, format: str) {
     mut _unused := 0
 }
 
-fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
+fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+    files := expand_files(raw_files)
     if files.len() <= 1 {
         println("error: no input files")
         return 1
     }
     file := files[1]
 
-    // Determine output path (strip .aria extension)
+    // Determine output path: strip .aria extension, or use directory name
     mut output := "a.out"
     if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
         output = file.substring(0, file.len() - 5)
+    }
+    // If original input was a directory, use directory path as output
+    if raw_files.len() > 1 {
+        raw_input := raw_files[1]
+        if _ariaIsDir(raw_input) == 1 {
+            // Strip trailing slash
+            mut out := raw_input
+            if out.len() > 1 && out.charAt(out.len() - 1) == "/" {
+                out = out.substring(0, out.len() - 1)
+            }
+            // Use last path component + /main
+            mut last_slash := 0 - 1
+            mut si := 0
+            while si < out.len() {
+                if out.charAt(si) == "/" { last_slash = si }
+                si = si + 1
+            }
+            if last_slash >= 0 {
+                output = out + "/" + out.substring(last_slash + 1, out.len())
+            } else {
+                output = out + "/" + out
+            }
+        }
     }
 
     // Run full pipeline: lex → resolve → check → lower → LLVM IR → clang
@@ -251,7 +332,8 @@ fn run_build(files: [str], format: str, target: str, runtime_path: str) -> i64 {
     0
 }
 
-fn run_test(files: [str], format: str, runtime_path: str) -> i64 {
+fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
+    files := expand_files(raw_files)
     if files.len() <= 1 {
         println("error: no input files")
         return 1

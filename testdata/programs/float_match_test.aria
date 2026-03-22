@@ -1,0 +1,29 @@
+// Test: Float literal patterns in match expressions
+
+entry {
+    x := 3.14
+    result := match x {
+        3.14 => 1
+        2.71 => 2
+        _ => 0
+    }
+    assert result == 1
+
+    y := 2.71
+    result2 := match y {
+        3.14 => 1
+        2.71 => 2
+        _ => 0
+    }
+    assert result2 == 2
+
+    z := 1.0
+    result3 := match z {
+        3.14 => 1
+        2.71 => 2
+        _ => 0
+    }
+    assert result3 == 0
+
+    print("float_match: all tests passed")
+}

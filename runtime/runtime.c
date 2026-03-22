@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 // --- String struct (used by many functions) ---
 struct _aria_str {
@@ -18,8 +19,11 @@ struct _aria_str {
 // --- Forward declarations ---
 long _aria_array_new(long capacity);
 long _aria_array_append(long arr_ptr, long value);
+long _aria_array_slice(long arr_ptr, long start);
 void _aria_map_set(long map_ptr, long key_ptr, long key_len, long value);
 long _aria_map_get(long map_ptr, long key_ptr, long key_len);
+long _aria_list_dir(char *path_ptr, long path_len);
+long _aria_is_dir(char *path_ptr, long path_len);
 
 // --- Exit ---
 
@@ -462,6 +466,79 @@ long _aria_array_append(long arr_ptr, long value) {
     data[length] = value;
     header[0] = length + 1;
     return arr_ptr;
+}
+
+long _aria_array_slice(long arr_ptr, long start) {
+    long *header = (long *)arr_ptr;
+    long length = header[0];
+    long *old_data = (long *)header[2];
+    long new_len = length - start;
+    if (new_len < 0) new_len = 0;
+    long new_cap = new_len < 4 ? 4 : new_len;
+    long *new_header = (long *)calloc(3, 8);
+    long *new_data = (long *)calloc((size_t)new_cap, 8);
+    if (new_len > 0) {
+        memcpy(new_data, old_data + start, (size_t)(new_len * 8));
+    }
+    new_header[0] = new_len;
+    new_header[1] = new_cap;
+    new_header[2] = (long)new_data;
+    return (long)new_header;
+}
+
+// --- Filesystem ---
+
+long _aria_list_dir(char *path_ptr, long path_len) {
+    // Null-terminate the path
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+
+    long arr = _aria_array_new(16);
+    // Sentinel: empty string struct (same pattern as _aria_str_split)
+    long *sentinel_str = (long *)malloc(16);
+    sentinel_str[0] = (long)"";
+    sentinel_str[1] = 0;
+    _aria_array_append(arr, (long)sentinel_str);
+
+    DIR *dir = opendir(path);
+    free(path);
+    if (!dir) {
+        return arr;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip "." and ".."
+        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' ||
+            (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+        long name_len = (long)strlen(entry->d_name);
+        char *name = (char *)malloc((size_t)(name_len + 1));
+        memcpy(name, entry->d_name, (size_t)name_len);
+        name[name_len] = '\0';
+        long *str_struct = (long *)malloc(16);
+        str_struct[0] = (long)name;
+        str_struct[1] = name_len;
+        _aria_array_append(arr, (long)str_struct);
+    }
+    closedir(dir);
+    return arr;
+}
+
+long _aria_is_dir(char *path_ptr, long path_len) {
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+
+    struct stat st;
+    int result = stat(path, &st);
+    free(path);
+    if (result != 0) {
+        return 0;
+    }
+    return S_ISDIR(st.st_mode) ? 1 : 0;
 }
 
 // --- Map (hash table) ---

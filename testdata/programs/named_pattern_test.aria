@@ -1,0 +1,18 @@
+// Test: Named patterns (name @ Pattern) in match expressions
+
+type Shape =
+    | Circle(f64)
+    | Rectangle(f64, f64)
+
+entry {
+    shape := Circle(5.0)
+
+    // Test s @ variant pattern: binds s to the whole value AND matches the variant
+    result := match shape {
+        s @ Circle(r) => 1
+        Rectangle(w, h) => 2
+    }
+    assert result == 1
+
+    print("named_pattern: all tests passed")
+}

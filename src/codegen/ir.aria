@@ -76,6 +76,7 @@ type IrOp =
     | OpLabel
     | OpTraitObject
     | OpVtableCall
+    | OpArraySlice
     | OpNop
 
 fn ir_op_name(op: IrOp) -> str = match op {
@@ -146,6 +147,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpLabel => "Label"
     OpTraitObject => "TraitObject"
     OpVtableCall => "VtableCall"
+    OpArraySlice => "ArraySlice"
     OpNop => "Nop"
 }
 

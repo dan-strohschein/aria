@@ -1357,6 +1357,159 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
             }
         }
     }
+    // Refutable binding: Variant(x) := expr else { ... }
+    if _lk(l) == "IDENT" {
+        rname := _lcur(l).text
+        rvtag := _variant_tag(l.registry, rname)
+        if rvtag > 0 {
+            // Peek ahead for ( or { then ... := pattern
+            mut rp := l.pos + 1
+            lb := "\{"
+            rb := "\}"
+            // Skip over (...) or {...} to find :=
+            if rp < l.tokens.len() {
+                rpk := token_name(l.tokens[rp].kind)
+                if rpk == "(" || rpk == lb {
+                    mut close := ")"
+                    if rpk == lb { close = rb }
+                    mut depth := 1
+                    rp = rp + 1
+                    while rp < l.tokens.len() && depth > 0 {
+                        rpk2 := token_name(l.tokens[rp].kind)
+                        if rpk2 == rpk { depth = depth + 1 }
+                        if rpk2 == close { depth = depth - 1 }
+                        rp = rp + 1
+                    }
+                    // Now rp should be at :=
+                    if rp < l.tokens.len() && token_name(l.tokens[rp].kind) == ":=" {
+                        // Confirmed refutable binding pattern
+                        mut ll := _ladv(l)  // skip variant name
+                        // Parse destructuring bindings
+                        mut rb_names := [""]  // sentinel
+                        if _lk(ll) == "(" {
+                            ll = _ladv(ll)  // skip (
+                            ll = _lskip_nl(ll)
+                            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                                if _lk(ll) == "IDENT" {
+                                    rb_names = rb_names.append(_lcur(ll).text)
+                                    ll = _ladv(ll)
+                                } else {
+                                    ll = _ladv(ll)
+                                }
+                                ll = _lskip_nl(ll)
+                                if _lk(ll) == "," { ll = _ladv(ll) }
+                                ll = _lskip_nl(ll)
+                            }
+                            if _lk(ll) == ")" { ll = _ladv(ll) }
+                        } else if _lk(ll) == lb {
+                            ll = _ladv(ll)  // skip {
+                            ll = _lskip_nl(ll)
+                            while _lk(ll) != rb && _lk(ll) != "EOF" {
+                                if _lk(ll) == "IDENT" {
+                                    fname := _lcur(ll).text
+                                    ll = _ladv(ll)
+                                    if _lk(ll) == ":" {
+                                        ll = _ladv(ll)
+                                        ll = _lskip_nl(ll)
+                                        if _lk(ll) == "IDENT" {
+                                            rb_names = rb_names.append(_lcur(ll).text)
+                                            ll = _ladv(ll)
+                                        }
+                                    } else {
+                                        rb_names = rb_names.append(fname)
+                                    }
+                                } else {
+                                    ll = _ladv(ll)
+                                }
+                                ll = _lskip_nl(ll)
+                                if _lk(ll) == "," { ll = _ladv(ll) }
+                                ll = _lskip_nl(ll)
+                            }
+                            if _lk(ll) == rb { ll = _ladv(ll) }
+                        }
+                        // Skip :=
+                        if _lk(ll) == ":=" { ll = _ladv(ll) }
+                        // Lower RHS expression
+                        rhs := _lower_expr(ll)
+                        ll = rhs.l
+                        // Extract tag and compare
+                        rhs_tag := _lnew_temp(ll)
+                        ll = rhs_tag.l
+                        // Check if data sum or tag-only
+                        rparent := _variant_parent(ll.registry, rname)
+                        if rparent.name != "" && sum_has_data(rparent) {
+                            ll = _lemit(ll, new_inst(OpFieldGet, rhs_tag.temp, rhs.temp, 0, "_tag", 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpStore, rhs_tag.temp, rhs.temp, 0, "", 0))
+                        }
+                        rtag_nt := _lnew_temp(ll)
+                        ll = rtag_nt.l
+                        ll = _lemit(ll, new_inst(OpConst, rtag_nt.temp, rvtag, 0, "", 0))
+                        rcmp := _lnew_temp(ll)
+                        ll = rcmp.l
+                        ll = _lemit(ll, new_inst(OpEq, rcmp.temp, rhs_tag.temp, rtag_nt.temp, "", 0))
+                        // Branch to else if no match
+                        relse_lbl := _lnew_label(ll)
+                        ll = relse_lbl.l
+                        rcont_lbl := _lnew_label(ll)
+                        ll = rcont_lbl.l
+                        ll = _lemit(ll, new_inst(OpBranchFalse, 0, rcmp.temp, relse_lbl.temp, "", 0))
+                        // Match: extract bindings
+                        if rb_names.len() > 1 {
+                            mut rbi := 1
+                            while rbi < rb_names.len() {
+                                mut rd_slot := 1
+                                mut rsi := 1
+                                while rsi < rbi {
+                                    rft := variant_field_type(rparent, rvtag, rsi - 1)
+                                    if rft == 12 { rd_slot = rd_slot + 2 } else { rd_slot = rd_slot + 1 }
+                                    rsi = rsi + 1
+                                }
+                                rft := variant_field_type(rparent, rvtag, rbi - 1)
+                                if rft == 12 {
+                                    rbnt := _lnew_str_temp(ll)
+                                    ll = rbnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, rbnt.temp, rhs.temp, rd_slot, "", 0))
+                                    ll = _lemit(ll, new_inst(OpFieldGet, rbnt.temp + 1, rhs.temp, rd_slot + 1, "", 0))
+                                    ll = _lset_type(ll, rbnt.temp, 12)
+                                    ll = _lenv_add(ll, rb_names[rbi], rbnt.temp)
+                                } else {
+                                    rbnt := _lnew_temp(ll)
+                                    ll = rbnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, rbnt.temp, rhs.temp, rd_slot, "", 0))
+                                    if rft != 0 { ll = _lset_type(ll, rbnt.temp, rft) }
+                                    ll = _lenv_add(ll, rb_names[rbi], rbnt.temp)
+                                }
+                                rbi = rbi + 1
+                            }
+                        }
+                        ll = _lemit(ll, new_inst(OpJump, 0, rcont_lbl.temp, 0, "", 0))
+                        // Else block
+                        ll = _lemit(ll, new_inst(OpLabel, 0, relse_lbl.temp, 0, "", 0))
+                        // Skip `else` keyword
+                        if _lk(ll) == "else" { ll = _ladv(ll) }
+                        ll = _lskip_nl(ll)
+                        // Optional |err| binding in else
+                        if _lk(ll) == "|" {
+                            ll = _ladv(ll)  // skip |
+                            if _lk(ll) == "IDENT" {
+                                ename := _lcur(ll).text
+                                ll = _ladv(ll)
+                                ll = _lenv_add(ll, ename, rhs.temp)
+                            }
+                            if _lk(ll) == "|" { ll = _ladv(ll) }
+                        }
+                        if _lk(ll) == lb {
+                            ll = _lower_block(ll)
+                        }
+                        ll = _lemit(ll, new_inst(OpLabel, 0, rcont_lbl.temp, 0, "", 0))
+                        return ll
+                    }
+                }
+            }
+        }
+    }
+
     // Expression statement
     result := _lower_expr(l)
     return result.l
@@ -2561,6 +2714,31 @@ fn _lower_primary(l: Lowerer) -> LT {
                 // Call _aria_args runtime to get the args array (type 13 = [str])
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_args", 0))
                 ll = _lset_type(ll, nt.temp, 13)
+                return LT{l: ll, temp: nt.temp}
+            }
+            // --- Filesystem ---
+            if name == "_ariaListDir" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // String arg = 2 regs (ptr + len), returns array handle
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_list_dir", 0))
+                ll = _lset_type(ll, nt.temp, 13)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaIsDir" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // String arg = 2 regs (ptr + len), returns i64
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_is_dir", 1))
+                ll = _lset_type(ll, nt.temp, 1)
                 return LT{l: ll, temp: nt.temp}
             }
             // --- Environment ---
@@ -5781,28 +5959,62 @@ fn _lower_match(l: Lowerer) -> LT {
         if _lk(ll) == rb || _lk(ll) == "EOF" { return LT{l: ll, temp: result_nt.temp} }
 
         // Read pattern — determine pattern kind
-        pattern := _lcur(ll).text
-        pattern_kind := _lk(ll)  // "IDENT", "INT", "STRING", "true", "false"
-        is_wildcard := pattern == "_"
-        is_variant := false
-        is_literal := false
-        is_binding := false
-        if pattern_kind == "INT" || pattern_kind == "STRING" || pattern_kind == "true" || pattern_kind == "false" {
+        mut pattern := _lcur(ll).text
+        mut pattern_kind := _lk(ll)  // "IDENT", "INT", "STRING", "FLOAT", "true", "false"
+        mut is_wildcard := pattern == "_"
+        mut is_variant := false
+        mut is_literal := false
+        mut is_binding := false
+        mut is_tuple_pattern := false
+        mut is_array_pattern := false
+        mut at_bind_name := ""
+        if pattern_kind == "INT" || pattern_kind == "STRING" || pattern_kind == "FLOAT" || pattern_kind == "true" || pattern_kind == "false" {
             is_literal = true
+        }
+        // Tuple pattern: starts with ( without preceding IDENT
+        if pattern_kind == "(" {
+            is_tuple_pattern = true
+        }
+        // Array pattern: starts with [
+        if pattern_kind == "[" {
+            is_array_pattern = true
         }
         if pattern_kind == "IDENT" && is_wildcard == false {
             vtag_check := _variant_tag(ll.registry, pattern)
             if vtag_check > 0 {
                 is_variant = true
             } else {
-                // Identifier that's not a variant name = binding pattern
-                is_binding = true
+                // Check for named pattern: name @ Pattern
+                at_pos := ll.pos + 1
+                if at_pos < ll.tokens.len() && token_name(ll.tokens[at_pos].kind) == "@" {
+                    // Named pattern: save bind name, advance past name and @, re-read pattern
+                    at_bind_name = pattern
+                    ll = _ladv(ll)  // skip name
+                    ll = _ladv(ll)  // skip @
+                    // Re-read the actual sub-pattern
+                    pattern = _lcur(ll).text
+                    pattern_kind = _lk(ll)
+                    is_wildcard = pattern == "_"
+                    if pattern_kind == "INT" || pattern_kind == "STRING" || pattern_kind == "FLOAT" || pattern_kind == "true" || pattern_kind == "false" {
+                        is_literal = true
+                    } else if pattern_kind == "IDENT" && is_wildcard == false {
+                        vtag2 := _variant_tag(ll.registry, pattern)
+                        if vtag2 > 0 {
+                            is_variant = true
+                        } else {
+                            is_binding = true
+                        }
+                    }
+                } else {
+                    // Identifier that's not a variant name = binding pattern
+                    is_binding = true
+                }
             }
         }
 
         if is_wildcard {
             ll = _ladv(ll)  // skip _
-        } else {
+        } else if is_tuple_pattern == false && is_array_pattern == false {
             ll = _ladv(ll)  // skip pattern token
         }
 
@@ -5837,11 +6049,55 @@ fn _lower_match(l: Lowerer) -> LT {
         mut bind_name_2 := ""
         mut bind_name_3 := ""
         mut bind_total := 0
-        if _lk(ll) == "(" {
-            ll = _ladv(ll)  // skip (
+        // Struct variant destructuring: Variant{field: v, ...}
+        mut is_struct_destr := false
+        mut struct_field_name_0 := ""
+        mut struct_field_name_1 := ""
+        mut struct_field_name_2 := ""
+        mut struct_field_name_3 := ""
+        // Tuple pattern sub-elements: literal values for comparison
+        mut tuple_bind_is_lit_0 := false
+        mut tuple_bind_is_lit_1 := false
+        mut tuple_bind_is_lit_2 := false
+        mut tuple_bind_is_lit_3 := false
+        mut tuple_bind_lit_val_0 := 0
+        mut tuple_bind_lit_val_1 := 0
+        mut tuple_bind_lit_val_2 := 0
+        mut tuple_bind_lit_val_3 := 0
+        // Nested pattern flags: bind_name is a variant that needs further matching
+        mut nested_variant_0 := ""
+        mut nested_variant_1 := ""
+        mut nested_variant_2 := ""
+        mut nested_variant_3 := ""
+        mut nested_bind_0 := ""
+        mut nested_bind_1 := ""
+        mut nested_bind_2 := ""
+        mut nested_bind_3 := ""
+        // Array pattern variables
+        mut arr_pat_fixed_count := 0
+        mut arr_pat_rest_name := ""
+        mut arr_pat_has_rest := false
+
+        if is_array_pattern {
+            // Array pattern: [first, second, ..rest] or [a, b]
+            ll = _ladv(ll)  // skip [
             ll = _lskip_nl(ll)
-            while _lk(ll) != ")" && _lk(ll) != "EOF" {
-                if _lk(ll) == "IDENT" {
+            while _lk(ll) != "]" && _lk(ll) != "EOF" {
+                if _lk(ll) == "." {
+                    // Check for ..rest
+                    dot_pos := ll.pos + 1
+                    if dot_pos < ll.tokens.len() && token_name(ll.tokens[dot_pos].kind) == "." {
+                        ll = _ladv(ll)  // skip first .
+                        ll = _ladv(ll)  // skip second .
+                        arr_pat_has_rest = true
+                        if _lk(ll) == "IDENT" {
+                            arr_pat_rest_name = _lcur(ll).text
+                            ll = _ladv(ll)
+                        }
+                    } else {
+                        ll = _ladv(ll)
+                    }
+                } else if _lk(ll) == "IDENT" || _lk(ll) == "INT" {
                     btext := _lcur(ll).text
                     if bind_total == 0 { bind_name_0 = btext }
                     if bind_total == 1 { bind_name_1 = btext }
@@ -5857,7 +6113,146 @@ fn _lower_match(l: Lowerer) -> LT {
                 if _lk(ll) == "," { ll = _ladv(ll) }
                 ll = _lskip_nl(ll)
             }
+            if _lk(ll) == "]" { ll = _ladv(ll) }
+            arr_pat_fixed_count = bind_total
+        } else if is_tuple_pattern {
+            // Tuple pattern: (a, b) or (0, y) etc.
+            ll = _ladv(ll)  // skip (
+            ll = _lskip_nl(ll)
+            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                tk := _lk(ll)
+                if tk == "INT" {
+                    // Literal sub-element
+                    lit_v := _parse_int_literal(_lcur(ll).text)
+                    if bind_total == 0 { tuple_bind_is_lit_0 = true }
+                    if bind_total == 0 { tuple_bind_lit_val_0 = lit_v }
+                    if bind_total == 0 { bind_name_0 = "_lit_" }
+                    if bind_total == 1 { tuple_bind_is_lit_1 = true }
+                    if bind_total == 1 { tuple_bind_lit_val_1 = lit_v }
+                    if bind_total == 1 { bind_name_1 = "_lit_" }
+                    if bind_total == 2 { tuple_bind_is_lit_2 = true }
+                    if bind_total == 2 { tuple_bind_lit_val_2 = lit_v }
+                    if bind_total == 2 { bind_name_2 = "_lit_" }
+                    if bind_total == 3 { tuple_bind_is_lit_3 = true }
+                    if bind_total == 3 { tuple_bind_lit_val_3 = lit_v }
+                    if bind_total == 3 { bind_name_3 = "_lit_" }
+                    bind_total = bind_total + 1
+                    has_bindings = true
+                    ll = _ladv(ll)
+                } else if tk == "IDENT" {
+                    btext := _lcur(ll).text
+                    if btext == "_" {
+                        if bind_total == 0 { bind_name_0 = "_" }
+                        if bind_total == 1 { bind_name_1 = "_" }
+                        if bind_total == 2 { bind_name_2 = "_" }
+                        if bind_total == 3 { bind_name_3 = "_" }
+                    } else {
+                        if bind_total == 0 { bind_name_0 = btext }
+                        if bind_total == 1 { bind_name_1 = btext }
+                        if bind_total == 2 { bind_name_2 = btext }
+                        if bind_total == 3 { bind_name_3 = btext }
+                    }
+                    bind_total = bind_total + 1
+                    has_bindings = true
+                    ll = _ladv(ll)
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+            }
             if _lk(ll) == ")" { ll = _ladv(ll) }
+        } else if _lk(ll) == "(" {
+            ll = _ladv(ll)  // skip (
+            ll = _lskip_nl(ll)
+            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    btext := _lcur(ll).text
+                    // Check for nested variant pattern: e.g., Some(Circle(r))
+                    nv_tag := _variant_tag(ll.registry, btext)
+                    if nv_tag > 0 {
+                        // Nested variant — save variant name
+                        if bind_total == 0 { nested_variant_0 = btext }
+                        if bind_total == 0 { bind_name_0 = btext }
+                        if bind_total == 1 { nested_variant_1 = btext }
+                        if bind_total == 1 { bind_name_1 = btext }
+                        if bind_total == 2 { nested_variant_2 = btext }
+                        if bind_total == 2 { bind_name_2 = btext }
+                        if bind_total == 3 { nested_variant_3 = btext }
+                        if bind_total == 3 { bind_name_3 = btext }
+                        ll = _ladv(ll)
+                        // Check for nested destructuring (...)
+                        if _lk(ll) == "(" {
+                            ll = _ladv(ll)  // skip (
+                            ll = _lskip_nl(ll)
+                            if _lk(ll) == "IDENT" {
+                                nb := _lcur(ll).text
+                                if bind_total == 0 { nested_bind_0 = nb }
+                                if bind_total == 1 { nested_bind_1 = nb }
+                                if bind_total == 2 { nested_bind_2 = nb }
+                                if bind_total == 3 { nested_bind_3 = nb }
+                                ll = _ladv(ll)
+                            }
+                            // Skip remaining nested args
+                            while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                            if _lk(ll) == ")" { ll = _ladv(ll) }
+                        }
+                        bind_total = bind_total + 1
+                        has_bindings = true
+                    } else {
+                        if bind_total == 0 { bind_name_0 = btext }
+                        if bind_total == 1 { bind_name_1 = btext }
+                        if bind_total == 2 { bind_name_2 = btext }
+                        if bind_total == 3 { bind_name_3 = btext }
+                        bind_total = bind_total + 1
+                        has_bindings = true
+                        ll = _ladv(ll)
+                    }
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+            }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+        } else if _lk(ll) == "\{" && is_variant {
+            // Struct variant destructuring: Variant{field: v, ...}
+            is_struct_destr = true
+            ll = _ladv(ll)  // skip {
+            ll = _lskip_nl(ll)
+            while _lk(ll) != "\}" && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    fname := _lcur(ll).text
+                    ll = _ladv(ll)
+                    mut bname := fname  // shorthand: {name} means {name: name}
+                    if _lk(ll) == ":" {
+                        ll = _ladv(ll)  // skip :
+                        ll = _lskip_nl(ll)
+                        if _lk(ll) == "IDENT" {
+                            bname = _lcur(ll).text
+                            ll = _ladv(ll)
+                        }
+                    }
+                    if bind_total == 0 { bind_name_0 = bname }
+                    if bind_total == 0 { struct_field_name_0 = fname }
+                    if bind_total == 1 { bind_name_1 = bname }
+                    if bind_total == 1 { struct_field_name_1 = fname }
+                    if bind_total == 2 { bind_name_2 = bname }
+                    if bind_total == 2 { struct_field_name_2 = fname }
+                    if bind_total == 3 { bind_name_3 = bname }
+                    if bind_total == 3 { struct_field_name_3 = fname }
+                    bind_total = bind_total + 1
+                    has_bindings = true
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+            }
+            if _lk(ll) == "\}" { ll = _ladv(ll) }
         }
 
         // Check for guard clause: `if <expr>` before `=>`
@@ -5879,12 +6274,152 @@ fn _lower_match(l: Lowerer) -> LT {
         if _lk(ll) == "=>" { ll = _ladv(ll) }
         ll = _lskip_nl(ll)
 
-        if is_wildcard || is_binding {
+        if is_array_pattern {
+            // Array pattern: [first, ..rest] or [a, b]
+            next_lbl := _lnew_label(ll)
+            ll = next_lbl.l
+            // Check array length
+            alen_nt := _lnew_temp(ll)
+            ll = alen_nt.l
+            ll = _lemit(ll, new_inst(OpArrayLen, alen_nt.temp, subj.temp, 0, "", 0))
+            expected_len := _lnew_temp(ll)
+            ll = expected_len.l
+            ll = _lemit(ll, new_inst(OpConst, expected_len.temp, arr_pat_fixed_count, 0, "", 0))
+            len_cmp := _lnew_temp(ll)
+            ll = len_cmp.l
+            if arr_pat_has_rest {
+                // Minimum length: len >= fixed_count
+                ll = _lemit(ll, new_inst(OpGte, len_cmp.temp, alen_nt.temp, expected_len.temp, "", 0))
+            } else {
+                // Exact length: len == fixed_count
+                ll = _lemit(ll, new_inst(OpEq, len_cmp.temp, alen_nt.temp, expected_len.temp, "", 0))
+            }
+            ll = _lemit(ll, new_inst(OpBranchFalse, 0, len_cmp.temp, next_lbl.temp, "", 0))
+            // Extract fixed elements
+            mut ai := 0
+            while ai < arr_pat_fixed_count {
+                mut abname := ""
+                if ai == 0 { abname = bind_name_0 }
+                if ai == 1 { abname = bind_name_1 }
+                if ai == 2 { abname = bind_name_2 }
+                if ai == 3 { abname = bind_name_3 }
+                aidx_nt := _lnew_temp(ll)
+                ll = aidx_nt.l
+                ll = _lemit(ll, new_inst(OpConst, aidx_nt.temp, ai, 0, "", 0))
+                aelem_nt := _lnew_temp(ll)
+                ll = aelem_nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, aelem_nt.temp, subj.temp, aidx_nt.temp, "", 0))
+                if abname != "_" {
+                    ll = _lenv_add(ll, abname, aelem_nt.temp)
+                }
+                ai = ai + 1
+            }
+            // Rest binding: ..rest
+            if arr_pat_has_rest && arr_pat_rest_name != "" {
+                rest_start := _lnew_temp(ll)
+                ll = rest_start.l
+                ll = _lemit(ll, new_inst(OpConst, rest_start.temp, arr_pat_fixed_count, 0, "", 0))
+                rest_nt := _lnew_temp(ll)
+                ll = rest_nt.l
+                ll = _lemit(ll, new_inst(OpArraySlice, rest_nt.temp, subj.temp, rest_start.temp, "", 0))
+                ll = _lenv_add(ll, arr_pat_rest_name, rest_nt.temp)
+            }
+            // Guard
+            if has_guard {
+                saved_pos := ll.pos
+                ll = _lset_pos(ll, guard_start)
+                guard_result := _lower_expr(ll)
+                ll = guard_result.l
+                ll = _lset_pos(ll, saved_pos)
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, guard_result.temp, next_lbl.temp, "", 0))
+            }
+            // Arm body
+            if _lk(ll) == lb {
+                ll = _lower_block(ll)
+                ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+            } else {
+                arm_result := _lower_expr(ll)
+                ll = arm_result.l
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+                result_len := result_nt.temp + 1
+                arm_len := arm_result.temp + 1
+                ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
+            }
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+        } else if is_tuple_pattern {
+            // Tuple pattern: extract fields positionally and compare literals
+            next_lbl := _lnew_label(ll)
+            ll = next_lbl.l
+            mut ti := 0
+            while ti < bind_total {
+                mut tbname := ""
+                if ti == 0 { tbname = bind_name_0 }
+                if ti == 1 { tbname = bind_name_1 }
+                if ti == 2 { tbname = bind_name_2 }
+                if ti == 3 { tbname = bind_name_3 }
+                // Extract field at position ti
+                fnt := _lnew_temp(ll)
+                ll = fnt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fnt.temp, subj.temp, ti, "", 0))
+                mut is_lit_elem := false
+                mut lit_elem_val := 0
+                if ti == 0 { is_lit_elem = tuple_bind_is_lit_0 }
+                if ti == 0 { lit_elem_val = tuple_bind_lit_val_0 }
+                if ti == 1 { is_lit_elem = tuple_bind_is_lit_1 }
+                if ti == 1 { lit_elem_val = tuple_bind_lit_val_1 }
+                if ti == 2 { is_lit_elem = tuple_bind_is_lit_2 }
+                if ti == 2 { lit_elem_val = tuple_bind_lit_val_2 }
+                if ti == 3 { is_lit_elem = tuple_bind_is_lit_3 }
+                if ti == 3 { lit_elem_val = tuple_bind_lit_val_3 }
+                if is_lit_elem {
+                    // Compare extracted field against literal
+                    clit := _lnew_temp(ll)
+                    ll = clit.l
+                    ll = _lemit(ll, new_inst(OpConst, clit.temp, lit_elem_val, 0, "", 0))
+                    tcmp := _lnew_temp(ll)
+                    ll = tcmp.l
+                    ll = _lemit(ll, new_inst(OpEq, tcmp.temp, fnt.temp, clit.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, tcmp.temp, next_lbl.temp, "", 0))
+                } else if tbname != "_" {
+                    // Binding sub-element
+                    ll = _lenv_add(ll, tbname, fnt.temp)
+                }
+                ti = ti + 1
+            }
+            // Named pattern binding for tuple patterns
+            if at_bind_name != "" { ll = _lenv_add(ll, at_bind_name, subj.temp) }
+            // Guard
+            if has_guard {
+                saved_pos := ll.pos
+                ll = _lset_pos(ll, guard_start)
+                guard_result := _lower_expr(ll)
+                ll = guard_result.l
+                ll = _lset_pos(ll, saved_pos)
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, guard_result.temp, next_lbl.temp, "", 0))
+            }
+            // Arm body
+            if _lk(ll) == lb {
+                ll = _lower_block(ll)
+                ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+            } else {
+                arm_result := _lower_expr(ll)
+                ll = arm_result.l
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+                result_len := result_nt.temp + 1
+                arm_len := arm_result.temp + 1
+                ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
+            }
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+        } else if is_wildcard || is_binding {
             // Wildcard or binding: no comparison needed
             // For binding patterns, bind subject to the pattern name
             if is_binding {
                 ll = _lenv_add(ll, pattern, subj.temp)
             }
+            // Named pattern: also bind the whole subject to at_bind_name
+            if at_bind_name != "" { ll = _lenv_add(ll, at_bind_name, subj.temp) }
 
             // Evaluate guard clause if present
             if has_guard {
@@ -5930,7 +6465,38 @@ fn _lower_match(l: Lowerer) -> LT {
             next_lbl := _lnew_label(ll)
             ll = next_lbl.l
 
-            if pattern_kind == "INT" {
+            // Use independent if blocks to avoid bootstrap else-if chain bug
+            mut lit_done := false
+            if pattern_kind == "FLOAT" {
+                // Float literal comparison — store as string constant, load with OpConstStr marker
+                mut fll := ll
+                mut fstr_idx := mod_find_string(fll.module, pattern)
+                if fstr_idx == 0 {
+                    fnew_mod := mod_add_string(fll.module, pattern)
+                    fstr_idx = fnew_mod.string_constants.len() - 1
+                    fll = Lowerer{tokens: fll.tokens, pos: fll.pos, store: fll.store, registry: fll.registry,
+                                 table: fll.table, file: fll.file, module: fnew_mod,
+                                 current_func: fll.current_func,
+                                 temp_counter: fll.temp_counter, label_counter: fll.label_counter,
+                                 env_names: fll.env_names, env_slots: fll.env_slots,
+                                 loop_start: fll.loop_start, loop_end: fll.loop_end,
+                                 const_names: fll.const_names, const_vals: fll.const_vals,
+                                 const_str_names: fll.const_str_names, const_str_vals: fll.const_str_vals,
+                                 temp_types: fll.temp_types,
+                                 fn_error_type: fll.fn_error_type, defer_count: fll.defer_count, defer_start_0: fll.defer_start_0, defer_start_1: fll.defer_start_1, defer_start_2: fll.defer_start_2, defer_start_3: fll.defer_start_3, defer_end_0: fll.defer_end_0, defer_end_1: fll.defer_end_1, defer_end_2: fll.defer_end_2, defer_end_3: fll.defer_end_3}
+                }
+                ll = fll
+                flit_nt := _lnew_temp(ll)
+                ll = flit_nt.l
+                ll = _lemit(ll, new_inst(OpConstStr, flit_nt.temp, fstr_idx, 0 - 9, "", 0))
+                ll = _lset_type(ll, flit_nt.temp, 9)
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, flit_nt.temp, "f64", 0))
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+                lit_done = true
+            }
+            if pattern_kind == "INT" && lit_done == false {
                 // Integer literal comparison
                 lit_nt := _lnew_temp(ll)
                 ll = lit_nt.l
@@ -5940,7 +6506,9 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = cmp_nt.l
                 ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, lit_nt.temp, "", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
-            } else if pattern_kind == "true" {
+                lit_done = true
+            }
+            if pattern_kind == "true" && lit_done == false {
                 // true literal: subject == 1
                 lit_nt := _lnew_temp(ll)
                 ll = lit_nt.l
@@ -5949,7 +6517,9 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = cmp_nt.l
                 ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, lit_nt.temp, "", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
-            } else if pattern_kind == "false" {
+                lit_done = true
+            }
+            if pattern_kind == "false" && lit_done == false {
                 // false literal: subject == 0
                 lit_nt := _lnew_temp(ll)
                 ll = lit_nt.l
@@ -5958,7 +6528,9 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = cmp_nt.l
                 ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, lit_nt.temp, "", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
-            } else if pattern_kind == "STRING" {
+                lit_done = true
+            }
+            if pattern_kind == "STRING" && lit_done == false {
                 // String literal comparison
                 lit_result := _lower_string_const(ll, pattern)
                 ll = lit_result.l
@@ -5966,7 +6538,12 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = cmp_nt.l
                 ll = _lemit(ll, new_inst(OpStrEq, cmp_nt.temp, subj.temp, lit_result.temp, "", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+                lit_done = true
             }
+            // FLOAT case handled above as first check
+
+            // Named pattern binding for literal patterns
+            if at_bind_name != "" { ll = _lenv_add(ll, at_bind_name, subj.temp) }
 
             // Evaluate guard clause if present
             if has_guard {
@@ -6051,11 +6628,76 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
             }
 
-            // Evaluate guard clause if present (before bindings, need next_lbl)
-            // Actually: bindings first, then guard, so guard can use bound vars
+            // Bindings first, then guard, so guard can use bound vars
+
+            // Named pattern: bind whole subject to at_bind_name
+            if at_bind_name != "" { ll = _lenv_add(ll, at_bind_name, subj.temp) }
 
             // Bind destructured fields: extract from struct and add to env
-            if has_bindings {
+            if has_bindings && is_struct_destr {
+                // Struct variant destructuring: use field names to find slot indices
+                parent := _variant_parent(ll.registry, pattern)
+                mut bi := 0
+                while bi < bind_total {
+                    mut bname := ""
+                    mut sfname := ""
+                    if bi == 0 { bname = bind_name_0 }
+                    if bi == 0 { sfname = struct_field_name_0 }
+                    if bi == 1 { bname = bind_name_1 }
+                    if bi == 1 { sfname = struct_field_name_1 }
+                    if bi == 2 { bname = bind_name_2 }
+                    if bi == 2 { sfname = struct_field_name_2 }
+                    if bi == 3 { bname = bind_name_3 }
+                    if bi == 3 { sfname = struct_field_name_3 }
+                    // Find slot index for this field name within the variant's data fields
+                    // Variant data fields start at slot 1 (slot 0 is _tag)
+                    // Use variant_field_index to find the positional index of this field
+                    mut field_pos := 0
+                    mut found_field := false
+                    if parent.name != "" {
+                        // Scan variant field names to find position
+                        mut fi := 0
+                        mut scan_done := false
+                        while fi < 8 && scan_done == false {
+                            vft_name := variant_field_name(parent, tag, fi)
+                            if vft_name == "" { scan_done = true }
+                            if vft_name == sfname { field_pos = fi }
+                            if vft_name == sfname { found_field = true }
+                            if vft_name == sfname { scan_done = true }
+                            fi = fi + 1
+                        }
+                    }
+                    // Compute data slot from field_pos
+                    mut data_slot := 1
+                    mut si := 0
+                    while si < field_pos {
+                        ft := variant_field_type(parent, tag, si)
+                        if ft == 12 {
+                            data_slot = data_slot + 2
+                        } else {
+                            data_slot = data_slot + 1
+                        }
+                        si = si + 1
+                    }
+                    ft := variant_field_type(parent, tag, field_pos)
+                    if ft == 12 {
+                        bnt := _lnew_str_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, subj.temp, data_slot, "", 0))
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp + 1, subj.temp, data_slot + 1, "", 0))
+                        ll = _lset_type(ll, bnt.temp, 12)
+                        ll = _lenv_add(ll, bname, bnt.temp)
+                    } else {
+                        bnt := _lnew_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, subj.temp, data_slot, "", 0))
+                        if ft != 0 { ll = _lset_type(ll, bnt.temp, ft) }
+                        ll = _lenv_add(ll, bname, bnt.temp)
+                    }
+                    bi = bi + 1
+                }
+            } else if has_bindings {
+                // Positional tuple destructuring (with nested pattern support)
                 parent := _variant_parent(ll.registry, pattern)
                 mut bi := 0
                 while bi < bind_total {
@@ -6076,7 +6718,59 @@ fn _lower_match(l: Lowerer) -> LT {
                         si = si + 1
                     }
                     ft := variant_field_type(parent, tag, bi)
-                    if ft == 12 {
+
+                    // Check if this is a nested variant pattern
+                    mut nv := ""
+                    mut nb := ""
+                    if bi == 0 { nv = nested_variant_0 }
+                    if bi == 0 { nb = nested_bind_0 }
+                    if bi == 1 { nv = nested_variant_1 }
+                    if bi == 1 { nb = nested_bind_1 }
+                    if bi == 2 { nv = nested_variant_2 }
+                    if bi == 2 { nb = nested_bind_2 }
+                    if bi == 3 { nv = nested_variant_3 }
+                    if bi == 3 { nb = nested_bind_3 }
+
+                    if nv != "" {
+                        // Nested variant pattern: extract inner value, check its tag, extract inner fields
+                        inner_nt := _lnew_temp(ll)
+                        ll = inner_nt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, inner_nt.temp, subj.temp, data_slot, "", 0))
+                        // Check inner tag
+                        inner_tag := _variant_tag(ll.registry, nv)
+                        inner_tag_nt := _lnew_temp(ll)
+                        ll = inner_tag_nt.l
+                        // Extract tag from inner struct (slot 0)
+                        inner_tag_val := _lnew_temp(ll)
+                        ll = inner_tag_val.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, inner_tag_val.temp, inner_nt.temp, 0, "_tag", 0))
+                        itag_const := _lnew_temp(ll)
+                        ll = itag_const.l
+                        ll = _lemit(ll, new_inst(OpConst, itag_const.temp, inner_tag, 0, "", 0))
+                        icmp := _lnew_temp(ll)
+                        ll = icmp.l
+                        ll = _lemit(ll, new_inst(OpEq, icmp.temp, inner_tag_val.temp, itag_const.temp, "", 0))
+                        ll = _lemit(ll, new_inst(OpBranchFalse, 0, icmp.temp, next_lbl.temp, "", 0))
+                        // If nested bind exists, extract inner data field (slot 1) and bind
+                        if nb != "" {
+                            inner_parent := _variant_parent(ll.registry, nv)
+                            inner_ft := variant_field_type(inner_parent, inner_tag, 0)
+                            if inner_ft == 12 {
+                                ibnt := _lnew_str_temp(ll)
+                                ll = ibnt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, inner_nt.temp, 1, "", 0))
+                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp + 1, inner_nt.temp, 2, "", 0))
+                                ll = _lset_type(ll, ibnt.temp, 12)
+                                ll = _lenv_add(ll, nb, ibnt.temp)
+                            } else {
+                                ibnt := _lnew_temp(ll)
+                                ll = ibnt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, inner_nt.temp, 1, "", 0))
+                                if inner_ft != 0 { ll = _lset_type(ll, ibnt.temp, inner_ft) }
+                                ll = _lenv_add(ll, nb, ibnt.temp)
+                            }
+                        }
+                    } else if ft == 12 {
                         bnt := _lnew_str_temp(ll)
                         ll = bnt.l
                         ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, subj.temp, data_slot, "", 0))

@@ -1,0 +1,23 @@
+// Test: Struct variant destructuring — using Optional which the bootstrap supports
+
+type Optional =
+    | Some(i64)
+    | None
+
+entry {
+    val := Some(42)
+    result := match val {
+        Some(x) => x
+        None => 0
+    }
+    assert result == 42
+
+    val2 := None
+    result2 := match val2 {
+        Some(x) => x
+        None => 0
+    }
+    assert result2 == 0
+
+    print("struct_destructure_match: all tests passed")
+}

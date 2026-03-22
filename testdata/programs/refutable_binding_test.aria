@@ -1,0 +1,21 @@
+// Test: Refutable bindings (Variant(x) := expr else { ... })
+
+type Result =
+    | Ok(i64)
+    | Err(str)
+
+fn try_get(ok: bool) -> Result {
+    if ok { return Ok(42) }
+    Err("failed")
+}
+
+entry {
+    // Test successful refutable binding
+    val := try_get(true)
+    Ok(x) := val else {
+        assert false
+    }
+    assert x == 42
+
+    print("refutable_binding: all tests passed")
+}
