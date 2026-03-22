@@ -171,6 +171,33 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     generate_from_module(m, output_path, runtime_path)
 }
 
+fn check_sources(files: [str]) -> DiagnosticBag {
+    // Lex, resolve, and type-check without codegen
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
+    mut first := true
+    mut fi := 1
+    while fi < files.len() {
+        file := files[fi]
+        source := _ariaReadFile(file)
+        lex := tokenize(source, file)
+        toks := get_tokens(lex)
+        lex_diags := get_diagnostics(lex)
+        if bag_has_errors(lex_diags) { return lex_diags }
+        if first {
+            merged = toks
+            first = false
+        } else {
+            merged = _merge_file_tokens(merged, toks)
+        }
+        fi = fi + 1
+    }
+    file := files[1]
+    rr := resolve(merged, file)
+    if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
+    cr := check(merged, rr.table, file)
+    cr.diagnostics
+}
+
 fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
     // Same pipeline as generate_from_sources but uses lower_for_tests
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]

@@ -194,8 +194,16 @@ fn run_check(files: [str], format: str) -> i64 {
         println("error: no input files")
         return 1
     }
-    // TODO: Implement multi-file check
-    println("check: not yet implemented")
+    diags := check_sources(files)
+    if bag_has_errors(diags) {
+        _print_diagnostics(diags, format)
+        return 1
+    }
+    if bag_warning_count(diags) > 0 {
+        _print_diagnostics(diags, format)
+    }
+    wcount := bag_warning_count(diags)
+    println("check: ok (" + wcount.toStr() + " warnings)")
     0
 }
 

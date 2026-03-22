@@ -1,0 +1,29 @@
+mod main
+
+// Test module declarations and pub visibility
+
+pub fn public_add(a: i64, b: i64) -> i64 = a + b
+
+fn private_helper(x: i64) -> i64 = x * 2
+
+pub struct Config {
+    name: str
+    value: i64
+}
+
+entry {
+    // Public function works
+    r := public_add(3, 4)
+    assert r == 7
+
+    // Private function works within same module
+    h := private_helper(21)
+    assert h == 42
+
+    // Public struct works
+    c := Config{name: "test", value: 100}
+    assert c.value == 100
+    assert c.name == "test"
+
+    println("module_test passed")
+}
