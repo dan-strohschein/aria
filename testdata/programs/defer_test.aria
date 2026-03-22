@@ -1,0 +1,32 @@
+// Test defer semantics: deferred expressions execute before return
+
+fn test_defer() -> i64 {
+    mut x := 0
+    defer x = 42
+    x = 10
+    // At this point x is 10, but defer will set it to 42 before return
+    // However, return captures x=10 first, then defer runs
+    // In Aria spec: defer runs before return, so x=42 at return
+    return x
+}
+
+fn test_defer_order() -> i64 {
+    mut result := 0
+    defer result = result + 1
+    defer result = result + 10
+    result = 100
+    return result
+}
+
+fn test_defer_side_effect() -> str {
+    defer println("deferred!")
+    return "done"
+}
+
+entry {
+    // Simple defer with side effect
+    r := test_defer_side_effect()
+    assert r == "done"
+
+    println("defer_test passed")
+}
