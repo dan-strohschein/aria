@@ -1,0 +1,38 @@
+// Advanced closure tests: passing closures, returning closures, string captures
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 = f(x)
+
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    return fn(x: i64) -> i64 => x + n
+}
+
+fn make_scaler(factor: i64) -> fn(i64) -> i64 {
+    return fn(x: i64) -> i64 => x * factor
+}
+
+entry {
+    // Closure passed as argument
+    double := fn(x: i64) -> i64 => x * 2
+    r1 := apply(double, 21)
+    assert r1 == 42
+
+    // Closure returned from function with capture
+    add5 := make_adder(5)
+    assert add5(10) == 15
+    assert add5(0) == 5
+
+    add100 := make_adder(100)
+    assert add100(1) == 101
+
+    // Multiple returned closures coexist
+    scale3 := make_scaler(3)
+    scale10 := make_scaler(10)
+    assert scale3(7) == 21
+    assert scale10(7) == 70
+
+    // Apply with returned closure
+    r2 := apply(add5, 100)
+    assert r2 == 105
+
+    println("closure_advanced_test passed")
+}
