@@ -936,19 +936,45 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
     return result.l
 }
 
-// --- Lower additive (atom [+|-|*|/|% atom]*) ---
-// Handles arithmetic operators which bind tighter than comparison
+// --- Lower multiplicative (atom [*|/|% atom]*) ---
+// Handles *, /, % which bind tighter than +, -
 
-fn _lower_additive(l: Lowerer) -> LT {
+fn _lower_multiplicative(l: Lowerer) -> LT {
     result := _lower_atom(l)
     mut ll := result.l
     mut left := result.temp
     mut running := true
     while running {
         k := _lk(ll)
-        if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
+        if k == "*" || k == "/" || k == "%" {
             ll = _ladv(ll)
             right := _lower_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            ll = _lset_type(ll, nt.temp, 1)
+            left = nt.temp
+        } else {
+            running = false
+        }
+    }
+    LT{l: ll, temp: left}
+}
+
+// --- Lower additive (multiplicative [+|- multiplicative]*) ---
+// Handles +, - which bind tighter than comparison
+
+fn _lower_additive(l: Lowerer) -> LT {
+    result := _lower_multiplicative(l)
+    mut ll := result.l
+    mut left := result.temp
+    mut running := true
+    while running {
+        k := _lk(ll)
+        if k == "+" || k == "-" {
+            ll = _ladv(ll)
+            right := _lower_multiplicative(ll)
             ll = right.l
             left_type := _lget_type(ll, left)
             if k == "+" && left_type == 12 {
@@ -1018,9 +1044,9 @@ fn _lower_expr(l: Lowerer) -> LT {
     while running {
         k := _lk(ll)
 
-        if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
+        if k == "+" || k == "-" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_multiplicative(ll)
             ll = right.l
             // Check if left operand is a string for +
             left_type := _lget_type(ll, left)
@@ -1037,6 +1063,15 @@ fn _lower_expr(l: Lowerer) -> LT {
                 ll = _lset_type(ll, nt.temp, 1)
                 left = nt.temp
             }
+        } else if k == "*" || k == "/" || k == "%" {
+            ll = _ladv(ll)
+            right := _lower_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            ll = _lset_type(ll, nt.temp, 1)
+            left = nt.temp
         } else if k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
             ll = _ladv(ll)
             right := _lower_additive(ll)
@@ -2068,9 +2103,9 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             ll = nt.l
             ll = _lemit(ll, new_inst(OpOr, nt.temp, left, right.temp, "", 0))
             left = nt.temp
-        } else if k == "+" || k == "-" || k == "*" || k == "/" || k == "%" {
+        } else if k == "+" || k == "-" {
             ll = _ladv(ll)
-            right := _lower_atom(ll)
+            right := _lower_multiplicative(ll)
             ll = right.l
             left_type := _lget_type(ll, left)
             if k == "+" && left_type == 12 {
@@ -2085,6 +2120,14 @@ fn _lower_if_cond(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
                 left = nt.temp
             }
+        } else if k == "*" || k == "/" || k == "%" {
+            ll = _ladv(ll)
+            right := _lower_atom(ll)
+            ll = right.l
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(_arith_op(k), nt.temp, left, right.temp, "", 0))
+            left = nt.temp
         } else {
             running = false
         }
