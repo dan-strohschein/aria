@@ -330,9 +330,12 @@ Aria is designed for AI-assisted development. Three files enable any AI to gener
 
 - **Language specification**: [`aria-docs`](https://github.com/dan-strohschein/aria-docs) (33 spec files)
 - **Bootstrap compiler**: [`aria-compiler-go`](https://github.com/dan-strohschein/aria-compiler-go) (Go)
-- **Gap analysis**: [`Gaps1.md`](Gaps1.md) (feature completion tracking)
 - **AI guide**: [`aria-lang-ai-guide.md`](aria-lang-ai-guide.md) (complete syntax reference)
 
 ## License
 
 See repository for license details.
+
+---
+
+Designed by Dan Strohschein. Inspired by the giants who came before: Golang, Rust, and C.
