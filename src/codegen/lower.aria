@@ -2315,6 +2315,28 @@ fn _lower_expr(l: Lowerer) -> LT {
 
 fn _lower_primary(l: Lowerer) -> LT {
     k := _lk(l)
+    // Memory annotations: @stack, @arena(handle), @inline
+    // For now, parse and skip — allocation still uses _aria_alloc
+    // @stack is a hint for future optimization (LLVM alloca)
+    // @arena(handle) would use _aria_arena_alloc instead of _aria_alloc
+    // @inline is a compile-time layout hint (no-op for now)
+    if k == "@" {
+        mut ll := _ladv(l)  // skip @
+        if _lk(ll) == "IDENT" {
+            ann := _lcur(ll).text
+            ll = _ladv(ll)  // skip annotation name
+            // Skip optional (args)
+            if _lk(ll) == "(" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+            }
+            // Continue lowering the annotated expression
+            // The annotation is stored for future use but doesn't change codegen yet
+            return _lower_primary(ll)
+        }
+        return _lower_primary(ll)
+    }
     if k == "-" || k == "!" || k == "~" {
         ll := _ladv(l)
         operand := _lower_atom(ll)
@@ -3669,6 +3691,138 @@ fn _lower_primary(l: Lowerer) -> LT {
                 nt := _lnew_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sb_clear", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // GC
+            if name == "_ariaGcCollect" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_gc_collect", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaGcTotalBytes" || name == "_ariaGcAllocationCount" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut gc_fn := "_aria_gc_total_bytes"
+                if name == "_ariaGcAllocationCount" { gc_fn = "_aria_gc_allocation_count" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, gc_fn, 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Arena
+            if name == "_ariaArenaNew" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_arena_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaArenaAlloc" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                s_arg := _lower_expr(ll)
+                ll = s_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, s_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 2, "_aria_arena_alloc", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaArenaReset" || name == "_ariaArenaFree" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut af := "_aria_arena_reset"
+                if name == "_ariaArenaFree" { af = "_aria_arena_free" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, af, 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaArenaAllocated" || name == "_ariaArenaCapacity" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                mut af := "_aria_arena_allocated"
+                if name == "_ariaArenaCapacity" { af = "_aria_arena_capacity" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, af, 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Pool
+            if name == "_ariaPoolNew" {
+                ll = _ladv(ll)
+                cap_arg := _lower_expr(ll)
+                ll = cap_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                size_arg := _lower_expr(ll)
+                ll = size_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, cap_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, size_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 2, "_aria_pool_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPoolGet" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pool_get", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPoolPut" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                o_arg := _lower_expr(ll)
+                ll = o_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, o_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 2, "_aria_pool_put", 0))
                 return LT{l: ll, temp: nt.temp}
             }
 

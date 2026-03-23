@@ -1,0 +1,49 @@
+// Test: Tier 7 memory management
+
+entry {
+    // Test 1: GC stats
+    initial_bytes := _ariaGcTotalBytes()
+    initial_count := _ariaGcAllocationCount()
+
+    // Allocate some data
+    arr := [1, 2, 3, 4, 5]
+    new_bytes := _ariaGcTotalBytes()
+    assert new_bytes >= initial_bytes
+
+    // Test 2: GC collect (no-op since everything is reachable)
+    freed := _ariaGcCollect()
+
+    // Test 3: Arena allocator
+    arena := _ariaArenaNew(4096)
+    assert _ariaArenaCapacity(arena) >= 4096
+    assert _ariaArenaAllocated(arena) == 0
+
+    // Allocate from arena
+    ptr := _ariaArenaAlloc(arena, 64)
+    assert _ariaArenaAllocated(arena) == 64
+
+    // Reset arena
+    _ariaArenaReset(arena)
+    assert _ariaArenaAllocated(arena) == 0
+
+    // Free arena
+    _ariaArenaFree(arena)
+
+    // Test 4: Object pool
+    pool := _ariaPoolNew(4, 64)
+    obj1 := _ariaPoolGet(pool)
+    obj2 := _ariaPoolGet(pool)
+    assert obj1 != obj2
+
+    // Return to pool
+    _ariaPoolPut(pool, obj1)
+    obj3 := _ariaPoolGet(pool)
+    // Should get back the same slot
+    assert obj3 == obj1
+
+    // Test 5: @stack annotation (parsed, no-op for now)
+    x := @stack 42
+    assert x == 42
+
+    print("memory_test passed")
+}

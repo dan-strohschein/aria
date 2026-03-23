@@ -298,6 +298,21 @@ fn generate_llvm_ir(m: IrModule) -> str {
     // Format specifiers
     p = p.append("declare " + si64 + " @_aria_format_int(i64, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_format_float(i64, i8*, i64)" + nl)
+    // GC
+    p = p.append("declare i64 @_aria_gc_collect()" + nl)
+    p = p.append("declare i64 @_aria_gc_total_bytes()" + nl)
+    p = p.append("declare i64 @_aria_gc_allocation_count()" + nl)
+    // Arena
+    p = p.append("declare i64 @_aria_arena_new(i64)" + nl)
+    p = p.append("declare i8* @_aria_arena_alloc(i64, i64)" + nl)
+    p = p.append("declare void @_aria_arena_reset(i64)" + nl)
+    p = p.append("declare void @_aria_arena_free(i64)" + nl)
+    p = p.append("declare i64 @_aria_arena_allocated(i64)" + nl)
+    p = p.append("declare i64 @_aria_arena_capacity(i64)" + nl)
+    // Pool
+    p = p.append("declare i64 @_aria_pool_new(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_pool_get(i64)" + nl)
+    p = p.append("declare void @_aria_pool_put(i64, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
     p = p.append(nl)
 

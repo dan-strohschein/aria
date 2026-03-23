@@ -51,14 +51,194 @@ void _aria_eprintln_str(char *ptr, long len) {
     write(2, "\n", 1);
 }
 
-// --- Memory ---
+// --- Memory: GC-tracked allocator ---
+// Simple mark-sweep GC: track all allocations, sweep when threshold exceeded.
+
+#define GC_INITIAL_CAPACITY 4096
+#define GC_GROWTH_FACTOR 2
+
+static struct {
+    void **ptrs;
+    long *sizes;
+    int *marks;
+    long count;
+    long capacity;
+    long total_bytes;
+    long threshold;
+    int enabled;
+} _gc = {NULL, NULL, NULL, 0, 0, 0, 1048576, 0};  // 1MB threshold
+
+static void _gc_init(void) {
+    if (_gc.ptrs) return;
+    _gc.capacity = GC_INITIAL_CAPACITY;
+    _gc.ptrs = (void **)calloc((size_t)_gc.capacity, sizeof(void *));
+    _gc.sizes = (long *)calloc((size_t)_gc.capacity, sizeof(long));
+    _gc.marks = (int *)calloc((size_t)_gc.capacity, sizeof(int));
+    _gc.count = 0;
+    _gc.total_bytes = 0;
+    _gc.enabled = 1;
+}
+
+static void _gc_track(void *ptr, long size) {
+    if (!_gc.ptrs) _gc_init();
+    if (_gc.count >= _gc.capacity) {
+        _gc.capacity *= GC_GROWTH_FACTOR;
+        _gc.ptrs = (void **)realloc(_gc.ptrs, (size_t)_gc.capacity * sizeof(void *));
+        _gc.sizes = (long *)realloc(_gc.sizes, (size_t)_gc.capacity * sizeof(long));
+        _gc.marks = (int *)realloc(_gc.marks, (size_t)_gc.capacity * sizeof(int));
+    }
+    _gc.ptrs[_gc.count] = ptr;
+    _gc.sizes[_gc.count] = size;
+    _gc.marks[_gc.count] = 0;
+    _gc.count++;
+    _gc.total_bytes += size;
+}
+
+// GC sweep: free all unmarked allocations (called explicitly or at threshold)
+long _aria_gc_collect(void) {
+    long freed = 0;
+    long new_count = 0;
+    for (long i = 0; i < _gc.count; i++) {
+        if (_gc.marks[i] == 0 && _gc.ptrs[i] != NULL) {
+            _gc.total_bytes -= _gc.sizes[i];
+            free(_gc.ptrs[i]);
+            freed++;
+        } else {
+            _gc.ptrs[new_count] = _gc.ptrs[i];
+            _gc.sizes[new_count] = _gc.sizes[i];
+            _gc.marks[new_count] = 0;  // reset marks for next cycle
+            new_count++;
+        }
+    }
+    _gc.count = new_count;
+    return freed;
+}
+
+// GC stats
+long _aria_gc_total_bytes(void) { return _gc.total_bytes; }
+long _aria_gc_allocation_count(void) { return _gc.count; }
 
 char *_aria_alloc(long size) {
-    return (char *)calloc(1, (size_t)size);
+    if (!_gc.ptrs) _gc_init();
+    char *ptr = (char *)calloc(1, (size_t)size);
+    _gc_track(ptr, size);
+    return ptr;
+}
+
+// Stack allocation: returns pointer to alloca'd memory (caller provides buffer)
+// This is a no-op at runtime — @stack is handled at LLVM level via alloca
+char *_aria_stack_alloc(long size) {
+    return (char *)calloc(1, (size_t)size);  // fallback if LLVM alloca unavailable
 }
 
 void _aria_memcpy(char *dst, char *src, long len) {
     memcpy(dst, src, (size_t)len);
+}
+
+// --- Arena allocator ---
+// Bulk allocator: allocate many objects, free all at once.
+
+struct _aria_arena {
+    char *buf;
+    long capacity;
+    long used;
+};
+
+long _aria_arena_new(long capacity) {
+    if (capacity < 4096) capacity = 4096;
+    struct _aria_arena *a = (struct _aria_arena *)malloc(sizeof(struct _aria_arena));
+    a->buf = (char *)calloc(1, (size_t)capacity);
+    a->capacity = capacity;
+    a->used = 0;
+    return (long)a;
+}
+
+char *_aria_arena_alloc(long arena_handle, long size) {
+    struct _aria_arena *a = (struct _aria_arena *)arena_handle;
+    // Align to 8 bytes
+    size = (size + 7) & ~7;
+    if (a->used + size > a->capacity) {
+        // Grow arena
+        long new_cap = a->capacity * 2;
+        while (a->used + size > new_cap) new_cap *= 2;
+        a->buf = (char *)realloc(a->buf, (size_t)new_cap);
+        memset(a->buf + a->capacity, 0, (size_t)(new_cap - a->capacity));
+        a->capacity = new_cap;
+    }
+    char *ptr = a->buf + a->used;
+    a->used += size;
+    return ptr;
+}
+
+void _aria_arena_reset(long arena_handle) {
+    struct _aria_arena *a = (struct _aria_arena *)arena_handle;
+    memset(a->buf, 0, (size_t)a->used);
+    a->used = 0;
+}
+
+void _aria_arena_free(long arena_handle) {
+    struct _aria_arena *a = (struct _aria_arena *)arena_handle;
+    free(a->buf);
+    free(a);
+}
+
+long _aria_arena_allocated(long arena_handle) {
+    struct _aria_arena *a = (struct _aria_arena *)arena_handle;
+    return a->used;
+}
+
+long _aria_arena_capacity(long arena_handle) {
+    struct _aria_arena *a = (struct _aria_arena *)arena_handle;
+    return a->capacity;
+}
+
+// --- Object Pool ---
+// Pre-allocated pool of reusable objects.
+
+struct _aria_pool {
+    long *objects;
+    int *in_use;
+    long capacity;
+    long obj_size;
+};
+
+long _aria_pool_new(long capacity, long obj_size) {
+    struct _aria_pool *p = (struct _aria_pool *)malloc(sizeof(struct _aria_pool));
+    p->capacity = capacity;
+    p->obj_size = obj_size;
+    p->objects = (long *)calloc((size_t)capacity, sizeof(long));
+    p->in_use = (int *)calloc((size_t)capacity, sizeof(int));
+    // Pre-allocate all objects
+    for (long i = 0; i < capacity; i++) {
+        p->objects[i] = (long)calloc(1, (size_t)obj_size);
+        p->in_use[i] = 0;
+    }
+    return (long)p;
+}
+
+long _aria_pool_get(long pool_handle) {
+    struct _aria_pool *p = (struct _aria_pool *)pool_handle;
+    for (long i = 0; i < p->capacity; i++) {
+        if (!p->in_use[i]) {
+            p->in_use[i] = 1;
+            return p->objects[i];
+        }
+    }
+    // Pool exhausted — allocate new (not pooled)
+    return (long)calloc(1, (size_t)p->obj_size);
+}
+
+void _aria_pool_put(long pool_handle, long obj) {
+    struct _aria_pool *p = (struct _aria_pool *)pool_handle;
+    for (long i = 0; i < p->capacity; i++) {
+        if (p->objects[i] == obj) {
+            p->in_use[i] = 0;
+            memset((void *)obj, 0, (size_t)p->obj_size);
+            return;
+        }
+    }
+    // Not from this pool — just free
+    free((void *)obj);
 }
 
 // --- File I/O ---

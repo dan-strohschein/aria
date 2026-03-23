@@ -249,6 +249,19 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaSbLen", SkBuiltin)
     rr = _add_builtin(rr, "_ariaSbBuild", SkBuiltin)
     rr = _add_builtin(rr, "_ariaSbClear", SkBuiltin)
+    // Memory management
+    rr = _add_builtin(rr, "_ariaGcCollect", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaGcTotalBytes", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaGcAllocationCount", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaNew", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaAlloc", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaReset", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaFree", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaAllocated", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaArenaCapacity", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaPoolNew", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaPoolGet", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaPoolPut", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     // Contextual keywords used in expressions
@@ -256,6 +269,10 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "must", SkBuiltin)
     rr = _add_builtin(rr, "from", SkBuiltin)
     rr = _add_builtin(rr, "default", SkBuiltin)
+    // Memory annotations (used after @)
+    rr = _add_builtin(rr, "stack", SkBuiltin)
+    rr = _add_builtin(rr, "arena", SkBuiltin)
+    rr = _add_builtin(rr, "inline", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)
     // Result constructors
     rr = _add_builtin(rr, "Ok", SkBuiltin)
