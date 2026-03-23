@@ -2143,10 +2143,16 @@ fn _check_expr_full(c: Checker) -> CE {
                 }
             }
         } else if k == "=" {
-            // Assignment
+            // Assignment — validate RHS type matches LHS type
             cc = _cadv(cc)
             rhs := _check_expr_full(cc)
             cc = rhs.c
+            if left_type != TY_UNKNOWN && rhs.type_id != TY_UNKNOWN && left_type != TY_UNIT {
+                if is_assignable(cc.store, rhs.type_id, left_type) == false {
+                    q := _q()
+                    cc = _cerror(cc, E0100, "assignment type mismatch: expected " + q + format_type(cc.store, left_type) + q + ", got " + q + format_type(cc.store, rhs.type_id) + q)
+                }
+            }
             left_type = TY_UNIT
             running = false
         } else {
@@ -2354,9 +2360,8 @@ fn _check_primary(c: Checker) -> CE {
                     result := _check_generic_call(cc, sig)
                     return result
                 }
-                cr := _check_call_args(cc, TY_UNKNOWN)
-                cc = cr.c
-                return CE{c: cc, type_id: sig.return_type}
+                cr := _check_call_args_sig(cc, sig)
+                return cr
             }
             // Check effects for built-in I/O functions (warning only for smooth adoption)
             if (name == "println" || name == "print" || name == "eprintln") &&
@@ -2470,7 +2475,15 @@ fn _check_primary(c: Checker) -> CE {
             cc = _cskip_nl(cc)
             result := _check_expr_full(cc)
             cc = result.c
-            if count == 0 { elem_type = result.type_id }
+            if count == 0 {
+                elem_type = result.type_id
+            } else if elem_type != TY_UNKNOWN && result.type_id != TY_UNKNOWN {
+                // Verify element type consistency
+                if is_assignable(cc.store, result.type_id, elem_type) == false {
+                    q := _q()
+                    cc = _cerror(cc, E0100, "array element type mismatch: expected " + q + format_type(cc.store, elem_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+                }
+            }
             count = count + 1
             cc = _cskip_nl(cc)
             if _ck2(cc) == "," { cc = _cadv(cc) }
@@ -2521,6 +2534,50 @@ fn _check_call_args(c: Checker, callee_type: i64) -> CE {
     }
     if _ck2(cc) == ")" { cc = _cadv(cc) }
     return CE{c: cc, type_id: callee_type}
+}
+
+// Check call arguments with type validation against function signature
+fn _check_call_args_sig(c: Checker, sig: FnSig) -> CE {
+    mut cc := _cadv(c)  // skip (
+    cc = _cskip_nl(cc)
+    mut arg_idx := 1  // param_types[0] is sentinel
+    while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+        cc = _cskip_nl(cc)
+        result := _check_expr_full(cc)
+        cc = result.c
+        // Validate argument type against parameter type (skip unknowns and type vars)
+        if arg_idx < sig.param_types.len() {
+            expected := sig.param_types[arg_idx]
+            if expected != TY_UNKNOWN && expected > 0 && result.type_id != TY_UNKNOWN && result.type_id > 0 {
+                // Skip validation if either side involves type variables or unknown wrapping
+                exp_info := store_get(cc.store, expected)
+                res_info := store_get(cc.store, result.type_id)
+                exp_kn := type_kind_name(exp_info.kind)
+                res_kn := type_kind_name(res_info.kind)
+                mut should_check := true
+                if exp_kn == "TypeVar" { should_check = false }
+                if res_kn == "TypeVar" { should_check = false }
+                if res_kn == "Unknown" { should_check = false }
+                if exp_kn == "Unknown" { should_check = false }
+                // Skip if wrapping unknown (e.g. Optional[Unknown], Result[Unknown,...])
+                if res_info.type_id == TY_UNKNOWN && (res_kn == "Optional" || res_kn == "Result" || res_kn == "Array") { should_check = false }
+                if exp_info.type_id == TY_UNKNOWN && (exp_kn == "Optional" || exp_kn == "Result" || exp_kn == "Array") { should_check = false }
+                if should_check {
+                    if is_assignable(cc.store, result.type_id, expected) == false {
+                        q := _q()
+                        pname := ""
+                        if arg_idx < sig.param_names.len() { pname = sig.param_names[arg_idx] }
+                        cc = _cerror(cc, E0100, "argument " + q + pname + q + " expects " + format_type(cc.store, expected) + ", got " + format_type(cc.store, result.type_id))
+                    }
+                }
+            }
+        }
+        arg_idx = arg_idx + 1
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+    }
+    if _ck2(cc) == ")" { cc = _cadv(cc) }
+    return CE{c: cc, type_id: sig.return_type}
 }
 
 // --- Check generic function call: infer type args, register specialization ---
@@ -2890,13 +2947,28 @@ fn _check_if(c: Checker) -> CE {
     // Else
     if _ck2(cc) == "else" {
         cc = _cadv(cc)
+        mut else_type := TY_UNKNOWN
         if _ck2(cc) == "if" {
             else_result := _check_if(cc)
             cc = else_result.c
+            else_type = else_result.type_id
         } else {
             else_result := _check_block(cc)
             cc = else_result.c
+            else_type = else_result.type_id
         }
+        // If both branches have known types, verify compatibility
+        if result_type != TY_UNKNOWN && else_type != TY_UNKNOWN &&
+           result_type != TY_UNIT && else_type != TY_UNIT &&
+           result_type != TY_NEVER && else_type != TY_NEVER {
+            if is_assignable(cc.store, else_type, result_type) == false &&
+               is_assignable(cc.store, result_type, else_type) == false {
+                q := _q()
+                cc = _cerror(cc, E0100, "if/else branch type mismatch: then returns " + q + format_type(cc.store, result_type) + q + ", else returns " + q + format_type(cc.store, else_type) + q)
+            }
+        }
+        // Use the more specific type (prefer non-Never)
+        if result_type == TY_NEVER { result_type = else_type }
     }
 
     CE{c: cc, type_id: result_type}

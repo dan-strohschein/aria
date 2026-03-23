@@ -494,23 +494,15 @@ fn _is_cont_l(k: str) -> bool =
 // Const pre-scan: collect const values before lowering bodies
 // ============================================================
 
-fn _scan_consts(l: Lowerer) -> Lowerer {
-    mut ll := _lset_pos(l, 0)
-    ll = _lskip_nl(ll)
-    if ll.pos == 0 { ll = _ladv(ll) }
-    if _lk(ll) == "mod" { ll = _ladv(_ladv(ll)) }
-    ll = _lskip_nl(ll)
-    while _lk(ll) == "use" {
-        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" { ll = _ladv(ll) }
-        ll = _lskip_nl(ll)
-    }
-
-    while _lk(ll) != "EOF" {
-        ll = _lskip_nl(ll)
-        if _lk(ll) == "EOF" { return ll }
-        if _lk(ll) == "pub" { ll = _ladv(ll) }
-
-        if _lk(ll) == "const" {
+fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
+    mut ll := l
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
+        if kname == "const" {
+            ll = _lset_pos(ll, decl.token_start)
+            if _lk(ll) == "pub" { ll = _ladv(ll) }
             ll = _ladv(ll)  // skip const
             if _lk(ll) == "IDENT" {
                 cname := _lcur(ll).text
@@ -600,8 +592,7 @@ fn _scan_consts(l: Lowerer) -> Lowerer {
                 }
             }
         }
-        ll = _ladv(ll)
-        ll = _lskip_nl(ll)
+        di = di + 1
     }
     ll
 }
@@ -8767,7 +8758,7 @@ fn _lower_derive_debug(l: Lowerer, def: StructDef) -> Lowerer {
 
 fn lower(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, store, reg, treg, table, file)
-    l = _scan_consts(l)
+    l = _scan_consts(l, index)
     l = _lower_bodies(l, index)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
@@ -8777,7 +8768,7 @@ fn lower(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry,
 // Lower for test mode: compile test blocks and generate a test runner _main
 fn lower_for_tests(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, store, reg, treg, table, file)
-    l = _scan_consts(l)
+    l = _scan_consts(l, index)
     l = _lower_bodies(l, index)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
