@@ -1057,8 +1057,33 @@ fn _parse_enum_decl(p: Parser) -> PR {
     pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
-    pp = _skip_braces(pp)
-    PR{p: pp, e: mk_enum_decl(name, span)}
+    lb := "\{"
+    rb := "\}"
+    // Parse variant names
+    mut variant_names := ""
+    mut variant_count := 0
+    if _ck(pp) == lb {
+        pp = _adv(pp)  // skip {
+        pp = _skip_nl(pp)
+        while _ck(pp) != rb && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            if _ck(pp) == "IDENT" {
+                if variant_count > 0 { variant_names = variant_names + "," }
+                variant_names = variant_names + _cur(pp).text
+                variant_count = variant_count + 1
+                pp = _adv(pp)
+            } else if _ck(pp) == rb || _ck(pp) == "EOF" {
+                mut _skip := 0
+            } else {
+                pp = _adv(pp)
+            }
+            pp = _skip_nl(pp)
+        }
+        if _ck(pp) == rb { pp = _adv(pp) }
+    }
+    // s2 = comma-joined variant names
+    PR{p: pp, e: Expr{kind: EkEnumDecl, s1: name, s2: variant_names, b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: 0, list_count: variant_count, span: span}}
 }
 
 fn _parse_trait_decl(p: Parser) -> PR {
@@ -1066,10 +1091,83 @@ fn _parse_trait_decl(p: Parser) -> PR {
     pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
+    // Capture supertrait clause: trait B: A, C {
+    mut supers := ""
+    if _ck(pp) == ":" {
+        pp = _adv(pp)  // skip :
+        mut scount := 0
+        mut parsing := true
+        while parsing {
+            if _ck(pp) == "IDENT" {
+                if scount > 0 { supers = supers + "," }
+                supers = supers + _cur(pp).text
+                scount = scount + 1
+                pp = _adv(pp)
+                if _ck(pp) == "," { pp = _adv(pp) } else { parsing = false }
+            } else {
+                parsing = false
+            }
+        }
+    }
     lb := "\{"
     while _ck(pp) != lb && _ck(pp) != "EOF" { pp = _adv(pp) }
-    pp = _skip_braces(pp)
-    PR{p: pp, e: mk_trait_decl(name, 0, span)}
+    if _ck(pp) != lb {
+        return PR{p: pp, e: Expr{kind: EkTraitDecl, s1: name, s2: supers, b1: false, b2: false,
+                                   c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
+    pp = _adv(pp)  // skip {
+    pp = _skip_nl(pp)
+    rb := "\}"
+    // Parse methods as FnDecl nodes (same as impl)
+    mut method_indices := [0]
+    mut method_count := 0
+    // Also collect associated type names
+    mut assoc_types := ""
+    mut assoc_count := 0
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        pp = _skip_nl(pp)
+        if _ck(pp) == "pub" { pp = _adv(pp) }
+        if _ck(pp) == "fn" {
+            result := _parse_fn(pp)
+            method_idx := _pidx(result.p)
+            pp = _padd(result.p, result.e)
+            method_indices = method_indices.append(method_idx)
+            method_count = method_count + 1
+        } else if _ck(pp) == "type" {
+            pp = _adv(pp)  // skip type
+            if _ck(pp) == "IDENT" {
+                if assoc_count > 0 { assoc_types = assoc_types + "," }
+                assoc_types = assoc_types + _cur(pp).text
+                assoc_count = assoc_count + 1
+            }
+            while _ck(pp) != "NEWLINE" && _ck(pp) != rb && _ck(pp) != "EOF" { pp = _adv(pp) }
+        } else if _ck(pp) == rb || _ck(pp) == "EOF" {
+            mut _skip := 0
+        } else {
+            pp = _adv(pp)
+        }
+        pp = _skip_nl(pp)
+    }
+    if _ck(pp) == rb { pp = _adv(pp) }
+    // Add index nodes for methods
+    list_start := _pidx(pp)
+    mut mi := 0
+    while mi < method_count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: method_indices[mi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        mi = mi + 1
+    }
+    // s2 = supertrait names (comma-separated)
+    // b1 = has associated types
+    // c0 = assoc_count (repurposed)
+    // Encode assoc_types into the node by appending to s2 after a ";" separator
+    mut full_s2 := supers
+    alen := assoc_types.len()
+    if alen > 0 {
+        full_s2 = full_s2 + ";" + assoc_types
+    }
+    PR{p: pp, e: Expr{kind: EkTraitDecl, s1: name, s2: full_s2, b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: method_count, span: span}}
 }
 
 fn _parse_impl_decl(p: Parser) -> PR {
@@ -1140,16 +1238,19 @@ fn _parse_const_decl(p: Parser) -> PR {
     mut pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
+    mut type_tok_pos := 0
     if _ck(pp) == ":" {
         pp = _adv(pp)
+        type_tok_pos = pp.pos
         pp = _skip_type(pp)
     }
     pp = _expect(pp, "=")
     result := _parse_expr(pp, 0)
     val_idx := _pidx(result.p)
     pp = _padd(result.p, result.e)
+    // c0=val_idx, c1=type_tok_pos
     PR{p: pp, e: Expr{kind: EkConstDecl, s1: name, s2: "", b1: false, b2: false,
-                       c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+                       c0: val_idx, c1: type_tok_pos, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_entry(p: Parser) -> PR {

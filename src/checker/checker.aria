@@ -446,9 +446,13 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
                 cc = _register_type_decl(cc)
             }
         } else if kname == "enum" {
-            cc = _cset_pos(cc, decl.token_start)
-            if _ck2(cc) == "pub" { cc = _cadv(cc) }
-            cc = _register_enum_decl(cc)
+            if decl.node_idx > 0 {
+                cc = _register_enum_decl_ast(cc, decl.node_idx)
+            } else {
+                cc = _cset_pos(cc, decl.token_start)
+                if _ck2(cc) == "pub" { cc = _cadv(cc) }
+                cc = _register_enum_decl(cc)
+            }
         }
         di = di + 1
     }
@@ -922,6 +926,17 @@ fn _register_type_decl(c: Checker) -> Checker {
     cc
 }
 
+fn _register_enum_decl_ast(c: Checker, node_idx: i64) -> Checker {
+    node := pool_get(c.pool, node_idx)
+    name := node.s1
+    mut cc := c
+    new_st := store_add(cc.store, mk_named_type(name))
+    cc = _cset_store(cc, new_st)
+    def := new_struct_def(name, [FieldInfo{name: "", type_id: 0}], false, [""])
+    cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+    cc
+}
+
 fn _register_enum_decl(c: Checker) -> Checker {
     mut cc := _cadv(c)  // skip enum
     if _ck2(cc) != "IDENT" { return cc }
@@ -1021,9 +1036,17 @@ fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
         } else if kname == "impl" {
             cc = _register_impl_fns(cc, decl.node_idx)
         } else if kname == "trait" {
-            cc = _register_trait_decl(cc)
+            if decl.node_idx > 0 {
+                cc = _register_trait_decl_ast(cc, decl.node_idx)
+            } else {
+                cc = _register_trait_decl(cc)
+            }
         } else if kname == "const" {
-            cc = _register_const(cc)
+            if decl.node_idx > 0 {
+                cc = _register_const_ast(cc, decl.node_idx)
+            } else {
+                cc = _register_const(cc)
+            }
         }
         // type, enum, entry, test, use — skip in pass2
 
@@ -1058,6 +1081,93 @@ fn _register_extern(c: Checker) -> Checker {
     if _ck2(cc) == "fn" {
         cc = _register_fn_sig(cc)
     }
+    cc
+}
+
+// AST-based trait declaration registration
+fn _register_trait_decl_ast(c: Checker, node_idx: i64) -> Checker {
+    node := pool_get(c.pool, node_idx)
+    trait_name := node.s1
+    mut cc := c
+
+    // Parse s2 for supertraits and associated types
+    // Format: "ParentA,ParentB;AssocType1,AssocType2" (separated by ";")
+    s2val := node.s2
+    s2len := s2val.len()
+    mut parents := [""]
+    mut assoc_types := [""]
+
+    // Find the ";" separator
+    mut semi_pos := -1
+    mut si := 0
+    while si < s2len {
+        ch := s2val.charAt(si)
+        if ch == ";" { semi_pos = si }
+        si = si + 1
+    }
+
+    // Parse supertraits (before ";")
+    mut super_str := s2val
+    if semi_pos >= 0 {
+        super_str = s2val.substring(0, semi_pos)
+        // Parse associated types (after ";")
+        assoc_str := s2val.substring(semi_pos + 1, s2len)
+        alen := assoc_str.len()
+        if alen > 0 {
+            mut astart := 0
+            mut ai := 0
+            while ai <= alen {
+                mut is_sep := false
+                if ai == alen { is_sep = true }
+                if is_sep == false {
+                    ach := assoc_str.charAt(ai)
+                    if ach == "," { is_sep = true }
+                }
+                if is_sep {
+                    if ai > astart {
+                        assoc_types = assoc_types.append(assoc_str.substring(astart, ai))
+                    }
+                    astart = ai + 1
+                }
+                ai = ai + 1
+            }
+        }
+    }
+    // Parse supertrait names from super_str
+    slen := super_str.len()
+    if slen > 0 {
+        mut pstart := 0
+        mut pi := 0
+        while pi <= slen {
+            mut is_sep := false
+            if pi == slen { is_sep = true }
+            if is_sep == false {
+                pch := super_str.charAt(pi)
+                if pch == "," { is_sep = true }
+            }
+            if is_sep {
+                if pi > pstart {
+                    parents = parents.append(super_str.substring(pstart, pi))
+                }
+                pstart = pi + 1
+            }
+            pi = pi + 1
+        }
+    }
+
+    // Collect method names from FnDecl children
+    mut mnames := [""]
+    mut mi := 0
+    while mi < node.list_count {
+        midx_node := pool_get(cc.pool, node.list_start + mi)
+        method_node := pool_get(cc.pool, midx_node.c0)
+        mnames = mnames.append(method_node.s1)
+        mi = mi + 1
+    }
+
+    // Register trait
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0]}
+    cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
 
@@ -1945,6 +2055,26 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
         if _ck2(cc) == "NEWLINE" { return cc }
         cc = _cadv(cc)
     }
+    cc
+}
+
+// AST-based const registration
+fn _register_const_ast(c: Checker, node_idx: i64) -> Checker {
+    node := pool_get(c.pool, node_idx)
+    name := node.s1
+    mut cc := c
+
+    mut ctype := TY_UNKNOWN
+    if node.c1 > 0 {
+        // Type annotation stored at token position c1
+        cc = _cset_pos(cc, node.c1)
+        ct := _parse_type_ann(cc)
+        cc = ct.c
+        ctype = ct.type_id
+    }
+
+    // Register in env
+    cc = _env_add(cc, name, ctype, 0)
     cc
 }
 
