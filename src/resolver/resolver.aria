@@ -20,9 +20,11 @@ struct Resolver {
     current_scope: i64
     file: str
     is_public: bool
+    pool: NodePool
+    index: DeclIndex
 }
 
-fn _new_resolver(tokens: [Token], file: str) -> Resolver =
+fn _new_resolver(tokens: [Token], pool: NodePool, index: DeclIndex, file: str) -> Resolver =
     Resolver{
         tokens: tokens,
         pos: 0,
@@ -30,7 +32,9 @@ fn _new_resolver(tokens: [Token], file: str) -> Resolver =
         diagnostics: new_bag(),
         current_scope: 0,
         file: file,
-        is_public: false
+        is_public: false,
+        pool: pool,
+        index: index
     }
 
 // --- ResolveResult ---
@@ -54,32 +58,32 @@ fn _rk(r: Resolver) -> str = token_name(_rcur(r).kind)
 fn _radv(r: Resolver) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos + 1, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
 fn _rset_pos(r: Resolver, pos: i64) -> Resolver =
     Resolver{tokens: r.tokens, pos: pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
 fn _rset_table(r: Resolver, table: SymbolTable) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
 fn _rset_diag(r: Resolver, diag: DiagnosticBag) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: diag, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
 fn _rset_scope(r: Resolver, scope_id: i64) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: scope_id,
-             file: r.file, is_public: r.is_public}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
 fn _rset_public(r: Resolver, is_public: bool) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: is_public}
+             file: r.file, is_public: is_public, pool: r.pool, index: r.index}
 
 fn _rspan(r: Resolver) -> Span {
     tok := _rcur(r)
@@ -514,13 +518,14 @@ fn _pass2(r: Resolver, index: DeclIndex) -> Resolver {
 
         if kname == "fn" {
             if decl.name == "_extern" {
-                // Skip extern declarations (already registered in pass 1)
                 rr = _rset_pos(rr, decl.body_end)
             } else if decl.name.startsWith("_fixture:") {
-                // before/after fixtures — resolve like test blocks
                 rr = _resolve_test(rr)
+            } else if decl.node_idx > 0 {
+                // AST-based resolution
+                rr = _resolve_fn_ast(rr, decl.node_idx)
             } else {
-                // Skip annotations
+                // Fallback: token-walking
                 if _rk(rr) == "@" {
                     rr = _radv(rr)
                     if _rk(rr) == "IDENT" { rr = _radv(rr) }
@@ -534,14 +539,29 @@ fn _pass2(r: Resolver, index: DeclIndex) -> Resolver {
                 rr = _resolve_fn(rr)
             }
         } else if kname == "impl" {
-            rr = _resolve_impl(rr)
+            if decl.node_idx > 0 {
+                rr = _resolve_impl_ast(rr, decl.node_idx)
+            } else {
+                rr = _resolve_impl(rr)
+            }
         } else if kname == "const" {
-            rr = _resolve_const(rr)
+            if decl.node_idx > 0 {
+                rr = _resolve_const_ast(rr, decl.node_idx)
+            } else {
+                rr = _resolve_const(rr)
+            }
         } else if kname == "entry" {
-            rr = _resolve_entry(rr)
+            if decl.node_idx > 0 {
+                rr = _resolve_entry_ast(rr, decl.node_idx)
+            } else {
+                rr = _resolve_entry(rr)
+            }
         } else if kname == "test" {
-            // DkTest covers both test and bench (bench has _bench: prefix in name)
-            rr = _resolve_test(rr)
+            if decl.node_idx > 0 {
+                rr = _resolve_test_ast(rr, decl.node_idx)
+            } else {
+                rr = _resolve_test(rr)
+            }
         } else {
             // type, enum, trait, use, alias — skip (no body resolution needed)
             rr = _rset_pos(rr, decl.body_end)
@@ -552,7 +572,7 @@ fn _pass2(r: Resolver, index: DeclIndex) -> Resolver {
     rr
 }
 
-// --- Resolve function declaration ---
+// --- Resolve function declaration --- (LEGACY: token-walking fallback for impl methods and extern/fixture)
 
 fn _resolve_fn(r: Resolver) -> Resolver {
     parent_scope := r.current_scope
@@ -651,7 +671,130 @@ fn _resolve_fn(r: Resolver) -> Resolver {
     _pop_scope(rr, parent_scope)
 }
 
-// --- Resolve impl block ---
+// --- AST-based fn resolution ---
+
+fn _resolve_fn_ast(r: Resolver, node_idx: i64) -> Resolver {
+    node := pool_get(r.pool, node_idx)
+    parent_scope := r.current_scope
+
+    // Push function scope
+    mut rr := _push_scope(r, ScFunction, node.s1)
+
+    // Token-walk for generic params (keep existing logic)
+    // Position to the fn keyword in tokens
+    rr = _rset_pos(rr, r.pos)
+    if _rk(rr) == "@" {
+        rr = _radv(rr)
+        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+        if _rk(rr) == "(" {
+            rr = _radv(rr)
+            while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+        rr = _rskip_nl(rr)
+    }
+    rr = _radv(rr)  // skip "fn"
+    rr = _radv(rr)  // skip name
+
+    // Generic params — keep token-walking
+    if _rk(rr) == "[" {
+        rr = _radv(rr)
+        while _rk(rr) != "]" && _rk(rr) != "EOF" {
+            if _rk(rr) == "IDENT" {
+                gname := _rcur(rr).text
+                gspan := _rspan(rr)
+                rr = _add_sym(rr, gname, SkType, gspan, false, false)
+                rr = _radv(rr)
+                if _rk(rr) == ":" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                }
+            } else {
+                rr = _radv(rr)
+            }
+            if _rk(rr) == "," { rr = _radv(rr) }
+        }
+        if _rk(rr) == "]" { rr = _radv(rr) }
+    }
+
+    // Register parameters from EkParam index nodes
+    mut pi := 0
+    while pi < node.list_count {
+        idx_node := pool_get(rr.pool, node.list_start + pi)
+        param_node := pool_get(rr.pool, idx_node.c0)
+        pname := param_node.s1
+        plen := pname.len()
+        if plen > 0 {
+            rr = _add_sym_warn_shadow(rr, pname, SkParameter, param_node.span, false)
+        }
+        pi = pi + 1
+    }
+
+    // Resolve body from AST
+    if node.b1 {
+        rr = _resolve_expr_node(rr, node.c0)
+    }
+
+    _pop_scope(rr, parent_scope)
+}
+
+// --- AST-based const resolution ---
+
+fn _resolve_const_ast(r: Resolver, node_idx: i64) -> Resolver {
+    node := pool_get(r.pool, node_idx)
+    // c0 = value expression
+    _resolve_expr_node(r, node.c0)
+}
+
+// --- AST-based entry resolution ---
+
+fn _resolve_entry_ast(r: Resolver, node_idx: i64) -> Resolver {
+    node := pool_get(r.pool, node_idx)
+    parent_scope := r.current_scope
+    mut rr := _push_scope(r, ScFunction, "entry")
+    // entry/test nodes copy list_start/list_count from inner block
+    // These are index nodes: c0 points to actual statement
+    mut si := 0
+    while si < node.list_count {
+        idx_node := pool_get(r.pool, node.list_start + si)
+        rr = _resolve_expr_node(rr, idx_node.c0)
+        si = si + 1
+    }
+    _pop_scope(rr, parent_scope)
+}
+
+// --- AST-based test resolution ---
+
+fn _resolve_test_ast(r: Resolver, node_idx: i64) -> Resolver {
+    node := pool_get(r.pool, node_idx)
+    parent_scope := r.current_scope
+    mut rr := _push_scope(r, ScFunction, "test")
+    mut si := 0
+    while si < node.list_count {
+        idx_node := pool_get(r.pool, node.list_start + si)
+        rr = _resolve_expr_node(rr, idx_node.c0)
+        si = si + 1
+    }
+    _pop_scope(rr, parent_scope)
+}
+
+// --- AST-based impl resolution ---
+
+fn _resolve_impl_ast(r: Resolver, node_idx: i64) -> Resolver {
+    node := pool_get(r.pool, node_idx)
+    mut rr := r
+    // Iterate over methods (index nodes at list_start + i)
+    mut mi := 0
+    while mi < node.list_count {
+        idx_node := pool_get(r.pool, node.list_start + mi)
+        method_idx := idx_node.c0
+        rr = _resolve_fn_ast(rr, method_idx)
+        mi = mi + 1
+    }
+    rr
+}
+
+// --- Resolve impl block --- (LEGACY: token-walking fallback)
 
 fn _resolve_impl(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "impl"
@@ -680,7 +823,7 @@ fn _resolve_impl(r: Resolver) -> Resolver {
     rr
 }
 
-// --- Resolve const declaration ---
+// --- Resolve const declaration --- (LEGACY: token-walking fallback)
 
 fn _resolve_const(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "const"
@@ -697,7 +840,7 @@ fn _resolve_const(r: Resolver) -> Resolver {
     rr
 }
 
-// --- Resolve entry block ---
+// --- Resolve entry block --- (LEGACY: token-walking fallback)
 
 fn _resolve_entry(r: Resolver) -> Resolver {
     parent_scope := r.current_scope
@@ -707,7 +850,7 @@ fn _resolve_entry(r: Resolver) -> Resolver {
     _pop_scope(rr, parent_scope)
 }
 
-// --- Resolve test block ---
+// --- Resolve test block --- (LEGACY: token-walking fallback)
 
 fn _resolve_test(r: Resolver) -> Resolver {
     parent_scope := r.current_scope
@@ -719,7 +862,7 @@ fn _resolve_test(r: Resolver) -> Resolver {
     return _pop_scope(rr, parent_scope)
 }
 
-// --- Resolve block { ... } ---
+// --- Resolve block { ... } --- (LEGACY: token-walking, used by impl methods)
 
 fn _resolve_block(r: Resolver) -> Resolver {
     lb := "\{"
@@ -1213,6 +1356,314 @@ fn _resolve_ident(r: Resolver) -> Resolver {
     _radv(r)
 }
 
+// --- AST-based identifier resolution ---
+
+fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
+    found := lookup(r.table, r.current_scope, name)
+    if found.name == "" {
+        q := _q()
+        suggestion := _find_similar_name(r, name)
+        mut msg := "unresolved name " + q + name + q
+        if suggestion != "" {
+            msg = msg + ". Did you mean " + q + suggestion + q + "?"
+        }
+        return _rset_diag(r, bag_add_error(r.diagnostics, E0701, msg, span))
+    }
+    if found.is_public == false && found.span.file != "" && found.span.file != "<builtin>" && found.span.file != r.file {
+        q := _q()
+        return _rset_diag(r, bag_add_error(r.diagnostics, E0704, "symbol " + q + name + q + " is private to module " + q + found.span.file + q, span))
+    }
+    r
+}
+
+// --- AST expression walker ---
+
+fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
+    if idx <= 0 { return r }
+    node := pool_get(r.pool, idx)
+    nk := expr_kind_name(node.kind)
+
+    // Literals and control flow atoms — nothing to resolve
+    if nk == "IntLit" || nk == "FloatLit" || nk == "StringLit" || nk == "BoolLit" ||
+       nk == "None" || nk == "Break" || nk == "Continue" { return r }
+
+    if nk == "Ident" {
+        return _resolve_ident_by_name(r, node.s1, node.span)
+    }
+
+    if nk == "Binary" {
+        // Special case: ":=" is a binding (Pratt parser handles it as infix)
+        if node.s1 == ":=" {
+            // c0=lhs (name), c1=rhs (value) — resolve value first, then add binding
+            lhs := pool_get(r.pool, node.c0)
+            mut rr := _resolve_expr_node(r, node.c1)
+            if expr_kind_name(lhs.kind) == "Ident" {
+                rr = _add_sym_warn_shadow(rr, lhs.s1, SkVariable, lhs.span, false)
+            }
+            return rr
+        }
+        // Special case: "=" is an assignment
+        if node.s1 == "=" {
+            rr := _resolve_expr_node(r, node.c0)
+            return _resolve_expr_node(rr, node.c1)
+        }
+        rr := _resolve_expr_node(r, node.c0)
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "Pipeline" || nk == "Range" {
+        rr := _resolve_expr_node(r, node.c0)
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "Unary" || nk == "AssertOk" || nk == "Defer" {
+        return _resolve_expr_node(r, node.c0)
+    }
+
+    if nk == "Propagate" {
+        mut rr := _resolve_expr_node(r, node.c0)
+        // ? |e| transform: b1=true, s1=error binding name, c1=transform body
+        if node.b1 {
+            slen := node.s1.len()
+            if slen > 0 && node.s1 != "_" {
+                rr = _add_sym_warn_shadow(rr, node.s1, SkParameter, node.span, false)
+            }
+            rr = _resolve_expr_node(rr, node.c1)
+        }
+        return rr
+    }
+
+    if nk == "Return" {
+        if node.b1 { return _resolve_expr_node(r, node.c0) }
+        return r
+    }
+
+    if nk == "Assign" {
+        rr := _resolve_expr_node(r, node.c0)
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "FieldAccess" {
+        // Only resolve the receiver (c0), not the field name
+        return _resolve_expr_node(r, node.c0)
+    }
+
+    if nk == "Index" {
+        rr := _resolve_expr_node(r, node.c0)
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "Call" {
+        // c0 = callee, list = args
+        mut rr := _resolve_expr_node(r, node.c0)
+        mut ai := 0
+        while ai < node.list_count {
+            rr = _resolve_expr_node(rr, node.list_start + ai)
+            ai = ai + 1
+        }
+        return rr
+    }
+
+    if nk == "MethodCall" {
+        // c0 = receiver, list = args (method name s1 is not a reference)
+        mut rr := _resolve_expr_node(r, node.c0)
+        mut ai := 0
+        while ai < node.list_count {
+            rr = _resolve_expr_node(rr, node.list_start + ai)
+            ai = ai + 1
+        }
+        return rr
+    }
+
+    if nk == "Array" || nk == "Tuple" {
+        mut rr := r
+        mut ai := 0
+        while ai < node.list_count {
+            rr = _resolve_expr_node(rr, node.list_start + ai)
+            ai = ai + 1
+        }
+        return rr
+    }
+
+    if nk == "Struct" {
+        // Struct literal: s1 is type name, "_update" for record update .{field: val}
+        mut rr := r
+        if node.s1 != "_update" {
+            rr = _resolve_ident_by_name(r, node.s1, node.span)
+        }
+        mut fi := 0
+        while fi < node.list_count {
+            rr = _resolve_expr_node(rr, node.list_start + fi)
+            fi = fi + 1
+        }
+        return rr
+    }
+
+    if nk == "Block" {
+        parent_scope := r.current_scope
+        mut rr := _push_scope(r, ScBlock, "")
+        mut si := 0
+        while si < node.list_count {
+            // Block children are index nodes: c0 points to actual statement
+            idx_node := pool_get(r.pool, node.list_start + si)
+            rr = _resolve_expr_node(rr, idx_node.c0)
+            si = si + 1
+        }
+        return _pop_scope(rr, parent_scope)
+    }
+
+    if nk == "If" {
+        // c0=cond, c1=then, c2=else (if b1)
+        mut rr := _resolve_expr_node(r, node.c0)
+        rr = _resolve_expr_node(rr, node.c1)
+        if node.b1 { rr = _resolve_expr_node(rr, node.c2) }
+        return rr
+    }
+
+    if nk == "While" {
+        // c0=cond, c1=body
+        rr := _resolve_expr_node(r, node.c0)
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "Loop" {
+        return _resolve_expr_node(r, node.c0)
+    }
+
+    if nk == "For" {
+        // s1=pattern name, c0=iter expr, c1=body
+        parent_scope := r.current_scope
+        mut rr := _push_scope(r, ScBlock, "for")
+        rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, false)
+        rr = _resolve_expr_node(rr, node.c0)
+        rr = _resolve_expr_node(rr, node.c1)
+        return _pop_scope(rr, parent_scope)
+    }
+
+    if nk == "Binding" {
+        // c0=value, s1=name, b1=is_mut
+        mut rr := _resolve_expr_node(r, node.c0)
+        rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, node.b1)
+        return rr
+    }
+
+    if nk == "Closure" {
+        // s1=params (comma-joined), c0=body
+        parent_scope := r.current_scope
+        mut rr := _push_scope(r, ScFunction, "closure")
+        // Register parameters
+        if node.s1.len() > 0 {
+            rr = _register_param_names(rr, node.s1, node.span)
+        }
+        rr = _resolve_expr_node(rr, node.c0)
+        return _pop_scope(rr, parent_scope)
+    }
+
+    if nk == "Match" {
+        // c0=subject, list=pairs of (pattern_idx_node, body_idx_node)
+        mut rr := _resolve_expr_node(r, node.c0)
+        mut ai := 0
+        while ai < node.list_count {
+            parent_scope := rr.current_scope
+            rr = _push_scope(rr, ScBlock, "match_arm")
+            // Pattern index node at list_start + ai*2
+            pat_idx_node := pool_get(r.pool, node.list_start + ai * 2)
+            rr = _resolve_pattern_bindings(rr, pat_idx_node.c0)
+            // Body index node at list_start + ai*2 + 1
+            body_idx_node := pool_get(r.pool, node.list_start + ai * 2 + 1)
+            rr = _resolve_expr_node(rr, body_idx_node.c0)
+            rr = _pop_scope(rr, parent_scope)
+            ai = ai + 1
+        }
+        return rr
+    }
+
+    if nk == "With" {
+        // s1=binding name, c0=resource expr, c1=body
+        mut rr := _resolve_expr_node(r, node.c0)
+        slen := node.s1.len()
+        if slen > 0 {
+            rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, false)
+        }
+        return _resolve_expr_node(rr, node.c1)
+    }
+
+    if nk == "Catch" {
+        // c0=expr, c1=handler body, s1=error binding name
+        mut rr := _resolve_expr_node(r, node.c0)
+        parent_scope := rr.current_scope
+        rr = _push_scope(rr, ScBlock, "catch")
+        slen := node.s1.len()
+        if slen > 0 {
+            rr = _add_sym_warn_shadow(rr, node.s1, SkParameter, node.span, false)
+        }
+        rr = _resolve_expr_node(rr, node.c1)
+        return _pop_scope(rr, parent_scope)
+    }
+
+    // Fallback — skip unknown kinds
+    r
+}
+
+// Register comma-separated parameter names
+fn _register_param_names(r: Resolver, params: str, span: Span) -> Resolver {
+    mut rr := r
+    mut start := 0
+    plen := params.len()
+    mut i := 0
+    while i < plen {
+        ch := params.charAt(i)
+        if ch == "," {
+            if i > start {
+                name := params.substring(start, i)
+                rr = _add_sym_warn_shadow(rr, name, SkParameter, span, false)
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    // Last parameter
+    if start < plen {
+        name := params.substring(start, plen)
+        rr = _add_sym_warn_shadow(rr, name, SkParameter, span, false)
+    }
+    rr
+}
+
+// Walk a pattern AST node and register bindings for destructured variables
+fn _resolve_pattern_bindings(r: Resolver, idx: i64) -> Resolver {
+    if idx <= 0 { return r }
+    node := pool_get(r.pool, idx)
+    nk := expr_kind_name(node.kind)
+
+    if nk == "Ident" {
+        name := node.s1
+        if name == "_" { return r }
+        // Check if it's a known variant/type — don't bind those
+        existing := lookup(r.table, r.current_scope, name)
+        if existing.name != "" && (sk_eq(existing.kind, SkVariant) || sk_eq(existing.kind, SkType) || sk_eq(existing.kind, SkBuiltin)) {
+            return r
+        }
+        // It's a binding pattern
+        return _add_sym_warn_shadow(r, name, SkVariable, node.span, false)
+    }
+
+    if nk == "Call" {
+        // Destructure pattern: Variant(x, y) — s1 is variant name, list children are sub-patterns
+        // Don't bind the variant name, but bind the sub-pattern identifiers
+        mut rr := r
+        mut pi := 0
+        while pi < node.list_count {
+            rr = _resolve_pattern_bindings(rr, node.list_start + pi)
+            pi = pi + 1
+        }
+        return rr
+    }
+
+    // Literals and other patterns: nothing to bind
+    r
+}
+
 // --- Resolve if expression ---
 
 fn _resolve_if(r: Resolver) -> Resolver {
@@ -1553,9 +2004,9 @@ fn _skip_type_tokens(r: Resolver) -> Resolver {
 // Public API
 // ============================================================
 
-fn resolve(tokens: [Token], index: DeclIndex, file: str) -> ResolveResult {
+fn resolve(tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult {
     // Create resolver
-    mut r := _new_resolver(tokens, file)
+    mut r := _new_resolver(tokens, pool, index, file)
 
     // Create universe scope (id=1) with builtins
     r = _push_scope(r, ScUniverse, "universe")

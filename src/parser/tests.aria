@@ -15,7 +15,7 @@ fn _parse_one(source: str) -> PR {
     lex := tokenize(source, "test.aria")
     tokens := get_tokens(lex)
     // Skip sentinel at index 0: create parser starting at pos 1
-    p := Parser{tokens: tokens, pos: 1, diagnostics: new_bag()}
+    p := Parser{tokens: tokens, pos: 1, pool: new_pool(), diagnostics: new_bag()}
     _parse_expr(p, 0)
 }
 
@@ -141,4 +141,250 @@ test "parse full program no errors" {
     source := "mod main\nfn add(a: i64, b: i64) -> i64 = a + b"
     r := _lex_parse(source)
     assert bag_has_errors(r.p.diagnostics) == false
+}
+
+// ============================================================
+// Pool Structure Tests — verify AST children are linked
+// ============================================================
+
+fn _pool(r: PR) -> NodePool = r.p.pool
+
+test "pool: binary has children" {
+    r := _parse_one("1 + 2")
+    assert _ek(r.e) == "Binary"
+    assert r.e.c0 > 0
+    assert r.e.c1 > 0
+    left := pool_get(_pool(r), r.e.c0)
+    right := pool_get(_pool(r), r.e.c1)
+    assert _ek(left) == "IntLit"
+    assert left.s1 == "1"
+    assert _ek(right) == "IntLit"
+    assert right.s1 == "2"
+}
+
+test "pool: unary has operand" {
+    r := _parse_one("-5")
+    assert _ek(r.e) == "Unary"
+    assert r.e.c0 > 0
+    operand := pool_get(_pool(r), r.e.c0)
+    assert _ek(operand) == "IntLit"
+    assert operand.s1 == "5"
+}
+
+test "pool: call has args" {
+    r := _parse_one("foo(1, 2)")
+    assert _ek(r.e) == "Call"
+    assert r.e.s1 == "foo"
+    assert r.e.list_count == 2
+    assert r.e.list_start > 0
+    arg0 := pool_get(_pool(r), r.e.list_start)
+    arg1 := pool_get(_pool(r), r.e.list_start + 1)
+    assert _ek(arg0) == "IntLit"
+    assert arg0.s1 == "1"
+    assert _ek(arg1) == "IntLit"
+    assert arg1.s1 == "2"
+}
+
+test "pool: method call has receiver" {
+    r := _parse_one("x.len()")
+    assert _ek(r.e) == "MethodCall"
+    assert r.e.c0 > 0
+    recv := pool_get(_pool(r), r.e.c0)
+    assert _ek(recv) == "Ident"
+    assert recv.s1 == "x"
+}
+
+test "pool: field access has receiver" {
+    r := _parse_one("x.y")
+    assert _ek(r.e) == "FieldAccess"
+    assert r.e.c0 > 0
+    recv := pool_get(_pool(r), r.e.c0)
+    assert _ek(recv) == "Ident"
+    assert recv.s1 == "x"
+}
+
+test "pool: index has object and subscript" {
+    r := _parse_one("arr[0]")
+    assert _ek(r.e) == "Index"
+    assert r.e.c0 > 0
+    assert r.e.c1 > 0
+    obj := pool_get(_pool(r), r.e.c0)
+    idx := pool_get(_pool(r), r.e.c1)
+    assert _ek(obj) == "Ident"
+    assert obj.s1 == "arr"
+    assert _ek(idx) == "IntLit"
+    assert idx.s1 == "0"
+}
+
+test "pool: array has elements" {
+    r := _parse_one("[1, 2, 3]")
+    assert _ek(r.e) == "Array"
+    assert r.e.list_count == 3
+    assert r.e.list_start > 0
+    e0 := pool_get(_pool(r), r.e.list_start)
+    e1 := pool_get(_pool(r), r.e.list_start + 1)
+    e2 := pool_get(_pool(r), r.e.list_start + 2)
+    assert e0.s1 == "1"
+    assert e1.s1 == "2"
+    assert e2.s1 == "3"
+}
+
+test "pool: program pool is non-empty" {
+    source := "mod main\nconst X: i64 = 42\nfn foo() -> i64 = 1 + 2"
+    r := _lex_parse(source)
+    assert bag_has_errors(r.p.diagnostics) == false
+    assert pool_size(_pool(r)) > 3
+}
+
+test "pool: nested binary" {
+    r := _parse_one("1 + 2 * 3")
+    assert _ek(r.e) == "Binary"
+    assert r.e.s1 == "+"
+    left := pool_get(_pool(r), r.e.c0)
+    right := pool_get(_pool(r), r.e.c1)
+    assert _ek(left) == "IntLit"
+    assert left.s1 == "1"
+    assert _ek(right) == "Binary"
+    assert right.s1 == "*"
+    rl := pool_get(_pool(r), right.c0)
+    rr := pool_get(_pool(r), right.c1)
+    assert _ek(rl) == "IntLit"
+    assert rl.s1 == "2"
+    assert _ek(rr) == "IntLit"
+    assert rr.s1 == "3"
+}
+
+// ============================================================
+// Enriched AST Tests — EkParam, EkField, EkVariant
+// ============================================================
+
+test "fn decl has EkParam children" {
+    source := "mod main\nfn add(a: i64, b: i64) -> i64 = a + b"
+    r := _lex_parse(source)
+    pool := _pool(r)
+    // Find the FnDecl in the root block's children
+    root := r.e
+    mut fn_node := _no_expr()
+    mut si := 0
+    while si < root.list_count {
+        idx_node := pool_get(pool, root.list_start + si)
+        child := pool_get(pool, idx_node.c0)
+        ek := _ek(child)
+        if ek == "FnDecl" {
+            fn_node = child
+        }
+        si = si + 1
+    }
+    assert _ek(fn_node) == "FnDecl"
+    assert fn_node.s1 == "add"
+    assert fn_node.list_count == 2
+    // Check param nodes
+    p0_idx := pool_get(pool, fn_node.list_start)
+    p0 := pool_get(pool, p0_idx.c0)
+    assert _ek(p0) == "Param"
+    assert p0.s1 == "a"
+    assert p0.c0 > 0
+    assert p0.b1 == false
+    p1_idx := pool_get(pool, fn_node.list_start + 1)
+    p1 := pool_get(pool, p1_idx.c0)
+    assert _ek(p1) == "Param"
+    assert p1.s1 == "b"
+}
+
+test "fn decl captures generics in s2" {
+    source := "mod main\nfn id[T](x: T) -> T = x"
+    r := _lex_parse(source)
+    pool := _pool(r)
+    root := r.e
+    mut fn_node := _no_expr()
+    mut si := 0
+    while si < root.list_count {
+        idx_node := pool_get(pool, root.list_start + si)
+        child := pool_get(pool, idx_node.c0)
+        if _ek(child) == "FnDecl" { fn_node = child }
+        si = si + 1
+    }
+    assert fn_node.s2 == "T"
+    assert fn_node.b2 == true
+}
+
+test "fn decl self param is_self" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod main\nstruct Foo " + lb + " x: i64 " + rb + "\nimpl Foo " + lb + "\n    fn get(self) -> i64 = self.x\n" + rb
+    r := _lex_parse(source)
+    pool := _pool(r)
+    root := r.e
+    // Find the impl, then find the method
+    mut impl_node := _no_expr()
+    mut si := 0
+    while si < root.list_count {
+        idx_node := pool_get(pool, root.list_start + si)
+        child := pool_get(pool, idx_node.c0)
+        if _ek(child) == "ImplDecl" { impl_node = child }
+        si = si + 1
+    }
+    assert _ek(impl_node) == "ImplDecl"
+    // Get first method
+    m0_idx := pool_get(pool, impl_node.list_start)
+    method := pool_get(pool, m0_idx.c0)
+    assert _ek(method) == "FnDecl"
+    assert method.s1 == "get"
+    // First param should be self
+    p0_idx := pool_get(pool, method.list_start)
+    p0 := pool_get(pool, p0_idx.c0)
+    assert _ek(p0) == "Param"
+    assert p0.s1 == "self"
+    assert p0.b1 == true
+}
+
+test "type decl has EkField children for struct" {
+    lb := "\{"
+    rb := "\}"
+    source := "mod main\nstruct Point " + lb + "\n    x: i64\n    y: i64\n" + rb
+    r := _lex_parse(source)
+    pool := _pool(r)
+    root := r.e
+    mut td := _no_expr()
+    mut si := 0
+    while si < root.list_count {
+        idx_node := pool_get(pool, root.list_start + si)
+        child := pool_get(pool, idx_node.c0)
+        if _ek(child) == "TypeDecl" { td = child }
+        si = si + 1
+    }
+    assert _ek(td) == "TypeDecl"
+    assert td.s1 == "Point"
+    assert td.b1 == false
+    assert td.list_count == 2
+    f0_idx := pool_get(pool, td.list_start)
+    f0 := pool_get(pool, f0_idx.c0)
+    assert _ek(f0) == "Field"
+    assert f0.s1 == "x"
+    f1_idx := pool_get(pool, td.list_start + 1)
+    f1 := pool_get(pool, f1_idx.c0)
+    assert _ek(f1) == "Field"
+    assert f1.s1 == "y"
+}
+
+test "type decl has EkVariant children for sum type" {
+    source := "mod main\ntype Color =\n    | Red\n    | Green\n    | Blue"
+    r := _lex_parse(source)
+    pool := _pool(r)
+    root := r.e
+    mut td := _no_expr()
+    mut si := 0
+    while si < root.list_count {
+        idx_node := pool_get(pool, root.list_start + si)
+        child := pool_get(pool, idx_node.c0)
+        if _ek(child) == "TypeDecl" { td = child }
+        si = si + 1
+    }
+    assert _ek(td) == "TypeDecl"
+    assert td.b1 == true
+    assert td.list_count == 3
+    v0_idx := pool_get(pool, td.list_start)
+    v0 := pool_get(pool, v0_idx.c0)
+    assert _ek(v0) == "Variant"
+    assert v0.s1 == "Red"
 }

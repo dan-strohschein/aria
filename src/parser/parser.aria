@@ -9,11 +9,17 @@ mod parser
 struct Parser {
     tokens: [Token]
     pos: i64
+    pool: NodePool
     diagnostics: DiagnosticBag
 }
 
 fn new_parser(tokens: [Token]) -> Parser =
-    Parser{tokens: tokens, pos: 0, diagnostics: new_bag()}
+    Parser{tokens: tokens, pos: 0, pool: new_pool(), diagnostics: new_bag()}
+
+fn _pidx(p: Parser) -> i64 = pool_size(p.pool)
+
+fn _padd(p: Parser, e: Expr) -> Parser =
+    Parser{tokens: p.tokens, pos: p.pos, pool: pool_add(p.pool, e), diagnostics: p.diagnostics}
 
 fn _cur(p: Parser) -> Token {
     if p.pos >= p.tokens.len() {
@@ -36,13 +42,13 @@ fn _pspan(p: Parser) -> Span {
 }
 
 fn _adv(p: Parser) -> Parser =
-    Parser{tokens: p.tokens, pos: p.pos + 1, diagnostics: p.diagnostics}
+    Parser{tokens: p.tokens, pos: p.pos + 1, pool: p.pool, diagnostics: p.diagnostics}
 
 fn _expect(p: Parser, expected: str) -> Parser {
     if _ck(p) == expected { return _adv(p) }
     tok := _cur(p)
     span := new_span("", tok.line, tok.col, tok.offset, tok.text.len())
-    Parser{tokens: p.tokens, pos: p.pos,
+    Parser{tokens: p.tokens, pos: p.pos, pool: p.pool,
            diagnostics: bag_add_error(p.diagnostics, E0001, "expected " + expected + ", got " + _ck(p), span)}
 }
 
@@ -55,7 +61,7 @@ fn _skip_nl(p: Parser) -> Parser {
 fn _perror(p: Parser, code: str, msg: str) -> Parser {
     tok := _cur(p)
     span := new_span("", tok.line, tok.col, tok.offset, tok.text.len())
-    Parser{tokens: p.tokens, pos: p.pos,
+    Parser{tokens: p.tokens, pos: p.pos, pool: p.pool,
            diagnostics: bag_add_error(p.diagnostics, code, msg, span)}
 }
 
@@ -66,10 +72,39 @@ struct PR {
     e: Expr
 }
 
+// Check if name looks like a PascalCase type name (starts uppercase, has lowercase)
+fn _is_upper_start(name: str) -> bool {
+    nlen := name.len()
+    if nlen == 0 { return false }
+    ch := name.charAt(0)
+    mut is_upper := ch == "A" || ch == "B" || ch == "C" || ch == "D" || ch == "E" ||
+        ch == "F" || ch == "G" || ch == "H" || ch == "I" || ch == "J" ||
+        ch == "K" || ch == "L" || ch == "M" || ch == "N" || ch == "O" ||
+        ch == "P" || ch == "Q" || ch == "R" || ch == "S" || ch == "T" ||
+        ch == "U" || ch == "V" || ch == "W" || ch == "X" || ch == "Y" || ch == "Z"
+    if is_upper == false { return false }
+    // Reject SCREAMING_SNAKE_CASE: if all chars are uppercase/underscore/digit, not a type
+    mut i := 1
+    while i < nlen {
+        c := name.charAt(i)
+        mut is_lower := c == "a" || c == "b" || c == "c" || c == "d" || c == "e" ||
+            c == "f" || c == "g" || c == "h" || c == "i" || c == "j" ||
+            c == "k" || c == "l" || c == "m" || c == "n" || c == "o" ||
+            c == "p" || c == "q" || c == "r" || c == "s" || c == "t" ||
+            c == "u" || c == "v" || c == "w" || c == "x" || c == "y" || c == "z"
+        if is_lower { return true }
+        i = i + 1
+    }
+    // Single uppercase letter (like T) or all-caps — not a struct name
+    false
+}
+
 // --- Public API: parse a token stream ---
 
 fn parse(tokens: [Token]) -> PR {
     mut p := new_parser(tokens)
+    // Skip sentinel token at index 0
+    if _ck(p) == "EOF" && p.pos == 0 && p.tokens.len() > 1 { p = _adv(p) }
     p = _skip_nl(p)
 
     if _ck(p) == "mod" {
@@ -86,21 +121,41 @@ fn parse(tokens: [Token]) -> PR {
         p = _skip_nl(p)
     }
 
+    mut decl_indices := [0]
     mut count := 0
-    mut last := _no_expr()
     while _ck(p) != "EOF" {
         p = _skip_nl(p)
         if _ck(p) == "EOF" {
-            return PR{p: p, e: mk_block(count, _no_span())}
+            // Add index nodes for collected declarations
+            list_start := _pidx(p)
+            mut di := 0
+            while di < count {
+                p = _padd(p, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                   c0: decl_indices[di + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                di = di + 1
+            }
+            return PR{p: p, e: Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+                                     c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: _no_span()}}
         }
         result := _parse_top(p)
-        p = result.p
-        last = result.e
+        decl_idx := _pidx(result.p)
+        p = _padd(result.p, result.e)
+        decl_indices = decl_indices.append(decl_idx)
         count = count + 1
         p = _skip_nl(p)
     }
 
-    PR{p: p, e: mk_block(count, _no_span())}
+    // Add index nodes for collected declarations
+    list_start := _pidx(p)
+    mut di := 0
+    while di < count {
+        p = _padd(p, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                           c0: decl_indices[di + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        di = di + 1
+    }
+
+    PR{p: p, e: Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+                      c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: _no_span()}}
 }
 
 // ============================================================
@@ -140,14 +195,14 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             pos = pos + 1
         }
         use_end := pos
-        idx = decl_index_add(idx, DeclInfo{kind: DkUse, name: name, token_start: use_start, body_start: use_start, body_end: use_end, is_pub: false})
+        idx = decl_index_add(idx, DeclInfo{kind: DkUse, name: name, token_start: use_start, body_start: use_start, body_end: use_end, is_pub: false, node_idx: 0})
         while pos < len && token_name(tokens[pos].kind) == "NEWLINE" { pos = pos + 1 }
     }
 
     // Scan top-level declarations
     while pos < len && token_name(tokens[pos].kind) != "EOF" {
         while pos < len && token_name(tokens[pos].kind) == "NEWLINE" { pos = pos + 1 }
-        if pos >= len || token_name(tokens[pos].kind) == "EOF" { return ParseResult{index: idx, diagnostics: new_bag()} }
+        if pos >= len || token_name(tokens[pos].kind) == "EOF" { return ParseResult{index: idx, pool: new_pool(), diagnostics: new_bag()} }
 
         mut is_pub := false
         if token_name(tokens[pos].kind) == "pub" {
@@ -167,7 +222,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             while pos < len && token_name(tokens[pos].kind) == "NEWLINE" { pos = pos + 1 }
         }
 
-        if pos >= len || token_name(tokens[pos].kind) == "EOF" { return ParseResult{index: idx, diagnostics: new_bag()} }
+        if pos >= len || token_name(tokens[pos].kind) == "EOF" { return ParseResult{index: idx, pool: new_pool(), diagnostics: new_bag()} }
 
         k := token_name(tokens[pos].kind)
         lb := "\{"
@@ -190,7 +245,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             } else if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "type" || k == "struct" {
             decl_start := pos
             pos = pos + 1  // skip "type"/"struct"
@@ -235,7 +290,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == "derives" {
                 while pos < len && token_name(tokens[pos].kind) != "NEWLINE" && token_name(tokens[pos].kind) != "EOF" { pos = pos + 1 }
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkType, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkType, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "enum" {
             decl_start := pos
             pos = pos + 1
@@ -248,7 +303,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkEnum, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkEnum, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "trait" {
             decl_start := pos
             pos = pos + 1
@@ -262,7 +317,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkTrait, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkTrait, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "impl" {
             decl_start := pos
             pos = pos + 1
@@ -275,7 +330,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkImpl, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkImpl, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "const" {
             decl_start := pos
             pos = pos + 1
@@ -285,7 +340,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             }
             // Skip to end of line (const values are single-expression)
             while pos < len && token_name(tokens[pos].kind) != "NEWLINE" && token_name(tokens[pos].kind) != "EOF" { pos = pos + 1 }
-            idx = decl_index_add(idx, DeclInfo{kind: DkConst, name: name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkConst, name: name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "entry" {
             decl_start := pos
             pos = pos + 1
@@ -294,7 +349,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkEntry, name: "", token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false})
+            idx = decl_index_add(idx, DeclInfo{kind: DkEntry, name: "", token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false, node_idx: 0})
         } else if k == "test" {
             decl_start := pos
             pos = pos + 1
@@ -308,7 +363,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkTest, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false})
+            idx = decl_index_add(idx, DeclInfo{kind: DkTest, name: name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false, node_idx: 0})
         } else if k == "bench" {
             decl_start := pos
             pos = pos + 1
@@ -322,7 +377,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             if pos < len && token_name(tokens[pos].kind) == lb {
                 pos = _bdi_skip_braces(tokens, pos, len)
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkTest, name: "_bench:" + name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false})
+            idx = decl_index_add(idx, DeclInfo{kind: DkTest, name: "_bench:" + name, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false, node_idx: 0})
         } else if k == "extern" {
             decl_start := pos
             pos = pos + 1
@@ -334,7 +389,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             } else if pos < len && token_name(tokens[pos].kind) == "fn" {
                 while pos < len && token_name(tokens[pos].kind) != "NEWLINE" && token_name(tokens[pos].kind) != "EOF" { pos = pos + 1 }
             }
-            idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: "_extern", token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: "_extern", token_start: decl_start, body_start: body_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "IDENT" && pos < len && tokens[pos].text == "alias" {
             decl_start := pos
             pos = pos + 1  // skip "alias"
@@ -343,7 +398,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
                 name = tokens[pos].text
             }
             while pos < len && token_name(tokens[pos].kind) != "NEWLINE" && token_name(tokens[pos].kind) != "EOF" { pos = pos + 1 }
-            idx = decl_index_add(idx, DeclInfo{kind: DkType, name: "_alias:" + name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub})
+            idx = decl_index_add(idx, DeclInfo{kind: DkType, name: "_alias:" + name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if (k == "before" || k == "after") {
             // Check if followed by { (fixture block)
             decl_start := pos
@@ -355,7 +410,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
                 while pos < len && token_name(tokens[pos].kind) == "NEWLINE" { pos = pos + 1 }
                 body_start := pos
                 pos = _bdi_skip_braces(tokens, pos, len)
-                idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: "_fixture:" + fixture_kind, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false})
+                idx = decl_index_add(idx, DeclInfo{kind: DkFn, name: "_fixture:" + fixture_kind, token_start: decl_start, body_start: body_start, body_end: pos, is_pub: false, node_idx: 0})
             } else {
                 // Not a fixture — skip as unknown
                 pos = pos + 1
@@ -368,7 +423,60 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
         while pos < len && token_name(tokens[pos].kind) == "NEWLINE" { pos = pos + 1 }
     }
 
-    ParseResult{index: idx, diagnostics: new_bag()}
+    // Also run the full parser to build the AST pool
+    pr := parse(tokens)
+    result := _bridge_ast_to_decl_index(idx, pr.p.pool, pr.e)
+    ParseResult{index: result, pool: pr.p.pool, diagnostics: new_bag()}
+}
+
+fn _bridge_ast_to_decl_index(idx: DeclIndex, pool: NodePool, root: Expr) -> DeclIndex {
+    mut out := idx
+    mut ni := 0
+    while ni < root.list_count {
+        // Root children are index nodes: c0 points to actual declaration
+        idx_node := pool_get(pool, root.list_start + ni)
+        actual_idx := idx_node.c0
+        node := pool_get(pool, actual_idx)
+        nk := expr_kind_name(node.kind)
+        mut node_name := ""
+        mut is_decl := false
+        if nk == "FnDecl" || nk == "ConstDecl" || nk == "TypeDecl" || nk == "EnumDecl" || nk == "TraitDecl" || nk == "ImplDecl" {
+            node_name = node.s1
+            is_decl = true
+        } else if nk == "Block" && node.s1 == "_entry" {
+            node_name = ""
+            is_decl = true
+        } else if nk == "Block" && node.s1.startsWith("_test:") {
+            slen := node.s1.len()
+            node_name = node.s1.substring(6, slen)
+            is_decl = true
+        }
+        if is_decl {
+            mut di := 1
+            while di < decl_index_len(out) {
+                decl := decl_index_get(out, di)
+                mut matched := false
+                if nk == "Block" && node.s1 == "_entry" && decl_kind_name(decl.kind) == "entry" && decl.node_idx == 0 {
+                    matched = true
+                } else if nk == "Block" && node.s1.startsWith("_test:") && decl_kind_name(decl.kind) == "test" && decl.name == node_name && decl.node_idx == 0 {
+                    matched = true
+                } else if decl.name == node_name && decl.node_idx == 0 && decl_kind_name(decl.kind) != "entry" && decl_kind_name(decl.kind) != "test" {
+                    matched = true
+                }
+                if matched {
+                    updated := DeclInfo{kind: decl.kind, name: decl.name, token_start: decl.token_start,
+                                        body_start: decl.body_start, body_end: decl.body_end,
+                                        is_pub: decl.is_pub, node_idx: actual_idx}
+                    out = _decl_index_set(out, di, updated)
+                    di = decl_index_len(out)  // break
+                } else {
+                    di = di + 1
+                }
+            }
+        }
+        ni = ni + 1
+    }
+    out
 }
 
 // --- Declaration index helpers ---
@@ -549,34 +657,105 @@ fn _parse_fn(p: Parser) -> PR {
     pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
+    // Capture generic params: "T:Eq,U" format
+    mut generics := ""
     if _ck(pp) == "[" {
         pp = _adv(pp)
-        while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
-        pp = _adv(pp)
+        mut gcount := 0
+        while _ck(pp) != "]" && _ck(pp) != "EOF" {
+            if _ck(pp) == "IDENT" {
+                gname := _cur(pp).text
+                if gcount > 0 { generics = generics + "," }
+                generics = generics + gname
+                pp = _adv(pp)
+                // Capture optional trait bound ": Trait" or ": Trait + Trait2"
+                if _ck(pp) == ":" {
+                    pp = _adv(pp)
+                    if _ck(pp) == "IDENT" {
+                        generics = generics + ":" + _cur(pp).text
+                        pp = _adv(pp)
+                        while _ck(pp) == "+" {
+                            pp = _adv(pp)
+                            if _ck(pp) == "IDENT" {
+                                generics = generics + "+" + _cur(pp).text
+                                pp = _adv(pp)
+                            }
+                        }
+                    }
+                }
+                gcount = gcount + 1
+            } else {
+                pp = _adv(pp)
+            }
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        if _ck(pp) == "]" { pp = _adv(pp) }
     }
     pp = _expect(pp, "(")
-    // Collect parameter names
-    mut params := ""
+    // Collect parameters as EkParam nodes
+    mut param_indices := [0]
     mut param_count := 0
     while _ck(pp) != ")" && _ck(pp) != "EOF" {
-        if _ck(pp) == "IDENT" || _ck(pp) == "self" {
-            if param_count > 0 { params = params + "," }
-            params = params + _cur(pp).text
-            param_count = param_count + 1
+        // Accept IDENT, "self", or keywords followed by ":"
+        mut is_param := _ck(pp) == "IDENT" || _ck(pp) == "self"
+        if is_param == false {
+            npos := pp.pos + 1
+            if npos < pp.tokens.len() {
+                nk := token_name(pp.tokens[npos].kind)
+                if nk == ":" { is_param = true }
+            }
         }
-        pp = _adv(pp)
+        if is_param {
+            pname := _cur(pp).text
+            pspan := _pspan(pp)
+            pp = _adv(pp)
+            if pname == "self" {
+                // self param — no type annotation
+                pidx := _pidx(pp)
+                pp = _padd(pp, mk_param("self", 0, true, pspan))
+                param_indices = param_indices.append(pidx)
+                param_count = param_count + 1
+            } else if _ck(pp) == ":" {
+                pp = _adv(pp)  // skip ':'
+                type_tok_pos := pp.pos
+                pp = _skip_type(pp)
+                pidx := _pidx(pp)
+                pp = _padd(pp, mk_param(pname, type_tok_pos, false, pspan))
+                param_indices = param_indices.append(pidx)
+                param_count = param_count + 1
+            }
+        } else {
+            pp = _adv(pp)
+        }
+        if _ck(pp) == "," { pp = _adv(pp) }
     }
-    pp = _adv(pp)
+    pp = _adv(pp)  // skip ')'
+    // Return type
+    mut has_ret := false
+    mut ret_tok_pos := 0
     if _ck(pp) == "->" {
         pp = _adv(pp)
+        has_ret = true
+        ret_tok_pos = pp.pos
         pp = _skip_type(pp)
     }
+    // Error type
+    mut err_tok_pos := 0
     if _ck(pp) == "!" {
         pp = _adv(pp)
+        err_tok_pos = pp.pos
         pp = _skip_type(pp)
     }
+    // Skip where clause
     if _ck(pp) == "with" {
         pp = _adv(pp)
+        lb := "\{"
+        while _ck(pp) != "NEWLINE" && _ck(pp) != "EOF" && _ck(pp) != "=" && _ck(pp) != lb {
+            pp = _adv(pp)
+        }
+    }
+    // Skip where clause (keyword "where")
+    if _ck(pp) == "where" {
         lb := "\{"
         while _ck(pp) != "NEWLINE" && _ck(pp) != "EOF" && _ck(pp) != "=" && _ck(pp) != lb {
             pp = _adv(pp)
@@ -602,8 +781,22 @@ fn _parse_fn(p: Parser) -> PR {
         }
     }
     mut has_body := false
-    if expr_kind_name(body.kind) != "None" { has_body = true }
-    PR{p: pp, e: mk_fn_decl(name, params, param_count, has_body, span)}
+    mut body_idx := 0
+    if expr_kind_name(body.kind) != "None" {
+        has_body = true
+        body_idx = _pidx(pp)
+        pp = _padd(pp, body)
+    }
+    // Add index nodes for params
+    list_start := _pidx(pp)
+    mut pi := 0
+    while pi < param_count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: param_indices[pi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        pi = pi + 1
+    }
+    PR{p: pp, e: Expr{kind: EkFnDecl, s1: name, s2: generics, b1: has_body, b2: has_ret,
+                       c0: body_idx, c1: ret_tok_pos, c2: err_tok_pos, list_start: list_start, list_count: param_count, span: span}}
 }
 
 fn _skip_type(p: Parser) -> Parser {
@@ -684,57 +877,179 @@ fn _parse_type_decl(p: Parser) -> PR {
     pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
+    // Capture generic params
+    mut generics := ""
     if _ck(pp) == "[" {
         pp = _adv(pp)
-        while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
-        pp = _adv(pp)
+        mut gcount := 0
+        while _ck(pp) != "]" && _ck(pp) != "EOF" {
+            if _ck(pp) == "IDENT" {
+                gname := _cur(pp).text
+                if gcount > 0 { generics = generics + "," }
+                generics = generics + gname
+                pp = _adv(pp)
+                if _ck(pp) == ":" {
+                    pp = _adv(pp)
+                    if _ck(pp) == "IDENT" {
+                        generics = generics + ":" + _cur(pp).text
+                        pp = _adv(pp)
+                        while _ck(pp) == "+" {
+                            pp = _adv(pp)
+                            if _ck(pp) == "IDENT" {
+                                generics = generics + "+" + _cur(pp).text
+                                pp = _adv(pp)
+                            }
+                        }
+                    }
+                }
+                gcount = gcount + 1
+            } else {
+                pp = _adv(pp)
+            }
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        if _ck(pp) == "]" { pp = _adv(pp) }
     }
     lb := "\{"
     mut has_variants := false
-    mut field_count := 0
+    mut newtype_tok_pos := 0
+    mut child_indices := [0]
+    mut child_count := 0
     if _ck(pp) == "=" {
         pp = _adv(pp)
         pp = _skip_nl(pp)
     }
     if _ck(pp) == "|" {
+        // Sum type: parse variants
         has_variants = true
         while _ck(pp) == "|" {
-            field_count = field_count + 1
-            pp = _adv(pp)
+            pp = _adv(pp)  // skip |
             pp = _skip_nl(pp)
-            pp = _adv(pp)
+            vname := _cur(pp).text
+            vspan := _pspan(pp)
+            pp = _adv(pp)  // skip variant name
+            // Parse variant payload fields
+            mut vf_indices := [0]
+            mut vf_count := 0
+            mut is_tuple := false
             if _ck(pp) == "(" {
-                pp = _adv(pp)
+                is_tuple = true
+                pp = _adv(pp)  // skip (
+                mut fi := 0
                 while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                    fspan := _pspan(pp)
+                    type_tok_pos := pp.pos
                     pp = _skip_type(pp)
+                    fidx := _pidx(pp)
+                    pp = _padd(pp, mk_field("_" + i2s(fi), type_tok_pos, fspan))
+                    vf_indices = vf_indices.append(fidx)
+                    vf_count = vf_count + 1
+                    fi = fi + 1
                     if _ck(pp) == "," { pp = _adv(pp) }
                 }
-                pp = _adv(pp)
-            } else if _ck(pp) == lb { pp = _skip_braces(pp) }
+                if _ck(pp) == ")" { pp = _adv(pp) }
+            } else if _ck(pp) == lb {
+                pp = _adv(pp)  // skip {
+                pp = _skip_nl(pp)
+                rb := "\}"
+                while _ck(pp) != rb && _ck(pp) != "EOF" {
+                    if _ck(pp) == "IDENT" {
+                        fname := _cur(pp).text
+                        fspan := _pspan(pp)
+                        pp = _adv(pp)
+                        if _ck(pp) == ":" {
+                            pp = _adv(pp)
+                            type_tok_pos := pp.pos
+                            pp = _skip_type(pp)
+                            fidx := _pidx(pp)
+                            pp = _padd(pp, mk_field(fname, type_tok_pos, fspan))
+                            vf_indices = vf_indices.append(fidx)
+                            vf_count = vf_count + 1
+                        }
+                    } else {
+                        pp = _adv(pp)
+                    }
+                    pp = _skip_nl(pp)
+                    if _ck(pp) == "," { pp = _adv(pp) }
+                    pp = _skip_nl(pp)
+                }
+                if _ck(pp) == rb { pp = _adv(pp) }
+            }
+            // Add field index nodes for this variant
+            vf_list_start := _pidx(pp)
+            mut vfi := 0
+            while vfi < vf_count {
+                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                     c0: vf_indices[vfi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                vfi = vfi + 1
+            }
+            // Create variant node
+            vidx := _pidx(pp)
+            pp = _padd(pp, Expr{kind: EkVariant, s1: vname, s2: "", b1: is_tuple, b2: false,
+                                 c0: 0, c1: 0, c2: 0, list_start: vf_list_start, list_count: vf_count, span: vspan})
+            child_indices = child_indices.append(vidx)
+            child_count = child_count + 1
             pp = _skip_nl(pp)
         }
-        if _ck(pp) == "derives" {
-            pp = _adv(pp)
-            if _ck(pp) == "[" {
-                pp = _adv(pp)
-                while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
-                pp = _adv(pp)
-            }
-        }
     } else if _ck(pp) == lb {
-        pp = _skip_braces(pp)
-        if _ck(pp) == "derives" {
-            pp = _adv(pp)
-            if _ck(pp) == "[" {
+        // Struct type: parse fields
+        pp = _adv(pp)  // skip {
+        pp = _skip_nl(pp)
+        rb := "\}"
+        while _ck(pp) != rb && _ck(pp) != "EOF" {
+            if _ck(pp) == "IDENT" {
+                fname := _cur(pp).text
+                fspan := _pspan(pp)
                 pp = _adv(pp)
-                while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+                if _ck(pp) == ":" {
+                    pp = _adv(pp)
+                    type_tok_pos := pp.pos
+                    pp = _skip_type(pp)
+                    fidx := _pidx(pp)
+                    pp = _padd(pp, mk_field(fname, type_tok_pos, fspan))
+                    child_indices = child_indices.append(fidx)
+                    child_count = child_count + 1
+                }
+            } else {
                 pp = _adv(pp)
             }
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+            pp = _skip_nl(pp)
         }
+        if _ck(pp) == rb { pp = _adv(pp) }
+    } else {
+        // Newtype: type Name = Type (not | and not {)
+        // Check if we have a type to parse
+        if _ck(pp) != "NEWLINE" && _ck(pp) != "EOF" && _ck(pp) != "derives" {
+            newtype_tok_pos = pp.pos
+            pp = _skip_type(pp)
+        }
+    }
+    // Skip derives
+    if _ck(pp) == "derives" {
+        pp = _adv(pp)
+        if _ck(pp) == "[" {
+            pp = _adv(pp)
+            while _ck(pp) != "]" && _ck(pp) != "EOF" { pp = _adv(pp) }
+            pp = _adv(pp)
+        }
+    }
+    // Add index nodes for children (fields or variants)
+    list_start := _pidx(pp)
+    mut ci := 0
+    while ci < child_count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: child_indices[ci + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        ci = ci + 1
     }
     mut is_sum := false
     if has_variants { is_sum = true }
-    PR{p: pp, e: mk_type_decl(name, is_sum, field_count, span)}
+    glen := generics.len()
+    mut has_generics := false
+    if glen > 0 { has_generics = true }
+    PR{p: pp, e: Expr{kind: EkTypeDecl, s1: name, s2: generics, b1: is_sum, b2: has_generics,
+                       c0: newtype_tok_pos, c1: 0, c2: 0, list_start: list_start, list_count: child_count, span: span}}
 }
 
 fn _parse_enum_decl(p: Parser) -> PR {
@@ -765,15 +1080,64 @@ fn _parse_impl_decl(p: Parser) -> PR {
     if _ck(pp) == "IDENT" {
         impl_type = _cur(pp).text
     }
+    // Capture trait name if present: impl Type : Trait { ... }
+    mut trait_name := ""
     lb := "\{"
+    // Scan for trait name — look for : before {
+    mut scan := pp
+    while _ck(scan) != lb && _ck(scan) != "EOF" {
+        if _ck(scan) == ":" {
+            scan = _adv(scan)
+            if _ck(scan) == "IDENT" {
+                trait_name = _cur(scan).text
+            }
+        }
+        scan = _adv(scan)
+    }
+    // Advance to opening brace
     while _ck(pp) != lb && _ck(pp) != "EOF" { pp = _adv(pp) }
-    pp = _skip_braces(pp)
-    PR{p: pp, e: mk_impl_decl(impl_type, "", 0, span)}
+    if _ck(pp) != lb {
+        return PR{p: pp, e: mk_impl_decl(impl_type, trait_name, 0, span)}
+    }
+    pp = _adv(pp)  // skip {
+    pp = _skip_nl(pp)
+    // Parse methods
+    rb := "\}"
+    mut method_indices := [0]
+    mut method_count := 0
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        pp = _skip_nl(pp)
+        if _ck(pp) == "pub" { pp = _adv(pp) }
+        if _ck(pp) == "fn" {
+            result := _parse_fn(pp)
+            method_idx := _pidx(result.p)
+            pp = _padd(result.p, result.e)
+            method_indices = method_indices.append(method_idx)
+            method_count = method_count + 1
+        } else if _ck(pp) == rb || _ck(pp) == "EOF" {
+            // done
+            mut _skip := 0
+        } else {
+            pp = _adv(pp)
+        }
+        pp = _skip_nl(pp)
+    }
+    if _ck(pp) == rb { pp = _adv(pp) }
+    // Add index nodes for methods
+    list_start := _pidx(pp)
+    mut mi := 0
+    while mi < method_count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: method_indices[mi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        mi = mi + 1
+    }
+    PR{p: pp, e: Expr{kind: EkImplDecl, s1: impl_type, s2: trait_name, b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: method_count, span: span}}
 }
 
 fn _parse_const_decl(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
     if _ck(pp) == ":" {
@@ -782,20 +1146,35 @@ fn _parse_const_decl(p: Parser) -> PR {
     }
     pp = _expect(pp, "=")
     result := _parse_expr(pp, 0)
-    PR{p: result.p, e: mk_const_decl(name, span)}
+    val_idx := _pidx(result.p)
+    pp = _padd(result.p, result.e)
+    PR{p: pp, e: Expr{kind: EkConstDecl, s1: name, s2: "", b1: false, b2: false,
+                       c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_entry(p: Parser) -> PR {
-    pp := _adv(p)
+    span := _pspan(p)
+    mut pp := _adv(p)
     result := _parse_block(pp)
-    PR{p: result.p, e: result.e}
+    body_idx := _pidx(result.p)
+    pp = _padd(result.p, result.e)
+    PR{p: pp, e: Expr{kind: EkBlock, s1: "_entry", s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: result.e.list_start, list_count: result.e.list_count, span: span}}
 }
 
 fn _parse_test(p: Parser) -> PR {
-    pp := _adv(p)
-    if _ck(pp) == "STRING" || _ck(pp) == "IDENT" { pp = _adv(pp) }
+    span := _pspan(p)
+    mut pp := _adv(p)
+    mut test_name := ""
+    if _ck(pp) == "STRING" || _ck(pp) == "IDENT" {
+        test_name = _cur(pp).text
+        pp = _adv(pp)
+    }
     result := _parse_block(pp)
-    PR{p: result.p, e: result.e}
+    body_idx := _pidx(result.p)
+    pp = _padd(result.p, result.e)
+    PR{p: pp, e: Expr{kind: EkBlock, s1: "_test:" + test_name, s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: result.e.list_start, list_count: result.e.list_count, span: span}}
 }
 
 // --- Statement ---
@@ -810,35 +1189,50 @@ fn _parse_stmt(p: Parser) -> PR {
     if k == "while" { return _parse_while(p) }
     if k == "loop" { return _parse_loop(p) }
     if k == "defer" {
-        pp := _adv(p)
+        span := _pspan(p)
+        mut pp := _adv(p)
         r := _parse_expr(pp, 0)
-        return PR{p: r.p, e: mk_deferred(r.e.span)}
+        defer_idx := _pidx(r.p)
+        pp = _padd(r.p, r.e)
+        return PR{p: pp, e: Expr{kind: EkDefer, s1: "", s2: "", b1: false, b2: false,
+                                  c0: defer_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     if k == "assert" { return _parse_assert(p) }
     if k == "with" { return _parse_with(p) }
 
     result := _parse_expr(p, 0)
-    pp := result.p
+    mut pp := result.p
 
     if _ck(pp) == ":=" {
         pp = _adv(pp)
         val := _parse_expr(pp, 0)
-        pp = _skip_nl(val.p)
-        return PR{p: pp, e: mk_binding(result.e.s1, false, result.e.span)}
+        val_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        pp = _skip_nl(pp)
+        return PR{p: pp, e: Expr{kind: EkBinding, s1: result.e.s1, s2: "", b1: false, b2: false,
+                                  c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
     }
     if _ck(pp) == ":" {
         pp = _adv(pp)
         pp = _skip_type(pp)
         pp = _expect(pp, "=")
         val := _parse_expr(pp, 0)
-        pp = _skip_nl(val.p)
-        return PR{p: pp, e: mk_binding(result.e.s1, false, result.e.span)}
+        val_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        pp = _skip_nl(pp)
+        return PR{p: pp, e: Expr{kind: EkBinding, s1: result.e.s1, s2: "", b1: false, b2: false,
+                                  c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
     }
     if _ck(pp) == "=" {
+        lhs_idx := _pidx(pp)
+        pp = _padd(pp, result.e)
         pp = _adv(pp)
         val := _parse_expr(pp, 0)
-        pp = _skip_nl(val.p)
-        return PR{p: pp, e: mk_assign(result.e.span)}
+        rhs_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        pp = _skip_nl(pp)
+        return PR{p: pp, e: Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,
+                                  c0: lhs_idx, c1: rhs_idx, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
     }
 
     pp = _skip_nl(pp)
@@ -847,7 +1241,7 @@ fn _parse_stmt(p: Parser) -> PR {
 
 fn _parse_mut(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
     if _ck(pp) == ":" {
@@ -856,7 +1250,10 @@ fn _parse_mut(p: Parser) -> PR {
         pp = _expect(pp, "=")
     } else { pp = _expect(pp, ":=") }
     val := _parse_expr(pp, 0)
-    PR{p: val.p, e: mk_binding(name, true, span)}
+    val_idx := _pidx(val.p)
+    pp = _padd(val.p, val.e)
+    PR{p: pp, e: Expr{kind: EkBinding, s1: name, s2: "", b1: true, b2: false,
+                       c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 // --- Expression parsing (Pratt) ---
@@ -879,10 +1276,15 @@ fn _parse_expr(p: Parser, min_bp: i64) -> PR {
             if bp.left > 0 && bp.left >= min_bp {
                 op := _cur(pp).text
                 span := _pspan(pp)
+                left_idx := _pidx(pp)
+                pp = _padd(pp, left)
                 pp = _adv(pp)
                 right := _parse_expr(pp, bp.right)
                 pp = right.p
-                left = mk_binary(op, left, right.e, span)
+                right_idx := _pidx(pp)
+                pp = _padd(pp, right.e)
+                left = Expr{kind: EkBinary, s1: op, s2: "", b1: false, b2: false,
+                            c0: left_idx, c1: right_idx, c2: 0, list_start: 0, list_count: 0, span: span}
             } else {
                 running = false
             }
@@ -901,7 +1303,10 @@ fn _parse_prefix(p: Parser) -> PR {
         pp := _adv(p)
         bp := prefix_binding_power(_cur(p).kind)
         r := _parse_expr(pp, bp)
-        return PR{p: r.p, e: mk_unary(op, r.e, span)}
+        operand_idx := _pidx(r.p)
+        pp = _padd(r.p, r.e)
+        return PR{p: pp, e: Expr{kind: EkUnary, s1: op, s2: "", b1: false, b2: false,
+                                  c0: operand_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     if k == "INT" {
         tok := _cur(p)
@@ -942,7 +1347,8 @@ fn _parse_prefix(p: Parser) -> PR {
         span := _pspan(p)
         pp := _adv(p)
         lb := "\{"
-        if _ck(pp) == lb { return _parse_struct_lit(pp, name, span) }
+        // Only parse struct literal if name starts with uppercase (type names are PascalCase)
+        if _ck(pp) == lb && _is_upper_start(name) { return _parse_struct_lit(pp, name, span) }
         return PR{p: pp, e: mk_ident(name, span)}
     }
 
@@ -954,20 +1360,23 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
     k := _ck(p)
     if k == "." {
         span := _pspan(p)
-        pp := _adv(p)
+        left_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)
         lb := "\{"
         rb := "\}"
         if _ck(pp) == lb {
             // Record update: .{field: val, ...}
             pp = _adv(pp)
             pp = _skip_nl(pp)
+            list_start := _pidx(pp)
             mut count := 0
             while _ck(pp) != rb && _ck(pp) != "EOF" {
                 if _ck(pp) == "IDENT" { pp = _adv(pp) }
                 if _ck(pp) == ":" {
                     pp = _adv(pp)
                     r := _parse_expr(pp, 0)
-                    pp = r.p
+                    pp = _padd(r.p, r.e)
                 }
                 count = count + 1
                 pp = _skip_nl(pp)
@@ -977,53 +1386,96 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
                 }
             }
             if _ck(pp) == rb { pp = _adv(pp) }
-            return PR{p: pp, e: mk_struct_lit("_update", count, span)}
+            return PR{p: pp, e: Expr{kind: EkStruct, s1: "_update", s2: "", b1: false, b2: false,
+                                      c0: left_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
         }
         field := _cur(pp).text
         pp = _adv(pp)
         if _ck(pp) == "(" {
             pp = _adv(pp)
+            list_start := _pidx(pp)
             mut count := 0
             while _ck(pp) != ")" && _ck(pp) != "EOF" {
                 pp = _skip_nl(pp)
                 r := _parse_expr(pp, 0)
-                pp = r.p
+                pp = _padd(r.p, r.e)
                 count = count + 1
                 pp = _skip_nl(pp)
                 if _ck(pp) == "," { pp = _adv(pp) }
             }
             pp = _expect(pp, ")")
-            return PR{p: pp, e: mk_method_call(field, span)}
+            return PR{p: pp, e: Expr{kind: EkMethodCall, s1: field, s2: "", b1: false, b2: false,
+                                      c0: left_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
         }
-        return PR{p: pp, e: mk_field_access(field, span)}
+        return PR{p: pp, e: Expr{kind: EkFieldAccess, s1: field, s2: "", b1: false, b2: false,
+                                  c0: left_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     if k == "(" {
         span := _pspan(p)
-        pp := _adv(p)
+        callee_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)
+        list_start := _pidx(pp)
         mut count := 0
         while _ck(pp) != ")" && _ck(pp) != "EOF" {
             pp = _skip_nl(pp)
             r := _parse_expr(pp, 0)
-            pp = r.p
+            pp = _padd(r.p, r.e)
             count = count + 1
             pp = _skip_nl(pp)
             if _ck(pp) == "," { pp = _adv(pp) }
         }
         pp = _expect(pp, ")")
-        return PR{p: pp, e: mk_call(left, count, span)}
+        return PR{p: pp, e: Expr{kind: EkCall, s1: left.s1, s2: "", b1: false, b2: false,
+                                  c0: callee_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
     if k == "[" {
         span := _pspan(p)
-        pp := _adv(p)
-        idx := _parse_expr(pp, 0)
-        pp = _expect(idx.p, "]")
-        return PR{p: pp, e: mk_index(span)}
+        obj_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)
+        idx_r := _parse_expr(pp, 0)
+        idx_idx := _pidx(idx_r.p)
+        pp = _padd(idx_r.p, idx_r.e)
+        pp = _expect(pp, "]")
+        return PR{p: pp, e: Expr{kind: EkIndex, s1: "", s2: "", b1: false, b2: false,
+                                  c0: obj_idx, c1: idx_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
-    if k == "?" { return PR{p: _adv(p), e: mk_propagate(_pspan(p))} }
-    if k == "!" { return PR{p: _adv(p), e: mk_assert_ok(_pspan(p))} }
+    if k == "?" {
+        inner_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)
+        // Check for ? |e| transform pattern
+        if _ck(pp) == "|" {
+            pp = _adv(pp)  // skip |
+            mut err_name := "_"
+            if _ck(pp) == "IDENT" {
+                err_name = _cur(pp).text
+                pp = _adv(pp)
+            }
+            if _ck(pp) == "|" { pp = _adv(pp) }
+            body := _parse_expr(pp, 0)
+            body_idx := _pidx(body.p)
+            pp = _padd(body.p, body.e)
+            // Store as Propagate with s1=error binding name, c1=transform body
+            return PR{p: pp, e: Expr{kind: EkPropagate, s1: err_name, s2: "", b1: true, b2: false,
+                                      c0: inner_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: _pspan(p)}}
+        }
+        return PR{p: pp, e: Expr{kind: EkPropagate, s1: "", s2: "", b1: false, b2: false,
+                                  c0: inner_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _pspan(p)}}
+    }
+    if k == "!" {
+        inner_idx := _pidx(p)
+        pp := _padd(p, left)
+        pp = _adv(pp)
+        return PR{p: pp, e: Expr{kind: EkAssertOk, s1: "", s2: "", b1: false, b2: false,
+                                  c0: inner_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _pspan(p)}}
+    }
     if k == "catch" {
         span := _pspan(p)
-        pp := _adv(p)
+        inner_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)
         // catch |err| { body } or catch { body }
         if _ck(pp) == "|" {
             pp = _adv(pp)
@@ -1031,7 +1483,10 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
             if _ck(pp) == "|" { pp = _adv(pp) }
         }
         body := _parse_block(pp)
-        return PR{p: body.p, e: mk_catch(span)}
+        body_idx := _pidx(body.p)
+        pp = _padd(body.p, body.e)
+        return PR{p: pp, e: Expr{kind: EkCatch, s1: "", s2: "", b1: false, b2: false,
+                                  c0: inner_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     PR{p: p, e: left}
 }
@@ -1044,70 +1499,108 @@ fn _parse_block(p: Parser) -> PR {
         pp := _perror(p, E0018, "expected block")
         return PR{p: pp, e: _no_expr()}
     }
-    pp := _adv(p)
+    mut pp := _adv(p)
     pp = _skip_nl(pp)
+    // Collect statement pool indices
+    mut stmt_indices := [0]
     mut count := 0
-    mut last := _no_expr()
     while _ck(pp) != rb && _ck(pp) != "EOF" {
         result := _parse_stmt(pp)
-        pp = result.p
-        last = result.e
+        stmt_idx := _pidx(result.p)
+        pp = _padd(result.p, result.e)
+        stmt_indices = stmt_indices.append(stmt_idx)
         count = count + 1
         pp = _skip_nl(pp)
     }
     pp = _adv(pp)
-    PR{p: pp, e: mk_block(count, span)}
+    // Add index nodes: each is an EkNone with c0 pointing to the actual stmt
+    list_start := _pidx(pp)
+    mut si := 0
+    while si < count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: stmt_indices[si + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        si = si + 1
+    }
+    PR{p: pp, e: Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn _parse_if(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     cond := _parse_expr(pp, 0)
-    pp = cond.p
+    cond_idx := _pidx(cond.p)
+    pp = _padd(cond.p, cond.e)
     then_br := _parse_block(pp)
-    pp = then_br.p
+    then_idx := _pidx(then_br.p)
+    pp = _padd(then_br.p, then_br.e)
     mut has_else := false
+    mut else_idx := 0
     if _ck(pp) == "else" {
         pp = _adv(pp)
         has_else = true
         if _ck(pp) == "if" {
             r := _parse_if(pp)
-            pp = r.p
+            else_idx = _pidx(r.p)
+            pp = _padd(r.p, r.e)
         } else {
             r := _parse_block(pp)
-            pp = r.p
+            else_idx = _pidx(r.p)
+            pp = _padd(r.p, r.e)
         }
     }
-    PR{p: pp, e: mk_if(has_else, span)}
+    PR{p: pp, e: Expr{kind: EkIf, s1: "", s2: "", b1: has_else, b2: false,
+                       c0: cond_idx, c1: then_idx, c2: else_idx, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_match(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     subject := _parse_expr(pp, 0)
-    pp = subject.p
+    subj_idx := _pidx(subject.p)
+    pp = _padd(subject.p, subject.e)
     lb := "\{"
     rb := "\}"
     pp = _skip_nl(pp)
     pp = _expect(pp, lb)
     pp = _skip_nl(pp)
+    // Collect arm pairs: (pattern_idx, body_idx)
+    mut pat_indices := [0]
+    mut body_indices := [0]
     mut count := 0
     while _ck(pp) != rb && _ck(pp) != "EOF" {
-        pp = _adv(pp)  // pattern name
-        if _ck(pp) == "(" { pp = _skip_parens(pp) } else if _ck(pp) == lb { pp = _skip_braces(pp) }
+        pat := _parse_pattern(pp)
+        pat_idx := _pidx(pat.p)
+        pp = _padd(pat.p, pat.e)
         if _ck(pp) == "if" {
             pp = _adv(pp)
             g := _parse_expr(pp, 0)
-            pp = g.p
+            pp = _padd(g.p, g.e)
         }
         pp = _expect(pp, "=>")
         body := _parse_expr(pp, 0)
-        pp = body.p
+        body_idx := _pidx(body.p)
+        pp = _padd(body.p, body.e)
+        pat_indices = pat_indices.append(pat_idx)
+        body_indices = body_indices.append(body_idx)
         count = count + 1
         pp = _skip_nl(pp)
     }
     pp = _adv(pp)
-    PR{p: pp, e: mk_match(count, span)}
+    // Add index nodes: pairs of (pattern, body) index nodes
+    list_start := _pidx(pp)
+    mut ai := 0
+    while ai < count {
+        // Pattern index node
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: pat_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        // Body index node
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: body_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        ai = ai + 1
+    }
+    PR{p: pp, e: Expr{kind: EkMatch, s1: "", s2: "", b1: false, b2: false,
+                       c0: subj_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn _skip_parens(p: Parser) -> Parser {
@@ -1122,9 +1615,79 @@ fn _skip_parens(p: Parser) -> Parser {
     _adv(pp)
 }
 
+fn _parse_pattern(p: Parser) -> PR {
+    k := _ck(p)
+    span := _pspan(p)
+    lb := "\{"
+    if k == "INT" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_int_lit(tok.text, span)}
+    }
+    if k == "FLOAT" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_float_lit(tok.text, span)}
+    }
+    if k == "STRING" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_string_lit(tok.text, span)}
+    }
+    if k == "true" { return PR{p: _adv(p), e: mk_bool_lit(true, span)} }
+    if k == "false" { return PR{p: _adv(p), e: mk_bool_lit(false, span)} }
+    if k == "-" {
+        // Negative literal pattern
+        pp := _adv(p)
+        if _ck(pp) == "INT" {
+            tok := _cur(pp)
+            return PR{p: _adv(pp), e: mk_int_lit("-" + tok.text, span)}
+        }
+        if _ck(pp) == "FLOAT" {
+            tok := _cur(pp)
+            return PR{p: _adv(pp), e: mk_float_lit("-" + tok.text, span)}
+        }
+        return PR{p: pp, e: mk_ident("-", span)}
+    }
+    if k == "IDENT" || k == "Self" {
+        name := _cur(p).text
+        mut pp := _adv(p)
+        if name == "_" { return PR{p: pp, e: mk_ident("_", span)} }
+        // Check for destructure: Name(x, y) or Name{x: p}
+        if _ck(pp) == "(" {
+            pp = _adv(pp)
+            list_start := _pidx(pp)
+            mut count := 0
+            while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                pp = _skip_nl(pp)
+                sub := _parse_pattern(pp)
+                pp = _padd(sub.p, sub.e)
+                count = count + 1
+                pp = _skip_nl(pp)
+                if _ck(pp) == "," { pp = _adv(pp) }
+            }
+            pp = _expect(pp, ")")
+            return PR{p: pp, e: Expr{kind: EkCall, s1: name, s2: "", b1: false, b2: false,
+                                      c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+        }
+        if _ck(pp) == lb {
+            pp = _skip_braces(pp)
+            return PR{p: pp, e: Expr{kind: EkCall, s1: name, s2: "", b1: false, b2: false,
+                                      c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+        }
+        // Check for qualified name: Mod.Variant
+        if _ck(pp) == "." && _pk(pp) == "IDENT" {
+            pp = _adv(pp)
+            qual := _cur(pp).text
+            pp = _adv(pp)
+            return PR{p: pp, e: mk_ident(name + "." + qual, span)}
+        }
+        return PR{p: pp, e: mk_ident(name, span)}
+    }
+    // Fallback: advance one token
+    PR{p: _adv(p), e: mk_ident(_cur(p).text, span)}
+}
+
 fn _parse_closure_expr(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     pp = _expect(pp, "(")
     mut params := ""
     while _ck(pp) != ")" && _ck(pp) != "EOF" {
@@ -1142,32 +1705,50 @@ fn _parse_closure_expr(p: Parser) -> PR {
         pp = _adv(pp)
         pp = _skip_type(pp)
     }
-    pp = _expect(pp, "=>")
-    body := _parse_expr(pp, 0)
-    PR{p: body.p, e: mk_closure(params, body.e.span)}
+    lb := "\{"
+    mut body := _no_expr()
+    if _ck(pp) == "=>" {
+        pp = _adv(pp)
+        result := _parse_expr(pp, 0)
+        pp = result.p
+        body = result.e
+    } else if _ck(pp) == lb {
+        result := _parse_block(pp)
+        pp = result.p
+        body = result.e
+    } else {
+        pp = _expect(pp, "=>")
+    }
+    body_idx := _pidx(pp)
+    pp = _padd(pp, body)
+    PR{p: pp, e: Expr{kind: EkClosure, s1: params, s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_grouped(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     pp = _skip_nl(pp)
     result := _parse_expr(pp, 0)
     pp = result.p
     // Check for tuple: if comma follows first expression, it's a tuple
     if _ck(pp) == "," {
+        list_start := _pidx(pp)
+        pp = _padd(pp, result.e)
         mut count := 1
         while _ck(pp) == "," && _ck(pp) != "EOF" {
             pp = _adv(pp)
             pp = _skip_nl(pp)
             if _ck(pp) != ")" {
                 r := _parse_expr(pp, 0)
-                pp = r.p
+                pp = _padd(r.p, r.e)
                 count = count + 1
             }
             pp = _skip_nl(pp)
         }
         if _ck(pp) == ")" { pp = _adv(pp) }
-        return PR{p: pp, e: mk_tuple(count, span)}
+        return PR{p: pp, e: Expr{kind: EkTuple, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
     while _ck(pp) != ")" && _ck(pp) != "EOF" { pp = _adv(pp) }
     pp = _adv(pp)
@@ -1176,24 +1757,27 @@ fn _parse_grouped(p: Parser) -> PR {
 
 fn _parse_array(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     pp = _skip_nl(pp)
+    list_start := _pidx(pp)
     mut count := 0
     while _ck(pp) != "]" && _ck(pp) != "EOF" {
         pp = _skip_nl(pp)
         r := _parse_expr(pp, 0)
-        pp = r.p
+        pp = _padd(r.p, r.e)
         count = count + 1
         pp = _skip_nl(pp)
         if _ck(pp) == "," { pp = _adv(pp) }
     }
     pp = _expect(pp, "]")
-    PR{p: pp, e: mk_array(count, span)}
+    PR{p: pp, e: Expr{kind: EkArray, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
-    pp := _adv(p)
+    mut pp := _adv(p)
     pp = _skip_nl(pp)
+    list_start := _pidx(pp)
     mut count := 0
     rb := "\}"
     while _ck(pp) != rb && _ck(pp) != "EOF" {
@@ -1201,7 +1785,7 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
         if _ck(pp) == ":" {
             pp = _adv(pp)
             r := _parse_expr(pp, 0)
-            pp = r.p
+            pp = _padd(r.p, r.e)
         }
         count = count + 1
         pp = _skip_nl(pp)
@@ -1211,66 +1795,88 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
         }
     }
     pp = _adv(pp)
-    PR{p: pp, e: mk_struct_lit(name, count, span)}
+    PR{p: pp, e: Expr{kind: EkStruct, s1: name, s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn _parse_for(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     pat := _cur(pp).text
     pp = _adv(pp)
     pp = _expect(pp, "in")
     iter := _parse_expr(pp, 0)
-    pp = iter.p
+    iter_idx := _pidx(iter.p)
+    pp = _padd(iter.p, iter.e)
     body := _parse_block(pp)
-    PR{p: body.p, e: mk_for(pat, body.e.span)}
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkFor, s1: pat, s2: "", b1: false, b2: false,
+                       c0: iter_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_while(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     cond := _parse_expr(pp, 0)
-    pp = cond.p
+    cond_idx := _pidx(cond.p)
+    pp = _padd(cond.p, cond.e)
     body := _parse_block(pp)
-    PR{p: body.p, e: mk_while(body.e.span)}
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkWhile, s1: "", s2: "", b1: false, b2: false,
+                       c0: cond_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_loop(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     body := _parse_block(pp)
-    PR{p: body.p, e: mk_loop(body.e.span)}
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkLoop, s1: "", s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_return(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     k := _ck(pp)
     rb := "\}"
     if k == "NEWLINE" || k == "EOF" || k == rb {
         return PR{p: pp, e: mk_return(false, span)}
     }
     val := _parse_expr(pp, 0)
-    PR{p: val.p, e: mk_return(true, span)}
+    val_idx := _pidx(val.p)
+    pp = _padd(val.p, val.e)
+    PR{p: pp, e: Expr{kind: EkReturn, s1: "", s2: "", b1: true, b2: false,
+                       c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_with(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
     pp = _expect(pp, ":=")
     resource := _parse_expr(pp, 0)
-    pp = resource.p
+    res_idx := _pidx(resource.p)
+    pp = _padd(resource.p, resource.e)
     body := _parse_block(pp)
-    PR{p: body.p, e: mk_with(name, span)}
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkWith, s1: name, s2: "", b1: false, b2: false,
+                       c0: res_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_assert(p: Parser) -> PR {
     span := _pspan(p)
-    pp := _adv(p)
+    mut pp := _adv(p)
     expr := _parse_expr(pp, 0)
-    PR{p: expr.p, e: mk_call(mk_ident("assert", span), 1, span)}
+    arg_idx := _pidx(expr.p)
+    pp = _padd(expr.p, expr.e)
+    PR{p: pp, e: Expr{kind: EkCall, s1: "assert", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: arg_idx, list_count: 1, span: span}}
 }
 
 fn parser_diagnostics(p: Parser) -> DiagnosticBag = p.diagnostics

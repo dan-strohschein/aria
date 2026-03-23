@@ -51,6 +51,9 @@ type ExprKind =
     | EkImplDecl
     | EkConstDecl
     | EkUseDecl
+    | EkParam
+    | EkField
+    | EkVariant
     | EkNone
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
@@ -94,6 +97,9 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkImplDecl => "ImplDecl"
     EkConstDecl => "ConstDecl"
     EkUseDecl => "UseDecl"
+    EkParam => "Param"
+    EkField => "Field"
+    EkVariant => "Variant"
     EkNone => "None"
 }
 
@@ -314,6 +320,22 @@ fn mk_use_decl(module: str, span: Span) -> Expr =
     Expr{kind: EkUseDecl, s1: module, s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
 
+// --- Parameter, field, variant constructors ---
+// EkParam: s1=name, c0=type_tok_pos, b1=is_self
+fn mk_param(name: str, type_tok_pos: i64, is_self: bool, span: Span) -> Expr =
+    Expr{kind: EkParam, s1: name, s2: "", b1: is_self, b2: false,
+         c0: type_tok_pos, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+// EkField: s1=field_name, c0=type_tok_pos
+fn mk_field(name: str, type_tok_pos: i64, span: Span) -> Expr =
+    Expr{kind: EkField, s1: name, s2: "", b1: false, b2: false,
+         c0: type_tok_pos, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+// EkVariant: s1=variant_name, b1=is_tuple_style
+fn mk_variant(name: str, is_tuple: bool, span: Span) -> Expr =
+    Expr{kind: EkVariant, s1: name, s2: "", b1: is_tuple, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
 // --- Declaration Kind ---
 
 // DeclKind uses integer encoding to avoid bootstrap codegen bugs with large sum types
@@ -352,6 +374,7 @@ struct DeclInfo {
     body_start: i64
     body_end: i64
     is_pub: bool
+    node_idx: i64
 }
 
 struct DeclIndex {
@@ -359,7 +382,7 @@ struct DeclIndex {
 }
 
 fn _sentinel_decl() -> DeclInfo =
-    DeclInfo{kind: DkNone, name: "", token_start: 0, body_start: 0, body_end: 0, is_pub: false}
+    DeclInfo{kind: DkNone, name: "", token_start: 0, body_start: 0, body_end: 0, is_pub: false, node_idx: 0}
 
 fn new_decl_index() -> DeclIndex =
     DeclIndex{decls: [_sentinel_decl()]}
@@ -376,10 +399,27 @@ fn decl_index_get(idx: DeclIndex, i: i64) -> DeclInfo {
     _sentinel_decl()
 }
 
+fn _decl_index_set(idx: DeclIndex, i: i64, d: DeclInfo) -> DeclIndex {
+    decls := idx.decls
+    dlen := decls.len()
+    mut new_decls := [_sentinel_decl()]
+    mut j := 1
+    while j < dlen {
+        if j == i {
+            new_decls = new_decls.append(d)
+        } else {
+            new_decls = new_decls.append(decls[j])
+        }
+        j = j + 1
+    }
+    DeclIndex{decls: new_decls}
+}
+
 // --- ParseResult (returned by build_decl_index) ---
 
 struct ParseResult {
     index: DeclIndex
+    pool: NodePool
     diagnostics: DiagnosticBag
 }
 

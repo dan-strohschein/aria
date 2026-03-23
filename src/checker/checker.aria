@@ -25,6 +25,7 @@ struct Checker {
     table: SymbolTable
     current_scope: i64
     file: str
+    pool: NodePool
     // Type environment (parallel arrays)
     env_names: [str]
     env_types: [i64]
@@ -54,7 +55,7 @@ struct CheckResult {
 
 // --- Constructor ---
 
-fn _new_checker(tokens: [Token], table: SymbolTable, file: str) -> Checker =
+fn _new_checker(tokens: [Token], pool: NodePool, table: SymbolTable, file: str) -> Checker =
     Checker{
         tokens: tokens,
         pos: 0,
@@ -65,6 +66,7 @@ fn _new_checker(tokens: [Token], table: SymbolTable, file: str) -> Checker =
         table: table,
         current_scope: 0,
         file: file,
+        pool: pool,
         env_names: [""],
         env_types: [0],
         env_scopes: [0],
@@ -88,56 +90,56 @@ fn _ck2(c: Checker) -> str = token_name(_ccur(c).kind)
 fn _cadv(c: Checker) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos + 1, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_pos(c: Checker, pos: i64) -> Checker =
     Checker{tokens: c.tokens, pos: pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_store(c: Checker, store: TypeStore) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_reg(c: Checker, reg: TypeRegistry) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: reg,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_diag(c: Checker, diag: DiagnosticBag) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: diag, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_fn_ctx(c: Checker, ret: i64, err: i64) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: ret, fn_error_type: err, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_treg(c: Checker, treg: TraitRegistry) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
 fn _cset_loop(c: Checker, in_loop: bool) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: in_loop}
 
@@ -167,7 +169,7 @@ fn _cwarning(c: Checker, code: str, msg: str) -> Checker {
 fn _env_add(c: Checker, name: str, type_id: i64, sc: i64) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
-            current_scope: c.current_scope, file: c.file,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
             env_names: c.env_names.append(name),
             env_types: c.env_types.append(type_id),
             env_scopes: c.env_scopes.append(sc),
@@ -436,8 +438,11 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
             if decl.name.startsWith("_alias:") {
                 // alias declaration
                 cc = _register_alias_decl(cc)
+            } else if decl.node_idx > 0 {
+                // AST-based type registration
+                cc = _register_type_decl_ast(cc, decl.node_idx)
             } else {
-                // type/struct
+                // Legacy token-walk
                 cc = _register_type_decl(cc)
             }
         } else if kname == "enum" {
@@ -505,6 +510,232 @@ fn _register_alias_decl(c: Checker) -> Checker {
     alias_info := TypeInfo{kind: TyNamed, name: name, type_id: ft.type_id, type_id2: 0, param_start: 0, param_count: 0}
     new_st := store_add(cc.store, alias_info)
     cc = _cset_store(cc, new_st)
+    cc
+}
+
+// Parse generic params from s2 encoded string "T:Eq,U:Hash+Ord"
+// Returns count and populates gp_0..2 / gb_0..2
+fn _parse_generic_str(s: str, gp_0: str, gp_1: str, gp_2: str, gb_0: str, gb_1: str, gb_2: str) -> [str] {
+    // Returns array: [count_str, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2]
+    slen := s.len()
+    if slen == 0 {
+        return ["0", "", "", "", "", "", ""]
+    }
+    mut count := 0
+    mut r_gp_0 := ""
+    mut r_gp_1 := ""
+    mut r_gp_2 := ""
+    mut r_gb_0 := ""
+    mut r_gb_1 := ""
+    mut r_gb_2 := ""
+    // Split by commas, then each part by first colon
+    mut seg_start := 0
+    mut i := 0
+    while i <= slen {
+        mut is_sep := false
+        if i == slen { is_sep = true }
+        if is_sep == false {
+            ch := s.charAt(i)
+            if ch == "," { is_sep = true }
+        }
+        if is_sep {
+            seg := s.substring(seg_start, i)
+            // Split seg by first ':'
+            mut gname := seg
+            mut gbound := ""
+            mut j := 0
+            seglen := seg.len()
+            mut found_colon := false
+            while j < seglen {
+                if found_colon == false {
+                    sch := seg.charAt(j)
+                    if sch == ":" {
+                        gname = seg.substring(0, j)
+                        gbound = seg.substring(j + 1, seglen)
+                        found_colon = true
+                    }
+                }
+                j = j + 1
+            }
+            if count == 0 { r_gp_0 = gname }
+            if count == 0 { r_gb_0 = gbound }
+            if count == 1 { r_gp_1 = gname }
+            if count == 1 { r_gb_1 = gbound }
+            if count == 2 { r_gp_2 = gname }
+            if count == 2 { r_gb_2 = gbound }
+            count = count + 1
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    [i2s(count), r_gp_0, r_gp_1, r_gp_2, r_gb_0, r_gb_1, r_gb_2]
+}
+
+fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
+    node := pool_get(c.pool, node_idx)
+    name := node.s1
+    mut cc := c
+
+    // Parse generic params from s2
+    gp_result := _parse_generic_str(node.s2, "", "", "", "", "", "")
+    mut sgp_count := 0
+    if gp_result[0] == "1" { sgp_count = 1 }
+    if gp_result[0] == "2" { sgp_count = 2 }
+    if gp_result[0] == "3" { sgp_count = 3 }
+    sgp_0 := gp_result[1]
+    sgp_1 := gp_result[2]
+    sgp_2 := gp_result[3]
+
+    // Register TypeVars
+    if sgp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(sgp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if sgp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(sgp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if sgp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(sgp_2))
+        cc = _cset_store(cc, new_st)
+    }
+
+    lb := "\{"
+    if node.b1 {
+        // Sum type — iterate EkVariant children
+        mut variants := [""]
+        mut vf_counts := [0]
+        mut vf_names := [""]
+        mut vf_types := [0]
+        mut vf_offsets := [0]
+        mut flat_pos := 1
+        mut vi := 0
+        while vi < node.list_count {
+            idx_node := pool_get(cc.pool, node.list_start + vi)
+            vnode := pool_get(cc.pool, idx_node.c0)
+            variants = variants.append(vnode.s1)
+            vf_offsets = vf_offsets.append(flat_pos)
+            mut field_count := 0
+            // Iterate variant's EkField children
+            mut fi := 0
+            while fi < vnode.list_count {
+                fidx_node := pool_get(cc.pool, vnode.list_start + fi)
+                fnode := pool_get(cc.pool, fidx_node.c0)
+                // Position to the type token and parse
+                cc = _cset_pos(cc, fnode.c0)
+                ft := _parse_type_ann(cc)
+                cc = ft.c
+                vf_names = vf_names.append(fnode.s1)
+                vf_types = vf_types.append(ft.type_id)
+                field_count = field_count + 1
+                flat_pos = flat_pos + 1
+                fi = fi + 1
+            }
+            vf_counts = vf_counts.append(field_count)
+            vi = vi + 1
+        }
+        // Register as named type
+        new_st := store_add(cc.store, mk_named_type(name))
+        cc = _cset_store(cc, new_st)
+        def := new_sum_def(name, variants, vf_counts, vf_names, vf_types, vf_offsets)
+        cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+        // Handle derives — use token-walk to find derives after the type body
+        cc = _cset_pos(cc, c.pos)
+        cc = _scan_to_derives(cc)
+        cc = _parse_derives(cc, name)
+        return cc
+    }
+
+    // Check for newtype (c0 > 0 and not sum)
+    if node.c0 > 0 && node.list_count == 0 {
+        // Newtype: type Name = Type
+        cc = _cset_pos(cc, node.c0)
+        ft := _parse_type_ann(cc)
+        cc = ft.c
+        new_st := store_add(cc.store, mk_named_type(name))
+        cc = _cset_store(cc, new_st)
+        def := _mk_newtype_def(name, ft.type_id)
+        cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+        return cc
+    }
+
+    // Struct — iterate EkField children
+    mut fields := [FieldInfo{name: "", type_id: 0}]
+    mut fi := 0
+    while fi < node.list_count {
+        idx_node := pool_get(cc.pool, node.list_start + fi)
+        fnode := pool_get(cc.pool, idx_node.c0)
+        cc = _cset_pos(cc, fnode.c0)
+        ft := _parse_type_ann(cc)
+        cc = ft.c
+        fields = fields.append(FieldInfo{name: fnode.s1, type_id: ft.type_id})
+        fi = fi + 1
+    }
+    new_st := store_add(cc.store, mk_named_type(name))
+    cc = _cset_store(cc, new_st)
+    mut def := new_struct_def(name, fields, false, [""])
+    if sgp_count > 0 {
+        def = new_generic_struct_def(name, fields, sgp_count, sgp_0, sgp_1, sgp_2)
+    }
+    cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
+    // Handle derives
+    cc = _cset_pos(cc, c.pos)
+    cc = _scan_to_derives(cc)
+    cc = _parse_derives(cc, name)
+    cc
+}
+
+// Scan forward from current position past a type declaration to find "derives"
+fn _scan_to_derives(c: Checker) -> Checker {
+    mut cc := c
+    lb := "\{"
+    rb := "\}"
+    // Skip type/struct keyword and name
+    if _ck2(cc) == "type" || _ck2(cc) == "struct" { cc = _cadv(cc) }
+    if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+    // Skip generic params
+    if _ck2(cc) == "[" {
+        cc = _cadv(cc)
+        mut depth := 1
+        while depth > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { depth = depth + 1 }
+            if _ck2(cc) == "]" { depth = depth - 1 }
+            if depth > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
+    // Skip = if present
+    if _ck2(cc) == "=" { cc = _cadv(cc) }
+    cc = _cskip_nl(cc)
+    // Skip sum type variants or braced body
+    if _ck2(cc) == "|" {
+        while _ck2(cc) == "|" {
+            cc = _cadv(cc)
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+            if _ck2(cc) == "(" {
+                cc = _cadv(cc)
+                mut depth := 1
+                while depth > 0 && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == "(" { depth = depth + 1 }
+                    if _ck2(cc) == ")" { depth = depth - 1 }
+                    if depth > 0 { cc = _cadv(cc) }
+                }
+                if _ck2(cc) == ")" { cc = _cadv(cc) }
+            } else if _ck2(cc) == lb {
+                cc = _skip_braces2(cc)
+            }
+            cc = _cskip_nl(cc)
+        }
+    } else if _ck2(cc) == lb {
+        cc = _skip_braces2(cc)
+    } else {
+        // Newtype — skip underlying type (one line)
+        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" && _ck2(cc) != "derives" {
+            cc = _cadv(cc)
+        }
+    }
+    cc = _cskip_nl(cc)
     cc
 }
 
@@ -781,10 +1012,14 @@ fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
                         cc = _cset_reg(cc, reg_add_cold(cc.registry, fn_name))
                     }
                 }
-                cc = _register_fn_sig(cc)
+                if decl.node_idx > 0 {
+                    cc = _register_fn_sig_ast(cc, decl.node_idx, decl.token_start)
+                } else {
+                    cc = _register_fn_sig(cc)
+                }
             }
         } else if kname == "impl" {
-            cc = _register_impl_fns(cc)
+            cc = _register_impl_fns(cc, decl.node_idx)
         } else if kname == "trait" {
             cc = _register_trait_decl(cc)
         } else if kname == "const" {
@@ -907,6 +1142,257 @@ fn _register_trait_decl(c: Checker) -> Checker {
     // Register trait
     tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0]}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
+    cc
+}
+
+// AST-based function signature registration
+fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker {
+    node := pool_get(c.pool, node_idx)
+    name := node.s1
+    mut cc := c
+
+    // Parse generic params from s2
+    gp_result := _parse_generic_str(node.s2, "", "", "", "", "", "")
+    mut gp_count := 0
+    if gp_result[0] == "1" { gp_count = 1 }
+    if gp_result[0] == "2" { gp_count = 2 }
+    if gp_result[0] == "3" { gp_count = 3 }
+    gp_0 := gp_result[1]
+    gp_1 := gp_result[2]
+    gp_2 := gp_result[3]
+    // Split bounds from gp_result — bounds contain "+" separators
+    gb_0 := gp_result[4]
+    gb_1 := gp_result[5]
+    gb_2 := gp_result[6]
+
+    // Register TypeVars
+    if gp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(gp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(gp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(gp_2))
+        cc = _cset_store(cc, new_st)
+    }
+
+    // Parse parameters from EkParam index nodes
+    mut pnames := [""]
+    mut ptypes := [0]
+    mut pi := 0
+    while pi < node.list_count {
+        pidx_node := pool_get(cc.pool, node.list_start + pi)
+        pnode := pool_get(cc.pool, pidx_node.c0)
+        if pnode.b1 {
+            // self parameter — skip type (resolved later in impl context)
+            pnames = pnames.append("self")
+            ptypes = ptypes.append(TY_UNKNOWN)
+        } else {
+            pnames = pnames.append(pnode.s1)
+            cc = _cset_pos(cc, pnode.c0)
+            pt := _parse_type_ann(cc)
+            cc = pt.c
+            ptypes = ptypes.append(pt.type_id)
+        }
+        pi = pi + 1
+    }
+
+    // Return type
+    mut ret := TY_UNIT
+    mut err := 0
+    if node.b2 {
+        cc = _cset_pos(cc, node.c1)
+        rt := _parse_type_ann(cc)
+        cc = rt.c
+        rtinfo := store_get(cc.store, rt.type_id)
+        if type_kind_name(rtinfo.kind) == "Result" {
+            ret = rtinfo.type_id
+            err = rtinfo.type_id2
+        } else {
+            ret = rt.type_id
+        }
+    }
+
+    // Error type
+    if err == 0 && node.c2 > 0 {
+        cc = _cset_pos(cc, node.c2)
+        et := _parse_type_ann(cc)
+        cc = et.c
+        err = et.type_id
+    }
+
+    // Parse effect clause — need to token-walk for with/where
+    // Position after the signature in tokens
+    cc = _cset_pos(cc, token_start)
+    mut eff_io := false
+    mut eff_fs := false
+    mut eff_net := false
+    mut eff_ffi := false
+    mut eff_async := false
+    // Scan forward to find "with" clause
+    lb := "\{"
+    mut scan_limit := 0
+    while _ck2(cc) != "=" && _ck2(cc) != lb && _ck2(cc) != "EOF" && scan_limit < 200 {
+        if _ck2(cc) == "with" {
+            cc = _cadv(cc)  // skip with
+            if _ck2(cc) == "[" {
+                cc = _cadv(cc)  // skip [
+                while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == "IDENT" {
+                        eff := _ccur(cc).text
+                        if eff == "Io" { eff_io = true }
+                        if eff == "Fs" { eff_fs = true }
+                        if eff == "Net" { eff_net = true }
+                        if eff == "Ffi" { eff_ffi = true }
+                        if eff == "Async" { eff_async = true }
+                        cc = _cadv(cc)
+                    } else {
+                        cc = _cadv(cc)
+                    }
+                    if _ck2(cc) == "," { cc = _cadv(cc) }
+                }
+                if _ck2(cc) == "]" { cc = _cadv(cc) }
+            }
+        }
+        // Parse where clause
+        if _ck2(cc) == "where" {
+            cc = _cadv(cc)
+            mut parsing_where := true
+            while parsing_where {
+                if _ck2(cc) == "IDENT" {
+                    wname := _ccur(cc).text
+                    cc = _cadv(cc)
+                    if _ck2(cc) == ":" {
+                        cc = _cadv(cc)
+                        if _ck2(cc) == "IDENT" {
+                            mut wbound := _ccur(cc).text
+                            cc = _cadv(cc)
+                            while _ck2(cc) == "+" {
+                                cc = _cadv(cc)
+                                if _ck2(cc) == "IDENT" {
+                                    wbound = wbound + "+" + _ccur(cc).text
+                                    cc = _cadv(cc)
+                                }
+                            }
+                            // These are already captured in s2; but where clause may add extra bounds
+                            // For now, we only handle where clause bounds via token walk
+                            mut _skip := 0
+                        }
+                    }
+                    if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
+                } else {
+                    parsing_where = false
+                }
+            }
+        }
+        cc = _cadv(cc)
+        scan_limit = scan_limit + 1
+    }
+
+    mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    if gp_count > 0 {
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+    }
+    if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
+        sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
+    }
+    cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
+    cc
+}
+
+// AST-based impl method signature registration
+fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Checker {
+    node := pool_get(c.pool, method_idx)
+    raw_name := node.s1
+    name := impl_type + "_" + raw_name
+    mut cc := c
+
+    // Parse generic params from s2
+    gp_result := _parse_generic_str(node.s2, "", "", "", "", "", "")
+    mut gp_count := 0
+    if gp_result[0] == "1" { gp_count = 1 }
+    if gp_result[0] == "2" { gp_count = 2 }
+    if gp_result[0] == "3" { gp_count = 3 }
+    gp_0 := gp_result[1]
+    gp_1 := gp_result[2]
+    gp_2 := gp_result[3]
+    gb_0 := gp_result[4]
+    gb_1 := gp_result[5]
+    gb_2 := gp_result[6]
+
+    // Register TypeVars
+    if gp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(gp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(gp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if gp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(gp_2))
+        cc = _cset_store(cc, new_st)
+    }
+
+    // Parse parameters
+    mut pnames := [""]
+    mut ptypes := [0]
+    mut pi := 0
+    while pi < node.list_count {
+        pidx_node := pool_get(cc.pool, node.list_start + pi)
+        pnode := pool_get(cc.pool, pidx_node.c0)
+        if pnode.b1 {
+            // self parameter — resolve to impl type
+            pnames = pnames.append("self")
+            self_type := resolve_type_name(cc.store, impl_type)
+            ptypes = ptypes.append(self_type)
+        } else {
+            pnames = pnames.append(pnode.s1)
+            cc = _cset_pos(cc, pnode.c0)
+            pt := _parse_type_ann(cc)
+            cc = pt.c
+            ptypes = ptypes.append(pt.type_id)
+        }
+        pi = pi + 1
+    }
+
+    // Return type
+    mut ret := TY_UNIT
+    mut err := 0
+    if node.b2 {
+        cc = _cset_pos(cc, node.c1)
+        rt := _parse_type_ann(cc)
+        cc = rt.c
+        rtinfo := store_get(cc.store, rt.type_id)
+        if type_kind_name(rtinfo.kind) == "Result" {
+            ret = rtinfo.type_id
+            err = rtinfo.type_id2
+        } else {
+            ret = rt.type_id
+        }
+    }
+
+    // Error type
+    if err == 0 && node.c2 > 0 {
+        cc = _cset_pos(cc, node.c2)
+        et := _parse_type_ann(cc)
+        cc = et.c
+        err = et.type_id
+    }
+
+    // Effects and where clause — token walk not needed for impl methods
+    // (effects on impl methods are rare; add if needed)
+
+    mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
+    if gp_count > 0 {
+        // For impl methods, token_start is the fn keyword position
+        // We don't have it directly from AST, but we can use 0 as fallback
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, 0)
+    }
+    cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
     cc
 }
 
@@ -1115,7 +1601,7 @@ fn _register_fn_sig(c: Checker) -> Checker {
     cc
 }
 
-fn _register_impl_fns(c: Checker) -> Checker {
+fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
     mut cc := _cadv(c)  // skip impl
     // Capture names: "impl TypeName {" or "impl TraitName for TypeName {"
     mut first_name := ""
@@ -1152,6 +1638,72 @@ fn _register_impl_fns(c: Checker) -> Checker {
             }
         }
     }
+
+    // AST path: iterate method children from the EkImplDecl node
+    if node_idx > 0 {
+        impl_node := pool_get(cc.pool, node_idx)
+        mut mi := 0
+        while mi < impl_node.list_count {
+            midx_node := pool_get(cc.pool, impl_node.list_start + mi)
+            method_idx := midx_node.c0
+            method_node := pool_get(cc.pool, method_idx)
+            // The method FnDecl has a token position — find it for token_start
+            // Use the method node's span to find the token position
+            // We need the token position of the fn keyword — look it up from the method node
+            // Method nodes are EkFnDecl; their span points to the fn keyword
+            // We need to find the token index for this method
+            // Since we have the method node in the pool, use token_start from a scan
+            cc = _register_impl_fn_sig_ast(cc, impl_type, method_idx)
+            mi = mi + 1
+        }
+        // Still need to handle associated types — scan tokens for those
+        lb := "\{"
+        while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        if _ck2(cc) != lb { return cc }
+        cc = _cadv(cc)
+        cc = _cskip_nl(cc)
+        rb := "\}"
+        while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "pub" { cc = _cadv(cc) }
+            if _ck2(cc) == "fn" {
+                // Skip fn — already registered via AST
+                cc = _cadv(cc)
+                while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == lb { cc = _skip_braces2(cc) } else { cc = _cadv(cc) }
+                }
+            } else if _ck2(cc) == "type" {
+                cc = _cadv(cc)
+                if _ck2(cc) == "IDENT" {
+                    assoc_name := _ccur(cc).text
+                    cc = _cadv(cc)
+                    if _ck2(cc) == "=" {
+                        cc = _cadv(cc)
+                        if _ck2(cc) == "IDENT" {
+                            assoc_value := _ccur(cc).text
+                            if impl_type != "" {
+                                alias_name := impl_type + "_" + assoc_name
+                                tid := resolve_type_name(cc.store, assoc_value)
+                                if tid != TY_UNKNOWN {
+                                    new_st := store_add(cc.store, TypeInfo{kind: TyNamed, name: alias_name, type_id: tid, type_id2: 0, param_start: 0, param_count: 0})
+                                    cc = _cset_store(cc, new_st)
+                                }
+                            }
+                        }
+                    }
+                }
+                while _ck2(cc) != "NEWLINE" && _ck2(cc) != rb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+            } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
+                return cc
+            } else {
+                cc = _cadv(cc)
+            }
+            cc = _cskip_nl(cc)
+        }
+        if _ck2(cc) == rb { cc = _cadv(cc) }
+        return cc
+    }
+
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
     if _ck2(cc) != lb { return cc }
@@ -1518,7 +2070,7 @@ fn _check_fn(c: Checker) -> Checker {
     cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
     cc = Checker{tokens: cc.tokens, pos: cc.pos, store: cc.store, registry: cc.registry,
             treg: cc.treg, diagnostics: cc.diagnostics, table: cc.table,
-            current_scope: cc.current_scope, file: cc.file,
+            current_scope: cc.current_scope, file: cc.file, pool: cc.pool,
             env_names: cc.env_names, env_types: cc.env_types, env_scopes: cc.env_scopes,
             fn_return_type: cc.fn_return_type, fn_error_type: cc.fn_error_type, fn_current_name: name, in_loop: cc.in_loop}
 
@@ -1660,7 +2212,7 @@ fn _check_entry(c: Checker) -> Checker {
     // entry blocks have all effects
     cc = Checker{tokens: cc.tokens, pos: cc.pos, store: cc.store, registry: cc.registry,
             treg: cc.treg, diagnostics: cc.diagnostics, table: cc.table,
-            current_scope: cc.current_scope, file: cc.file,
+            current_scope: cc.current_scope, file: cc.file, pool: cc.pool,
             env_names: cc.env_names, env_types: cc.env_types, env_scopes: cc.env_scopes,
             fn_return_type: cc.fn_return_type, fn_error_type: cc.fn_error_type, fn_current_name: "_entry", in_loop: cc.in_loop}
     result := _check_block(cc)
@@ -3269,8 +3821,8 @@ fn _check_loop(c: Checker) -> CE {
 // Public API
 // ============================================================
 
-fn check(tokens: [Token], index: DeclIndex, table: SymbolTable, file: str) -> CheckResult {
-    mut c := _new_checker(tokens, table, file)
+fn check(tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult {
+    mut c := _new_checker(tokens, pool, table, file)
 
     // Pass 1: register type declarations
     c = _pass1_types(c, index)
