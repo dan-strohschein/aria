@@ -460,6 +460,17 @@ fn _parse_derives(c: Checker, type_name: str) -> Checker {
         cc = _cskip_nl(cc)
     }
     if _ck2(cc) == "]" { cc = _cadv(cc) }
+    // Enforce error category mutual exclusivity
+    has_transient := treg_has_impl(cc.treg, type_name, "Transient")
+    has_permanent := treg_has_impl(cc.treg, type_name, "Permanent")
+    has_user := treg_has_impl(cc.treg, type_name, "UserFault")
+    has_system := treg_has_impl(cc.treg, type_name, "SystemFault")
+    if has_transient && has_permanent {
+        cc = _cerror(cc, E0301, "type " + type_name + " cannot derive both Transient and Permanent")
+    }
+    if has_user && has_system {
+        cc = _cerror(cc, E0301, "type " + type_name + " cannot derive both UserFault and SystemFault")
+    }
     cc
 }
 
@@ -1841,6 +1852,26 @@ fn _check_expr_full(c: Checker) -> CE {
             cb := _check_block(cc)
             cc = cb.c
             // catch unwraps Result to Ok type
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Result" {
+                left_type = info.type_id
+            }
+        } else if k == "IDENT" && _ccur(cc).text == "or" {
+            // or default_value — sugar for catch { _ => yield value }
+            cc = _cadv(cc)
+            right := _check_primary(cc)
+            cc = right.c
+            info := store_get(cc.store, left_type)
+            if type_kind_name(info.kind) == "Result" {
+                left_type = info.type_id
+            } else {
+                left_type = right.type_id
+            }
+        } else if k == "IDENT" && _ccur(cc).text == "must" {
+            // must "message" — unwrap or panic
+            cc = _cadv(cc)
+            right := _check_primary(cc)
+            cc = right.c
             info := store_get(cc.store, left_type)
             if type_kind_name(info.kind) == "Result" {
                 left_type = info.type_id

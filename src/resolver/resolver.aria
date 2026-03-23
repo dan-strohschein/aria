@@ -251,6 +251,11 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaSbClear", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
+    // Contextual keywords used in expressions
+    rr = _add_builtin(rr, "or", SkBuiltin)
+    rr = _add_builtin(rr, "must", SkBuiltin)
+    rr = _add_builtin(rr, "from", SkBuiltin)
+    rr = _add_builtin(rr, "default", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)
     // Result constructors
     rr = _add_builtin(rr, "Ok", SkBuiltin)
@@ -1035,6 +1040,20 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
         } else if k == ")" || k == "]" {
             rr = _radv(rr)
             consumed_value = true
+        } else if k == "?" && _rk(_radv(rr)) == "|" {
+            // ? |e| transform — introduce error binding
+            rr = _radv(rr)  // skip ?
+            rr = _radv(rr)  // skip |
+            if _rk(rr) == "IDENT" {
+                ename := _rcur(rr).text
+                espan := _rspan(rr)
+                rr = _add_sym_warn_shadow(rr, ename, SkParameter, espan, false)
+                rr = _radv(rr)
+            } else {
+                rr = _radv(rr)
+            }
+            if _rk(rr) == "|" { rr = _radv(rr) }
+            consumed_value = false
         } else if k == "catch" {
             rr = _radv(rr)  // skip catch
             // Parse |e| binding and resolve block body

@@ -1,0 +1,54 @@
+// Test: Tier 6 error handling completeness
+
+type AppError =
+    | NotFound(str)
+    | Timeout(i64)
+
+fn may_fail(ok: bool) -> i64 ! AppError {
+    if ok { return Ok(42) }
+    Err(NotFound("missing"))
+}
+
+fn transform_test() -> i64 ! str {
+    // Test ? |e| transform — convert AppError to str
+    result := may_fail(false) ? |e| "transformed error"
+    Ok(result)
+}
+
+fn or_test() -> i64 {
+    // Test or default
+    val := may_fail(false) or 99
+    val
+}
+
+fn must_test() -> i64 {
+    // Test must on success
+    val := may_fail(true) must "should not fail"
+    val
+}
+
+entry {
+    // Test 1: or default value
+    result := or_test()
+    assert result == 99
+
+    // Test 2: must on success
+    result2 := must_test()
+    assert result2 == 42
+
+    // Test 3: ? with transform
+    tr := transform_test()
+    // transform_test returns Err("transformed error")
+    // We catch it here
+    val := tr catch |e| { 0 }
+    assert val == 0
+
+    // Test 4: basic catch still works
+    val2 := may_fail(true) catch |e| { 0 }
+    assert val2 == 42
+
+    val3 := may_fail(false) catch |e| { 0 - 1 }
+    assert val3 == 0 - 1
+
+    print("error_handling_test passed")
+}

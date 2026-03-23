@@ -128,6 +128,12 @@ fn populate_builtins(reg: TraitRegistry) -> TraitRegistry {
     rr = treg_add_trait(rr, TraitDef{name: "Drop", method_names: ["", "drop"], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
     rr = treg_add_trait(rr, TraitDef{name: "Send", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
     rr = treg_add_trait(rr, TraitDef{name: "Share", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
+    // Error category traits
+    rr = treg_add_trait(rr, TraitDef{name: "Transient", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
+    rr = treg_add_trait(rr, TraitDef{name: "Permanent", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
+    rr = treg_add_trait(rr, TraitDef{name: "UserFault", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
+    rr = treg_add_trait(rr, TraitDef{name: "SystemFault", method_names: [""], parent_traits: [""], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
+    rr = treg_add_trait(rr, TraitDef{name: "Retryable", method_names: ["", "retryAfter", "maxRetries"], parent_traits: ["", "Transient"], assoc_type_names: [""], default_starts: [0], default_ends: [0]})
 
     // Integer types: implement Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric
     rr = _add_numeric_impl(rr, "i64")

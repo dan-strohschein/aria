@@ -1933,26 +1933,170 @@ fn _lower_expr(l: Lowerer) -> LT {
             if _lk(ll) == lb {
                 ll = _ladv(ll)  // skip {
                 ll = _lskip_nl(ll)
-                mut catch_last := -1
-                while _lk(ll) != rb && _lk(ll) != "EOF" {
-                    ck := _lk(ll)
-                    if ck == "return" || ck == "mut" || ck == "break" || ck == "continue" || ck == "assert" {
-                        ll = _lower_stmt(ll)
-                    } else {
-                        cr := _lower_expr_result(ll)
-                        ll = cr.l
-                        catch_last = cr.temp
-                    }
-                    ll = _lskip_nl(ll)
+                // Check for typed catch arms: { Pat => expr, ... }
+                // Detect by peeking for => after first token(s)
+                mut is_typed_catch := false
+                mut peek_p := ll.pos
+                while peek_p < ll.tokens.len() {
+                    pk := token_name(ll.tokens[peek_p].kind)
+                    if pk == "=>" { is_typed_catch = true }
+                    if pk == "NEWLINE" || pk == rb || pk == "EOF" { peek_p = ll.tokens.len() }
+                    peek_p = peek_p + 1
                 }
-                if _lk(ll) == rb { ll = _ladv(ll) }
-                if catch_last >= 0 {
-                    ll = _lemit(ll, new_inst(OpStore, final_nt.temp, catch_last, 0, "", 0))
+                if is_typed_catch {
+                    // Typed catch arms: process as match on error value
+                    // Each arm: Pattern => expr
+                    catch_end := _lnew_label(ll)
+                    ll = catch_end.l
+                    // Check if error is a data sum type (has tag)
+                    mut err_tag_temp := err_val.temp
+                    mut is_err_sum := false
+                    err_parent := _variant_parent(ll.registry, "")
+                    // Try to extract tag from error value
+                    err_tag_ext := _lnew_temp(ll)
+                    ll = err_tag_ext.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, err_tag_ext.temp, err_val.temp, 0, "_tag", 0))
+                    err_tag_temp = err_tag_ext.temp
+                    while _lk(ll) != rb && _lk(ll) != "EOF" {
+                        ll = _lskip_nl(ll)
+                        if _lk(ll) == rb { break }
+                        // Read pattern
+                        pat := _lcur(ll).text
+                        pat_kind := _lk(ll)
+                        ll = _ladv(ll)
+                        // Skip destructuring if present
+                        if _lk(ll) == "(" {
+                            while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                            if _lk(ll) == ")" { ll = _ladv(ll) }
+                        }
+                        if _lk(ll) == "\{" {
+                            while _lk(ll) != "\}" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                            if _lk(ll) == "\}" { ll = _ladv(ll) }
+                        }
+                        if _lk(ll) == "=>" { ll = _ladv(ll) }
+                        ll = _lskip_nl(ll)
+                        if pat == "_" || (pat_kind == "IDENT" && _variant_tag(ll.registry, pat) == 0) {
+                            // Wildcard or binding — always matches
+                            if pat != "_" { ll = _lenv_add(ll, pat, err_val.temp) }
+                            if _lk(ll) == "\{" {
+                                ll = _lower_block(ll)
+                            } else {
+                                cr := _lower_expr(ll)
+                                ll = cr.l
+                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, cr.temp, 0, "", 0))
+                            }
+                            ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
+                        } else {
+                            // Variant pattern — compare tag
+                            vtag := _variant_tag(ll.registry, pat)
+                            next_arm := _lnew_label(ll)
+                            ll = next_arm.l
+                            vtag_nt := _lnew_temp(ll)
+                            ll = vtag_nt.l
+                            ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                            vcmp := _lnew_temp(ll)
+                            ll = vcmp.l
+                            ll = _lemit(ll, new_inst(OpEq, vcmp.temp, err_tag_temp, vtag_nt.temp, "", 0))
+                            ll = _lemit(ll, new_inst(OpBranchFalse, 0, vcmp.temp, next_arm.temp, "", 0))
+                            if _lk(ll) == "\{" {
+                                ll = _lower_block(ll)
+                            } else {
+                                cr := _lower_expr(ll)
+                                ll = cr.l
+                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, cr.temp, 0, "", 0))
+                            }
+                            ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpLabel, 0, next_arm.temp, 0, "", 0))
+                        }
+                        ll = _lskip_nl(ll)
+                    }
+                    if _lk(ll) == rb { ll = _ladv(ll) }
+                    ll = _lemit(ll, new_inst(OpLabel, 0, catch_end.temp, 0, "", 0))
+                } else {
+                    // Simple catch body
+                    mut catch_last := -1
+                    while _lk(ll) != rb && _lk(ll) != "EOF" {
+                        ck := _lk(ll)
+                        if ck == "return" || ck == "mut" || ck == "break" || ck == "continue" || ck == "assert" {
+                            ll = _lower_stmt(ll)
+                        } else {
+                            cr := _lower_expr_result(ll)
+                            ll = cr.l
+                            catch_last = cr.temp
+                        }
+                        ll = _lskip_nl(ll)
+                    }
+                    if _lk(ll) == rb { ll = _ladv(ll) }
+                    if catch_last >= 0 {
+                        ll = _lemit(ll, new_inst(OpStore, final_nt.temp, catch_last, 0, "", 0))
+                    }
                 }
             }
             // End
             ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
             left = final_nt.temp
+        } else if k == "IDENT" && _lcur(ll).text == "or" {
+            // or default_value — sugar for catch { _ => yield value }
+            ll = _ladv(ll)  // skip or
+            default_val := _lower_expr(ll)
+            ll = default_val.l
+            // Extract tag
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
+            const_one := _lnew_temp(ll)
+            ll = const_one.l
+            ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
+            is_err := _lnew_temp(ll)
+            ll = is_err.l
+            ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+            or_err_lbl := _lnew_label(ll)
+            ll = or_err_lbl.l
+            or_end_lbl := _lnew_label(ll)
+            ll = or_end_lbl.l
+            final_nt := _lnew_temp(ll)
+            ll = final_nt.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, or_err_lbl.temp, "", 0))
+            // Ok path: unwrap
+            ok_val := _lnew_temp(ll)
+            ll = ok_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, ok_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, or_end_lbl.temp, 0, "", 0))
+            // Err path: use default
+            ll = _lemit(ll, new_inst(OpLabel, 0, or_err_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, default_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, or_end_lbl.temp, 0, "", 0))
+            left = final_nt.temp
+        } else if k == "IDENT" && _lcur(ll).text == "must" {
+            // must "message" — unwrap or panic with custom message
+            ll = _ladv(ll)  // skip must
+            msg := _lower_expr(ll)
+            ll = msg.l
+            // Extract tag
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
+            const_one := _lnew_temp(ll)
+            ll = const_one.l
+            ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
+            is_err := _lnew_temp(ll)
+            ll = is_err.l
+            ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+            panic_lbl := _lnew_label(ll)
+            ll = panic_lbl.l
+            ok_lbl := _lnew_label(ll)
+            ll = ok_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, panic_lbl.temp, "", 0))
+            ok_val := _lnew_temp(ll)
+            ll = ok_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, panic_lbl.temp, 0, "", 0))
+            // Panic with the message
+            ll = _lemit(ll, new_inst(OpCall, 0, msg.temp, 2, "_aria_panic", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+            left = ok_val.temp
         } else if k == "??" {
             // Null coalesce: left ?? default — if Some, unwrap; else use default
             ll = _ladv(ll)
@@ -2060,7 +2204,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                 left = nt.temp
             }
         } else if k == "?" {
-            // Error propagation in expression context
+            // Error propagation — with optional |e| transform
             ll = _ladv(ll)
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
@@ -2081,8 +2225,39 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left, 1, "_val", 0))
             ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
             ll = _lemit(ll, new_inst(OpLabel, 0, err_lbl.temp, 0, "", 0))
-            ll = _emit_defers(ll)
-            ll = _lemit(ll, new_inst(OpRet, 0, left, 0, "", 0))
+            // Check for error transform: ? |e| expr
+            if _lk(ll) == "|" {
+                ll = _ladv(ll)  // skip |
+                mut transform_name := "_"
+                if _lk(ll) == "IDENT" {
+                    transform_name = _lcur(ll).text
+                    ll = _ladv(ll)
+                } else {
+                    ll = _ladv(ll)
+                }
+                if _lk(ll) == "|" { ll = _ladv(ll) }
+                // Bind error value
+                err_val := _lnew_temp(ll)
+                ll = err_val.l
+                ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, left, 1, "_val", 0))
+                if transform_name != "_" {
+                    ll = _lenv_add(ll, transform_name, err_val.temp)
+                }
+                // Lower transform expression
+                transform := _lower_expr(ll)
+                ll = transform.l
+                // Build new Err with transformed value and return
+                new_err := _lnew_temp(ll)
+                ll = new_err.l
+                ll = _lemit(ll, new_inst(OpAlloc, new_err.temp, 2, 0, "_Result", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, new_err.temp, const_one.temp, 0, "_tag", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, new_err.temp, transform.temp, 1, "_val", 0))
+                ll = _emit_defers(ll)
+                ll = _lemit(ll, new_inst(OpRet, 0, new_err.temp, 0, "", 0))
+            } else {
+                ll = _emit_defers(ll)
+                ll = _lemit(ll, new_inst(OpRet, 0, left, 0, "", 0))
+            }
             ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
             left = ok_val.temp
         } else if k == "!" {
