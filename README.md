@@ -1,20 +1,23 @@
 # Aria Programming Language
 
-A statically typed, compiled programming language designed for clarity, safety, and AI-assisted development. Aria compiles to native executables via LLVM.
+**Aria is a programming language designed for AI assistants.** It is not meant for humans to write by hand — it is designed to be maximally efficient for LLMs to generate, reason about, and maintain. Every design decision optimizes for how AI models process and produce code: unambiguous grammar, minimal syntax noise, explicit types, no hidden behavior, and exhaustive safety checks that catch the mistakes LLMs make.
 
-**The compiler is self-hosting** — it compiles its own source code to a native ARM64 binary.
+Aria is statically typed, compiles to native executables via LLVM, and the compiler is **self-hosting** — it compiles its own source code.
 
-## Key Features
+## Why a Language for AI?
 
-- **No boilerplate** — no semicolons, type inference, expression-body functions
-- **Safe by default** — no null, no exceptions; `Option[T]` and `Result[T, E]` instead
-- **Exhaustive pattern matching** — the compiler ensures every case is handled
-- **Algebraic types** — sum types, structs, generics with trait bounds
-- **Structured concurrency** — `spawn`, `scope` (auto-join), channels, `select`
-- **Effect tracking** — `with [Io, Fs, Net]` declares side effects
-- **GC with opt-out** — garbage collected by default; `@stack`, `@arena`, `Pool[T]` when you need control
-- **FFI** — `extern fn` calls C functions directly
-- **158 test programs** covering every language feature
+Human-oriented languages are full of ambiguity, implicit behavior, and ceremony that LLMs struggle with: semicolons they forget, null they don't check, exceptions they don't handle, overloaded syntax they misparse. Aria eliminates all of these:
+
+- **No boilerplate** — no semicolons, type inference, expression-body functions. Less tokens = cheaper and more accurate generation.
+- **No ambiguity** — every construct has exactly one meaning. The grammar requires zero lookahead for most constructs.
+- **No implicit behavior** — no null, no exceptions, no implicit conversions, no hidden control flow. What the AI writes is what runs.
+- **Exhaustive safety** — the compiler catches missing match arms, unhandled errors, mutability violations, and effect mismatches. LLMs make these mistakes constantly; the compiler fixes them.
+- **Algebraic types** — sum types and pattern matching give LLMs a structured way to model domain logic without class hierarchies.
+- **Structured concurrency** — `spawn`, `scope`, channels, `select`. Safe concurrency that's hard to get wrong.
+- **Effect tracking** — `with [Io, Fs, Net]` makes side effects visible to the AI reasoning about code.
+- **GC with opt-out** — garbage collected by default; `@stack`, `@arena`, `Pool[T]` when the AI needs control.
+- **FFI** — `extern fn` calls C functions directly for system-level work.
+- **158 test programs** covering every language feature.
 
 ## Quick Example
 
