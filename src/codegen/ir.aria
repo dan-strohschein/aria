@@ -204,22 +204,37 @@ struct IrModule {
     entry_func: str
     test_count: i64
     test_names: [str]
+    // FFI: extern function declarations
+    extern_names: [str]
+    extern_param_counts: [i64]
+    extern_ret_types: [str]
+    extern_libs: [str]
 }
 
 fn new_ir_module() -> IrModule =
-    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""]}
+    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""],
+             extern_names: [""], extern_param_counts: [0], extern_ret_types: [""], extern_libs: [""]}
 
 fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule =
-    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names}
+    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
+             extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs}
 
 fn mod_add_string(m: IrModule, s: str) -> IrModule =
-    IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names}
+    IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
+             extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs}
+
+fn mod_add_extern(m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule =
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
+             extern_names: m.extern_names.append(name), extern_param_counts: m.extern_param_counts.append(param_count),
+             extern_ret_types: m.extern_ret_types.append(ret_type), extern_libs: m.extern_libs.append(lib)}
 
 fn mod_set_entry(m: IrModule, name: str) -> IrModule =
-    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name, test_count: m.test_count, test_names: m.test_names}
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name, test_count: m.test_count, test_names: m.test_names,
+             extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs}
 
 fn mod_add_test(m: IrModule, name: str) -> IrModule =
-    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count + 1, test_names: m.test_names.append(name)}
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count + 1, test_names: m.test_names.append(name),
+             extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs}
 
 fn mod_find_string(m: IrModule, s: str) -> i64 {
     mut i := 1

@@ -737,10 +737,41 @@ fn _pass2_fns(c: Checker) -> Checker {
             cc = _register_trait_decl(cc)
         } else if k == "const" {
             cc = _register_const(cc)
+        } else if k == "extern" {
+            cc = _register_extern(cc)
         } else {
             cc = _cadv(cc)
         }
         cc = _cskip_nl(cc)
+    }
+    cc
+}
+
+fn _register_extern(c: Checker) -> Checker {
+    mut cc := _cadv(c)  // skip extern
+    lb := "\{"
+    rb := "\}"
+    // Skip optional library name string
+    if _ck2(cc) == "STRING" { cc = _cadv(cc) }
+    // Block form: extern "lib" { fn ...; fn ...; }
+    if _ck2(cc) == lb {
+        cc = _cadv(cc)  // skip {
+        cc = _cskip_nl(cc)
+        while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == "fn" {
+                cc = _register_fn_sig(cc)
+            } else {
+                cc = _cadv(cc)
+            }
+            cc = _cskip_nl(cc)
+        }
+        if _ck2(cc) == rb { cc = _cadv(cc) }
+        return cc
+    }
+    // Single form: extern fn name(...)
+    if _ck2(cc) == "fn" {
+        cc = _register_fn_sig(cc)
     }
     cc
 }

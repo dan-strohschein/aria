@@ -68,6 +68,7 @@ type TokenKind =
     | TkBefore
     | TkAfter
     | TkMock
+    | TkExtern
     // Operators
     | TkPlus
     | TkMinus
@@ -187,6 +188,7 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkBefore => "before"
     TkAfter => "after"
     TkMock => "mock"
+    TkExtern => "extern"
     TkPlus => "+"
     TkMinus => "-"
     TkStar => "*"
@@ -274,6 +276,7 @@ fn lookup_keyword(text: str) -> TokenKind {
     if text == "before" { return TkBefore }
     if text == "after" { return TkAfter }
     if text == "mock" { return TkMock }
+    if text == "extern" { return TkExtern }
     if text == "scope" { return TkScope }
     if text == "select" { return TkSelect }
     if text == "true" { return TkBoolTrue }

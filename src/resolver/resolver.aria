@@ -396,6 +396,42 @@ fn _pass1(r: Resolver) -> Resolver {
             }
             rr = _radv(rr)
             rr = _rskip_nl(rr)
+        } else if k == "extern" {
+            // extern fn name(...) or extern "lib" { fn name(...); ... }
+            rr = _radv(rr)  // skip extern
+            lb2 := "\{"
+            rb2 := "\}"
+            if _rk(rr) == "STRING" { rr = _radv(rr) }
+            if _rk(rr) == lb2 {
+                rr = _radv(rr)  // skip {
+                rr = _rskip_nl(rr)
+                while _rk(rr) != rb2 && _rk(rr) != "EOF" {
+                    rr = _rskip_nl(rr)
+                    if _rk(rr) == "fn" {
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" {
+                            ename := _rcur(rr).text
+                            espan := _rspan(rr)
+                            rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
+                        }
+                    }
+                    while _rk(rr) != "NEWLINE" && _rk(rr) != rb2 && _rk(rr) != "EOF" { rr = _radv(rr) }
+                    rr = _rskip_nl(rr)
+                }
+                if _rk(rr) == rb2 { rr = _radv(rr) }
+                rr = _rskip_nl(rr)
+            } else if _rk(rr) == "fn" {
+                rr = _radv(rr)
+                if _rk(rr) == "IDENT" {
+                    ename := _rcur(rr).text
+                    espan := _rspan(rr)
+                    rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
+                }
+                while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                rr = _rskip_nl(rr)
+            } else {
+                rr = _rskip_nl(rr)
+            }
         } else if k == "entry" || k == "test" || k == "impl" {
             // These have bodies — skip to next declaration boundary
             rr = _skip_to_next_top(rr)
@@ -523,8 +559,13 @@ fn _pass2(r: Resolver) -> Resolver {
             rr = _resolve_const(rr)
         } else if k == "entry" {
             rr = _resolve_entry(rr)
-        } else if k == "test" {
+        } else if k == "test" || k == "bench" {
             rr = _resolve_test(rr)
+        } else if k == "extern" {
+            // Skip extern declarations (already registered in pass 1)
+            rr = _skip_to_next_top(rr)
+        } else if k == "before" || k == "after" {
+            rr = _resolve_test(rr)  // fixtures have same structure as test blocks
         } else {
             rr = _radv(rr)
         }

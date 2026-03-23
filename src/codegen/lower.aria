@@ -627,6 +627,8 @@ fn _lower_bodies(l: Lowerer) -> Lowerer {
             ll = _lower_test(ll)
         } else if k == "bench" {
             ll = _lower_bench(ll)
+        } else if k == "extern" {
+            ll = _lower_extern(ll)
         } else if k == "before" || k == "after" {
             // before/after fixtures — lower as special functions
             ll = _lower_fixture(ll, k)
@@ -856,6 +858,112 @@ fn _lower_test(l: Lowerer) -> Lowerer {
     mut new_mod := mod_add_test(ll.module, test_label)
     // Also add the string constant for the test name for printing
     new_mod = mod_add_string(new_mod, test_label)
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            table: ll.table, file: ll.file, module: new_mod,
+            current_func: ll.current_func,
+            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+            env_names: ll.env_names, env_slots: ll.env_slots,
+            loop_start: ll.loop_start, loop_end: ll.loop_end,
+            const_names: ll.const_names, const_vals: ll.const_vals,
+            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+            temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+}
+
+// --- Lower extern declaration ---
+// extern fn name(params) -> ret
+// extern "lib" { fn name(...) -> ret; ... }
+
+fn _lower_extern(l: Lowerer) -> Lowerer {
+    mut ll := _ladv(l)  // skip extern
+    lb := "\{"
+    rb := "\}"
+
+    // Check for library name: extern "libname" { ... }
+    mut lib_name := ""
+    if _lk(ll) == "STRING" {
+        lib_name = _lcur(ll).text
+        ll = _ladv(ll)
+    }
+
+    // Block form: extern "lib" { fn ...; fn ...; }
+    if _lk(ll) == lb {
+        ll = _ladv(ll)  // skip {
+        ll = _lskip_nl(ll)
+        while _lk(ll) != rb && _lk(ll) != "EOF" {
+            ll = _lskip_nl(ll)
+            if _lk(ll) == "fn" {
+                ll = _lower_extern_fn(ll, lib_name)
+            } else {
+                ll = _ladv(ll)
+            }
+            ll = _lskip_nl(ll)
+        }
+        if _lk(ll) == rb { ll = _ladv(ll) }
+        return ll
+    }
+
+    // Single form: extern fn name(params) -> ret
+    if _lk(ll) == "fn" {
+        ll = _lower_extern_fn(ll, lib_name)
+    }
+    ll
+}
+
+fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
+    mut ll := _ladv(l)  // skip fn
+    if _lk(ll) != "IDENT" { return ll }
+    name := _lcur(ll).text
+    ll = _ladv(ll)
+
+    // Parse parameters to count them and determine types
+    mut param_count := 0
+    mut is_variadic := false
+    if _lk(ll) == "(" {
+        ll = _ladv(ll)
+        while _lk(ll) != ")" && _lk(ll) != "EOF" {
+            if _lk(ll) == "." {
+                // Check for ... (variadic)
+                ll = _ladv(ll)
+                if _lk(ll) == "." {
+                    ll = _ladv(ll)
+                    if _lk(ll) == "." { ll = _ladv(ll) }
+                    is_variadic = true
+                }
+            } else if _lk(ll) == "IDENT" {
+                ll = _ladv(ll)  // param name
+                if _lk(ll) == ":" {
+                    ll = _ladv(ll)
+                    // Skip type annotation
+                    ll = _skip_type_l(ll)
+                }
+                param_count = param_count + 1
+            } else {
+                ll = _ladv(ll)
+            }
+            if _lk(ll) == "," { ll = _ladv(ll) }
+        }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+    }
+
+    // Parse return type
+    mut ret_type := "void"
+    if _lk(ll) == "->" {
+        ll = _ladv(ll)
+        // Determine return type from type annotation
+        if _lk(ll) == "IDENT" {
+            rt := _lcur(ll).text
+            if rt == "i64" || rt == "i32" || rt == "i16" || rt == "i8" { ret_type = "i64" }
+            if rt == "u64" || rt == "u32" || rt == "u16" || rt == "u8" { ret_type = "i64" }
+            if rt == "f64" || rt == "f32" { ret_type = "f64" }
+            if rt == "bool" { ret_type = "i64" }
+            if rt == "str" { ret_type = "str" }
+        }
+        ll = _skip_type_l(ll)
+    }
+
+    // Register extern function in module
+    new_mod := mod_add_extern(ll.module, name, param_count, ret_type, lib)
     Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,

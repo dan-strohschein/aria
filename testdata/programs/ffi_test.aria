@@ -1,0 +1,23 @@
+// Test: FFI — calling C functions from Aria
+
+extern fn abs(n: i64) -> i64
+
+extern "m" {
+    fn floor(x: f64) -> f64
+}
+
+entry {
+    // Test 1: Call C abs()
+    result := abs(0 - 42)
+    assert result == 42
+
+    // Test 2: Negative number
+    result2 := abs(0 - 1)
+    assert result2 == 1
+
+    // Test 3: Zero
+    result3 := abs(0)
+    assert result3 == 0
+
+    print("ffi_test passed")
+}

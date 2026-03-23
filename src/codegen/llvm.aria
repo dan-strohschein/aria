@@ -353,6 +353,29 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append(cb + nl)
     p = p.append(nl)
 
+    // FFI: extern function declarations
+    mut ei := 1
+    while ei < m.extern_names.len() {
+        ename := m.extern_names[ei]
+        epc := m.extern_param_counts[ei]
+        ert := m.extern_ret_types[ei]
+        // Build LLVM declare statement
+        mut ret_llvm := "void"
+        if ert == "i64" { ret_llvm = "i64" }
+        if ert == "f64" { ret_llvm = "double" }
+        if ert == "str" { ret_llvm = _str_ret_type() }
+        mut params_llvm := ""
+        mut pi := 0
+        while pi < epc {
+            if pi > 0 { params_llvm = params_llvm + ", " }
+            params_llvm = params_llvm + "i64"
+            pi = pi + 1
+        }
+        p = p.append("declare " + ret_llvm + " @" + ename + "(" + params_llvm + ")" + nl)
+        ei = ei + 1
+    }
+    p = p.append(nl)
+
     // User functions — collect defined names for forward declarations
     mut defined_names := [""]
     mut fi := 1
@@ -378,8 +401,14 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     while ci < called_names.len() {
         cname := called_names[ci]
         if _name_in_list(cname, defined_names) == false {
-            // Check it's not a runtime function (already declared above)
-            if cname.startsWith("_aria_") == false {
+            // Check it's not a runtime function or extern function (already declared above)
+            mut is_extern := false
+            mut exi := 1
+            while exi < m.extern_names.len() {
+                if m.extern_names[exi] == cname { is_extern = true }
+                exi = exi + 1
+            }
+            if cname.startsWith("_aria_") == false && is_extern == false {
                 // Declare as varargs i64 return
                 p = p.append("declare i64 @" + cname + "(...)" + nl)
             }
