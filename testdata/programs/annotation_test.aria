@@ -1,0 +1,29 @@
+// Test: Annotations — @deprecated, @cold, @opaque, @cstruct
+
+@deprecated("use new_add instead")
+fn old_add(a: i64, b: i64) -> i64 = a + b
+
+fn new_add(a: i64, b: i64) -> i64 = a + b
+
+@cold
+fn rarely_called() -> i64 = 999
+
+entry {
+    // Calling deprecated function should produce warning (not error)
+    result := old_add(1, 2)
+    assert result == 3
+
+    // Non-deprecated function
+    result2 := new_add(3, 4)
+    assert result2 == 7
+
+    // Cold function still works
+    result3 := rarely_called()
+    assert result3 == 999
+
+    // @stack annotation on expression
+    x := @stack 42
+    assert x == 42
+
+    print("annotation_test passed")
+}

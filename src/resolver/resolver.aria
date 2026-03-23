@@ -347,6 +347,17 @@ fn _pass1(r: Resolver) -> Resolver {
             rr = _radv(rr)
         }
 
+        // Skip annotations before declarations
+        if _rk(rr) == "@" {
+            rr = _radv(rr)  // skip @
+            if _rk(rr) == "IDENT" { rr = _radv(rr) }  // skip annotation name
+            if _rk(rr) == "(" {
+                rr = _radv(rr)
+                while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                if _rk(rr) == ")" { rr = _radv(rr) }
+            }
+            rr = _rskip_nl(rr)
+        }
         k := _rk(rr)
         if k == "fn" {
             rr = _radv(rr)  // skip "fn"

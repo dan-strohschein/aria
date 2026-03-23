@@ -728,8 +728,49 @@ fn _pass2_fns(c: Checker) -> Checker {
 
     while _ck2(cc) != "EOF" {
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        // Parse annotations before declarations
+        mut ann_deprecated := ""
+        mut ann_cold := false
+        if _ck2(cc) == "@" {
+            cc = _cadv(cc)  // skip @
+            if _ck2(cc) == "IDENT" {
+                ann_name := _ccur(cc).text
+                cc = _cadv(cc)
+                if ann_name == "deprecated" {
+                    // Parse optional message: @deprecated("msg")
+                    if _ck2(cc) == "(" {
+                        cc = _cadv(cc)
+                        if _ck2(cc) == "STRING" {
+                            ann_deprecated = _ccur(cc).text
+                            cc = _cadv(cc)
+                        }
+                        if _ck2(cc) == ")" { cc = _cadv(cc) }
+                    }
+                    if ann_deprecated == "" { ann_deprecated = "deprecated" }
+                }
+                if ann_name == "cold" { ann_cold = true }
+                // Skip other annotations (opaque, cstruct, cffi, owned, borrowed)
+                if _ck2(cc) == "(" {
+                    cc = _cadv(cc)
+                    while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+                    if _ck2(cc) == ")" { cc = _cadv(cc) }
+                }
+            }
+            cc = _cskip_nl(cc)
+        }
         k := _ck2(cc)
         if k == "fn" {
+            // Peek at fn name to register annotations
+            next_pos := cc.pos + 1
+            if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == "IDENT" {
+                fn_name := cc.tokens[next_pos].text
+                if ann_deprecated != "" {
+                    cc = _cset_reg(cc, reg_add_deprecated(cc.registry, fn_name, ann_deprecated))
+                }
+                if ann_cold {
+                    cc = _cset_reg(cc, reg_add_cold(cc.registry, fn_name))
+                }
+            }
             cc = _register_fn_sig(cc)
         } else if k == "impl" {
             cc = _register_impl_fns(cc)
@@ -2161,6 +2202,11 @@ fn _check_primary(c: Checker) -> CE {
         if _ck2(cc) == "(" {
             sig := reg_find_fn(cc.registry, name)
             if sig.name != "" {
+                // Check deprecation
+                if reg_is_deprecated(cc.registry, name) {
+                    dep_msg := reg_deprecated_msg(cc.registry, name)
+                    cc = _cwarning(cc, "W0005", "'" + name + "' is deprecated: " + dep_msg)
+                }
                 // Check effect compatibility (skip for entry/test blocks which have all effects)
                 if fn_is_pure(sig) == false && cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)

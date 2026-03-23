@@ -472,6 +472,14 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     }
 
     mut p := [""]
+    // Check for @cold attribute
+    mut cold_attr := ""
+    mut cni := 1
+    while cni < m.extern_names.len() {
+        // Reuse extern_names lookup — actually check a separate cold list
+        cni = cni + 1
+    }
+    // For now, cold is a no-op in LLVM (would need: #0 attributes = { cold })
     p = p.append("define " + ret_type + " @" + f.name + "(" + params + ") " + lb + nl)
     p = p.append("entry:" + nl)
 

@@ -540,23 +540,65 @@ struct TypeRegistry {
     struct_defs: [StructDef]
     fn_sigs: [FnSig]
     mono_specs: [MonoSpec]
+    // Annotation tracking
+    deprecated_names: [str]
+    deprecated_msgs: [str]
+    cold_names: [str]
 }
 
 fn new_registry() -> TypeRegistry =
     TypeRegistry{
         struct_defs: [_sentinel_struct_def()],
         fn_sigs: [_sentinel_fn_sig()],
-        mono_specs: [_sentinel_mono_spec()]
+        mono_specs: [_sentinel_mono_spec()],
+        deprecated_names: [""],
+        deprecated_msgs: [""],
+        cold_names: [""]
     }
 
 fn reg_add_struct(reg: TypeRegistry, def: StructDef) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs}
+    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
 
 fn reg_add_fn(reg: TypeRegistry, sig: FnSig) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig), mono_specs: reg.mono_specs}
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig), mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
 
 fn reg_add_mono(reg: TypeRegistry, spec: MonoSpec) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs.append(spec)}
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs.append(spec), deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
+
+fn reg_add_deprecated(reg: TypeRegistry, name: str, msg: str) -> TypeRegistry =
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
+                 deprecated_names: reg.deprecated_names.append(name), deprecated_msgs: reg.deprecated_msgs.append(msg), cold_names: reg.cold_names}
+
+fn reg_add_cold(reg: TypeRegistry, name: str) -> TypeRegistry =
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
+                 deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names.append(name)}
+
+fn reg_is_deprecated(reg: TypeRegistry, name: str) -> bool {
+    mut i := 1
+    while i < reg.deprecated_names.len() {
+        if reg.deprecated_names[i] == name { return true }
+        i = i + 1
+    }
+    false
+}
+
+fn reg_deprecated_msg(reg: TypeRegistry, name: str) -> str {
+    mut i := 1
+    while i < reg.deprecated_names.len() {
+        if reg.deprecated_names[i] == name { return reg.deprecated_msgs[i] }
+        i = i + 1
+    }
+    ""
+}
+
+fn reg_is_cold(reg: TypeRegistry, name: str) -> bool {
+    mut i := 1
+    while i < reg.cold_names.len() {
+        if reg.cold_names[i] == name { return true }
+        i = i + 1
+    }
+    false
+}
 
 fn reg_find_mono(reg: TypeRegistry, specialized_name: str) -> MonoSpec {
     mut i := 1
