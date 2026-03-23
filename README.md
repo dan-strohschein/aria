@@ -1,295 +1,334 @@
-# Aria — Self-Hosting Compiler
+# Aria Programming Language
 
-The self-hosting Aria compiler, written in Aria. It compiles Aria source code to native ARM64 macOS executables — no external toolchain required.
+A statically typed, compiled programming language designed for clarity, safety, and AI-assisted development. Aria compiles to native executables via LLVM.
 
-## What Is Aria?
+**The compiler is self-hosting** — it compiles its own source code to a native ARM64 binary.
 
-Aria is a programming language designed for AI-assisted development. Its core principles:
+## Key Features
 
-- **Every token carries meaning** — no boilerplate, no ceremony, no semicolons
-- **Strong type system** — sum types, exhaustive pattern matching, effect tracking
-- **Instant compilation** — unambiguous grammar, minimal lookahead, single-pass where possible
-- **Opt-in performance** — garbage collected by default, manual memory control per-block
-- **No implicit behavior** — no implicit conversions, no hidden exceptions, no null
+- **No boilerplate** — no semicolons, type inference, expression-body functions
+- **Safe by default** — no null, no exceptions; `Option[T]` and `Result[T, E]` instead
+- **Exhaustive pattern matching** — the compiler ensures every case is handled
+- **Algebraic types** — sum types, structs, generics with trait bounds
+- **Structured concurrency** — `spawn`, `scope` (auto-join), channels, `select`
+- **Effect tracking** — `with [Io, Fs, Net]` declares side effects
+- **GC with opt-out** — garbage collected by default; `@stack`, `@arena`, `Pool[T]` when you need control
+- **FFI** — `extern fn` calls C functions directly
+- **158 test programs** covering every language feature
 
-The full language specification lives in [`../aria-docs/`](https://github.com/dan-strohschein/aria-docs).
+## Quick Example
 
-## Who Is This For?
+```aria
+mod main
 
-- **Language implementers** studying how a compiler bootstraps from a Go transpiler to native code generation
-- **AI tooling researchers** exploring language design optimized for LLM code generation
-- **Contributors** interested in the Aria language and its compiler infrastructure
+type Shape =
+    | Circle(f64)
+    | Rectangle(f64, f64)
+    | Point
 
-## Current Status
+fn area(s: Shape) -> f64 = match s {
+    Circle(r) => 3.14159 * r * r
+    Rectangle(w, h) => w * h
+    Point => 0.0
+}
 
-The compiler is in active development toward self-hosting. Here's what works today:
+fn fetch_all(urls: [str]) -> [str] {
+    scope {
+        // All spawned tasks auto-join at scope exit
+        t1 := spawn fetch(urls[1])
+        t2 := spawn fetch(urls[2])
+    }
+}
 
-### Working Features
+entry {
+    shape := Circle(5.0)
+    println("Area: {area(shape)}")
 
-| Feature | Status |
-|---------|--------|
-| Lexer (full tokenization) | Done |
-| Parser (recursive descent) | Done |
-| Name resolution & scoping | Done |
-| Type checker (inference, traits, generics) | Done |
-| Native ARM64 code generation | Done |
-| Mach-O executable output (macOS ARM64) | Done |
-| Ad-hoc code signing (no codesign needed) | Done |
-| Integer arithmetic & comparisons | Done |
-| String operations (concat, equality, contains, charAt, substring) | Done |
-| Struct allocation & field access | Done |
-| Array operations (create, append, index, len, growth) | Done |
-| String arrays with 16-byte stride | Done |
-| Sum types & pattern matching | Done |
-| Control flow (if/else, while, for, loop, break, continue) | Done |
-| Function calls & return values | Done |
-| Const declarations | Done |
-| CLI argument access | Done |
-| Multi-file compilation | Done |
-| `aria build` command dispatch | Done |
-| File I/O (read, write binary) | Done |
+    config := read_file("config.json") or "{}"
+    port := parse_int(config) or 8080
 
-### Test Programs
+    println("Listening on port {port}")
+}
 
-12 test programs verify correctness: function calls, entry blocks, structs, arrays, array growth, pattern matching, string operations, string concatenation, array indexing in expressions, integration tests, and multi-file compilation.
+test "area calculation" {
+    assert area(Circle(1.0)) == 3.14159
+    assert area(Rectangle(3.0, 4.0)) == 12.0
+}
+```
+
+## Building
+
+### Prerequisites
+
+- macOS on Apple Silicon (ARM64) — or Linux ARM64/AMD64 (cross-compilation supported)
+- Go 1.21+ (for the bootstrap compiler)
+- clang (for LLVM IR compilation)
+
+### Build the Compiler
+
+```bash
+# Clone both repos
+git clone https://github.com/dan-strohschein/aria-compiler-go.git
+git clone https://github.com/dan-strohschein/aria.git
+
+# Build the bootstrap compiler
+cd aria-compiler-go
+go build -o aria ./cmd/aria
+cd ../aria
+
+# Build the self-hosting compiler
+../aria-compiler-go/aria build src/
+
+# The compiler is now at src/aria_generated
+```
+
+### Self-Compile (Compiler Compiles Itself)
+
+```bash
+./src/aria_generated build src/
+# Produces src/src — a native ARM64 binary built by its own source code
+```
+
+### Use the Compiler
+
+```bash
+# Type-check
+./src/aria_generated check myfile.aria
+
+# Compile to native executable
+./src/aria_generated build myfile.aria
+
+# Compile and run
+./src/aria_generated run myfile.aria
+
+# Run tests
+./src/aria_generated test myfile.aria
+
+# Run benchmarks
+./src/aria_generated bench myfile.aria
+
+# Explain an error
+./src/aria_generated explain E0400
+
+# Apply auto-fixes
+./src/aria_generated fix myfile.aria
+```
+
+### Directory Arguments
+
+The compiler accepts directories — it recursively finds all `.aria` files:
+
+```bash
+./src/aria_generated build src/        # compiles entire compiler
+./src/aria_generated check myproject/  # checks all files in project
+```
+
+## Language Overview
+
+### Variables and Types
+
+```aria
+x := 42                    // immutable, type inferred (i64)
+mut count := 0             // mutable
+name: str = "Aria"         // explicit type
+const PI: f64 = 3.14159    // compile-time constant
+
+// Duration and size literals
+timeout := 30s             // nanoseconds
+buffer := 4kb              // bytes
+```
+
+### Error Handling
+
+```aria
+// Functions declare error types with !
+fn parse(input: str) -> Config ! ParseError {
+    if input.len() == 0 { return Err(ParseError.Empty) }
+    Ok(Config{...})
+}
+
+// ? propagates errors
+fn load() -> App ! AppError {
+    config := parse(read_file("app.json")?) ? |e| AppError.Config{source: e}
+    Ok(App{config: config})
+}
+
+// Recovery options
+val := parse(input) catch |e| { default_config }
+val := parse(input) or default_config
+val := parse(input) must "config required"
+val := parse(input)!  // panic on error
+```
+
+### Pattern Matching
+
+```aria
+match result {
+    Ok(value) if value > 0 => println("positive: {value}")
+    Ok(0) => println("zero")
+    Ok(n) => println("negative: {n}")
+    Err(e) => println("error: {e}")
+}
+
+// Or-patterns, named patterns, nested patterns
+match shape {
+    s @ Circle(r) if r > 10.0 => large_circle(s)
+    Circle(_) | Point => small()
+    Rectangle(w, h) => area(w, h)
+}
+
+// Refutable bindings
+Ok(config) := load_config() else {
+    return default_config()
+}
+```
+
+### Concurrency
+
+```aria
+// Structured concurrency — tasks auto-join at scope exit
+scope {
+    users := spawn fetch_users()
+    orders := spawn fetch_orders()
+}
+// Both complete here
+
+// Channels
+ch := _ariaChanNew(10)
+ch.send(42)
+val := ch.recv()
+
+// Iterate channel until closed
+for msg in ch {
+    process(msg)
+}
+
+// Detached tasks (not auto-joined)
+spawn.detach fn() -> i64 { background_work() }
+```
+
+### Traits and Generics
+
+```aria
+trait Display {
+    fn display(self) -> str
+}
+
+impl Display for Point {
+    fn display(self) -> str = "({self.x}, {self.y})"
+}
+
+fn print_all[T: Display](items: [T]) {
+    for item in items {
+        println(item.display())
+    }
+}
+
+struct Pair[A, B] {
+    first: A
+    second: B
+} derives [Eq, Clone, Debug]
+```
+
+### FFI (Foreign Function Interface)
+
+```aria
+extern fn abs(n: i64) -> i64
+
+extern "sqlite3" {
+    fn sqlite3_open(filename: i64, db: i64) -> i64
+    fn sqlite3_close(db: i64) -> i64
+}
+
+entry {
+    result := abs(-42)  // calls C abs()
+}
+```
+
+### Memory Management
+
+```aria
+// Default: GC-managed (no annotation needed)
+data := MyStruct{x: 1, y: 2}
+
+// Opt-out: stack allocation
+buf := @stack Buffer.new(4096)
+
+// Opt-out: arena (bulk allocate, bulk free)
+arena := _ariaArenaNew(2mb)
+// ... many allocations ...
+_ariaArenaFree(arena)
+
+// Opt-out: object pool
+pool := _ariaPoolNew(100, 64)
+obj := _ariaPoolGet(pool)
+_ariaPoolPut(pool, obj)
+
+// Deterministic cleanup
+impl Drop for Connection {
+    fn drop(self) { self.close() }
+}
+
+with conn := connect(url)? {
+    conn.query("SELECT ...")
+}  // conn.drop() called here
+```
 
 ## Architecture
 
 ### Compilation Pipeline
 
 ```
-Source (.aria) → Lexer → Tokens → Resolver → Checker → Lowerer → IR → Emitter → ARM64 → Mach-O
+Source (.aria) --> Lexer --> Resolver --> Checker --> Lowerer --> LLVM IR --> clang --> Native Binary
 ```
 
-Each stage is a separate module under `src/`:
+| Stage | Directory | Purpose |
+|-------|-----------|---------|
+| Diagnostics | `src/diagnostic/` | Error codes, rendering, JSON output |
+| Lexer | `src/lexer/` | Tokenization (keywords, literals, interpolation) |
+| Resolver | `src/resolver/` | Name resolution, scope hierarchy, imports |
+| Checker | `src/checker/` | Type inference, trait bounds, generics, effects, exhaustiveness |
+| Codegen | `src/codegen/` | IR lowering, LLVM IR generation, clang invocation |
+| Runtime | `runtime/` | C runtime (GC, strings, arrays, maps, channels, networking) |
+| CLI | `src/main.aria` | Command dispatch, directory expansion, argument parsing |
 
-| Stage | Directory | What it does |
-|-------|-----------|-------------|
-| Diagnostics | `src/diagnostic/` | Error codes, rendering, JSON output, diagnostic bags |
-| Lexer | `src/lexer/` | Tokenization per the formal grammar |
-| Parser | `src/parser/` | Recursive descent AST construction |
-| Resolver | `src/resolver/` | Name resolution, scope hierarchy |
-| Checker | `src/checker/` | Type inference, trait bounds, generics, effects |
-| Codegen | `src/codegen/` | Lowering, ARM64 emission, Mach-O generation |
-| CLI | `src/main.aria` | Command dispatch, argument parsing |
+### Project Stats
 
-### Key Architectural Choices
+- **27 source files** across 7 modules
+- **158 test programs** in `testdata/programs/`
+- **~15,000 lines** of Aria source
+- **~1,700 lines** of C runtime
+- **Self-compiling** — the compiler builds itself
 
-**Direct native code generation.** The compiler emits ARM64 machine code directly — no LLVM, no assembler, no linker. The entire pipeline from source to executable is self-contained.
+## Cross-Compilation
 
-**Spill-everything register allocation.** Every IR temporary gets a stack slot. Values are loaded before use and stored after definition. Simple and correct; optimization comes later.
+The compiler supports 6 target platforms:
 
-**Mach-O with ad-hoc signing.** Executables include a full Mach-O header with LC_MAIN, LC_UUID, LC_BUILD_VERSION, chained fixups, and an embedded ad-hoc code signature with SHA-256 page hashes. The kernel accepts these without `codesign`.
+| Target | Triple |
+|--------|--------|
+| `darwin-arm64` | `arm64-apple-macosx14.0.0` (default) |
+| `darwin-amd64` | `x86_64-apple-macosx14.0.0` |
+| `linux-amd64` | `x86_64-unknown-linux-gnu` |
+| `linux-arm64` | `aarch64-unknown-linux-gnu` |
+| `windows-amd64` | `x86_64-pc-windows-msvc` |
+| `wasm32` | `wasm32-unknown-unknown` |
 
-**PC-relative string addressing (ADR).** String constants are placed directly after code in the `__TEXT` segment. ADR instructions compute addresses relative to the program counter, making binaries position-independent and ASLR-compatible.
+## AI Integration
 
-**Sentinel arrays.** All arrays use index 0 as a sentinel element. Real data starts at index 1. This simplifies bounds handling and matches the Aria runtime convention.
+Aria is designed for AI-assisted development. Three files enable any AI to generate correct Aria code:
 
-**Fat-pointer strings.** Strings are represented as two consecutive stack slots: a pointer and a length. String-returning functions pass both values in X0/X1.
+| File | Purpose |
+|------|---------|
+| [`aria-lang-ai-guide.md`](aria-lang-ai-guide.md) | Universal AI context — paste into any LLM |
+| [`.cursorrules`](.cursorrules) | Auto-loaded by Cursor IDE |
+| [`.github/copilot-instructions.md`](.github/copilot-instructions.md) | Auto-loaded by GitHub Copilot |
 
-**String arrays use 16-byte stride.** `[str]` arrays store each element as a (ptr, len) pair. The emitter distinguishes these from `[i64]` arrays via type_id tracking.
+## Documentation
 
-**Immutable functional state threading.** The lowerer, emitter, and other passes thread state through function return values rather than mutating shared state. Every helper returns a new `Lowerer` or `Emitter` struct.
-
-### Project Structure
-
-```
-aria/
-├── src/
-│   ├── main.aria              # CLI entry point
-│   ├── diagnostic/            # Error reporting (2 files, ~400 lines)
-│   ├── lexer/                 # Tokenization (3 files, ~1800 lines)
-│   ├── parser/                # AST construction (4 files, ~2500 lines)
-│   ├── resolver/              # Name resolution (3 files, ~1500 lines)
-│   ├── checker/               # Type checking (5 files, ~3000 lines)
-│   └── codegen/               # Native code gen (9 files, ~4000 lines)
-│       ├── arm64.aria         # ARM64 instruction encoding
-│       ├── ir.aria            # IR types and module
-│       ├── emit.aria          # IR → ARM64 machine code
-│       ├── runtime.aria       # Runtime stubs (exit, write, alloc, memcpy, args, etc.)
-│       ├── macho.aria         # Mach-O binary format
-│       ├── lower.aria         # Token stream → IR
-│       ├── codegen.aria       # Pipeline wiring, multi-file, patching
-│       └── e2e_test.aria      # End-to-end test suite
-├── testdata/programs/         # 12 test programs
-├── plan.md                    # Implementation roadmap
-└── CLAUDE.md                  # AI assistant guide
-```
-
-**27 source files, ~13,500 lines of Aria.**
-
-## Building
-
-### Prerequisites
-
-- macOS on Apple Silicon (ARM64)
-- Go 1.21+ (for the bootstrap compiler)
-- The [bootstrap compiler](https://github.com/dan-strohschein/aria-compiler-go) cloned as a sibling directory
-
-### Build with the Bootstrap Compiler
-
-The bootstrap compiler transpiles Aria to Go, then calls `go build`:
-
-```bash
-# Build the bootstrap compiler (one-time)
-cd ../aria-compiler-go
-go build -o aria ./cmd/aria
-cd ../aria
-
-# Build the self-hosting compiler
-../aria-compiler-go/aria build \
-  src/diagnostic/diagnostic.aria \
-  src/lexer/token.aria \
-  src/lexer/lexer.aria \
-  src/resolver/scope.aria \
-  src/resolver/resolver.aria \
-  src/checker/types.aria \
-  src/checker/traits.aria \
-  src/checker/checker.aria \
-  src/codegen/arm64.aria \
-  src/codegen/ir.aria \
-  src/codegen/emit.aria \
-  src/codegen/runtime.aria \
-  src/codegen/macho.aria \
-  src/codegen/lower.aria \
-  src/codegen/codegen.aria \
-  src/main.aria
-```
-
-This produces `./diagnostic` — the self-hosting compiler as a Go binary.
-
-### Use the Self-Hosting Compiler
-
-```bash
-# Show help
-./diagnostic
-
-# Show version
-./diagnostic version
-
-# Build a single-file program
-./diagnostic build testdata/programs/entry_test.aria
-./testdata/programs/entry_test
-
-# Build a multi-file program
-./diagnostic build testdata/programs/multi_a.aria testdata/programs/multi_b.aria
-./testdata/programs/multi_a
-```
-
-The compiler reads Aria source, runs the full pipeline (lex → resolve → check → lower → emit), and writes a native ARM64 Mach-O executable.
-
-### Run the Test Suite
-
-Build and run the end-to-end test suite:
-
-```bash
-../aria-compiler-go/aria build \
-  src/diagnostic/diagnostic.aria \
-  src/lexer/token.aria \
-  src/lexer/lexer.aria \
-  src/resolver/scope.aria \
-  src/resolver/resolver.aria \
-  src/checker/types.aria \
-  src/checker/traits.aria \
-  src/checker/checker.aria \
-  src/codegen/arm64.aria \
-  src/codegen/ir.aria \
-  src/codegen/emit.aria \
-  src/codegen/runtime.aria \
-  src/codegen/macho.aria \
-  src/codegen/lower.aria \
-  src/codegen/codegen.aria \
-  src/codegen/e2e_test.aria
-
-./diagnostic    # Compiles and writes 11 test binaries to /tmp/
-
-# Verify all pass
-for t in entry_test call_test index_expr_test match_test struct_test \
-         array_test integration_test string_test growth_test str_simple; do
-  /tmp/aria_${t}
-  echo "${t}: $?"
-done
-```
-
-## What's Planned
-
-Based on the [implementation plan](plan.md) and current progress, here's what's ahead:
-
-### Near-Term (Toward Full Self-Hosting)
-
-- **String interpolation** in codegen — `"hello {name}"` currently works in the lexer/parser but not yet in native code emission
-- **Closures** — closure capture and GC-boxed representation
-- **Error handling** — `Result` types, `?` propagation, `catch` blocks
-- **For loops with iterators** — currently simplified; needs proper range/collection iteration
-- **Growable string buffers** — currently uses mmap-per-allocation; needs bump allocator or arena
-- **More stdlib** — `Map`, `Set`, sorting, formatting utilities needed by the compiler itself
-
-### Medium-Term (Post Self-Hosting)
-
-- **Optimization passes** — constant folding, dead code elimination, inlining
-- **Better register allocation** — move from spill-everything to linear scan
-- **Linux ARM64 support** — ELF output alongside Mach-O
-- **x86-64 backend** — second architecture target
-- **Incremental compilation** — only recompile changed files
-- **Proper garbage collector** — tracing GC to replace mmap-per-allocation
-
-### Long-Term (Full Language)
-
-- **Concurrency** — tasks, structured concurrency with `scope`, channels, `select`
-- **Effect system** — purity verification, effect declarations
-- **FFI** — foreign function interface for C interop
-- **Memory annotations** — `@stack`, `@arena`, `@inline` for granular control
-- **LLVM backend** — Tier 2 optimizing backend
-- **Full standard library** — networking, JSON, crypto, HTTP
-
-## Language Quick Reference
-
-```aria
-mod main
-
-use std.fs
-
-// Variables
-x := 42
-mut y := 0
-name: str = "Aria"
-
-// Functions
-fn add(a: i64, b: i64) -> i64 = a + b
-
-fn greet(name: str) {
-    println("Hello, " + name)
-}
-
-// Structs
-struct Point { x: f64, y: f64 }
-
-// Sum types
-type Shape =
-    | Circle(f64)
-    | Rect(f64, f64)
-    | Dot
-
-// Pattern matching
-fn describe(s: Shape) -> str = match s {
-    Circle(r) => "circle"
-    Rect(w, h) => "rectangle"
-    Dot => "dot"
-}
-
-// Constants
-const MAX_SIZE: i64 = 1024
-
-// Entry point
-entry {
-    println("Hello from Aria")
-}
-
-// Tests
-test "addition" {
-    assert add(2, 3) == 5
-}
-```
+- **Language specification**: [`aria-docs`](https://github.com/dan-strohschein/aria-docs) (33 spec files)
+- **Bootstrap compiler**: [`aria-compiler-go`](https://github.com/dan-strohschein/aria-compiler-go) (Go)
+- **Gap analysis**: [`Gaps1.md`](Gaps1.md) (feature completion tracking)
+- **AI guide**: [`aria-lang-ai-guide.md`](aria-lang-ai-guide.md) (complete syntax reference)
 
 ## License
 
