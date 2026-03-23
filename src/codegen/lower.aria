@@ -22,6 +22,7 @@ struct Lowerer {
     store: TypeStore
     registry: TypeRegistry
     treg: TraitRegistry
+    pool: NodePool
     table: SymbolTable
     file: str
     module: IrModule
@@ -70,10 +71,10 @@ struct LT {
 
 // --- Constructor ---
 
-fn _new_lowerer(tokens: [Token], store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> Lowerer =
+fn _new_lowerer(tokens: [Token], pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> Lowerer =
     Lowerer{
         tokens: tokens, pos: 0, store: store, registry: reg, treg: treg,
-        table: table, file: file,
+        pool: pool, table: table, file: file,
         module: new_ir_module(),
         current_func: _sentinel_func(),
         temp_counter: 0, label_counter: 0,
@@ -98,7 +99,7 @@ fn _lcur(l: Lowerer) -> Token {
 fn _lk(l: Lowerer) -> str = token_name(_lcur(l).kind)
 
 fn _ladv(l: Lowerer) -> Lowerer =
-    Lowerer{tokens: l.tokens, pos: l.pos + 1, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos + 1, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -110,7 +111,7 @@ fn _ladv(l: Lowerer) -> Lowerer =
             fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
-    Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -129,7 +130,7 @@ fn _lskip_nl(l: Lowerer) -> Lowerer {
 
 fn _lnew_temp(l: Lowerer) -> LT {
     temp := l.temp_counter
-    ll := Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    ll := Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
                   table: l.table, file: l.file, module: l.module,
                   current_func: l.current_func,
                   temp_counter: l.temp_counter + 1, label_counter: l.label_counter,
@@ -144,7 +145,7 @@ fn _lnew_temp(l: Lowerer) -> LT {
 
 fn _lnew_label(l: Lowerer) -> LT {
     lbl := l.label_counter
-    ll := Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    ll := Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
                   table: l.table, file: l.file, module: l.module,
                   current_func: l.current_func,
                   temp_counter: l.temp_counter, label_counter: l.label_counter + 1,
@@ -159,7 +160,7 @@ fn _lnew_label(l: Lowerer) -> LT {
 
 fn _lemit(l: Lowerer, inst: IrInst) -> Lowerer {
     new_func := func_add_inst(l.current_func, inst)
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: new_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -172,7 +173,7 @@ fn _lemit(l: Lowerer, inst: IrInst) -> Lowerer {
 }
 
 fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: f,
             temp_counter: 0, label_counter: 0,
@@ -186,7 +187,7 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
 fn _lfinish_func(l: Lowerer) -> Lowerer {
     f := func_set_locals(l.current_func, l.temp_counter)
     new_mod := mod_add_func(l.module, f)
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: new_mod,
             current_func: _sentinel_func(),
             temp_counter: 0, label_counter: l.label_counter,
@@ -199,7 +200,7 @@ fn _lfinish_func(l: Lowerer) -> Lowerer {
 }
 
 fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -288,7 +289,7 @@ fn _is_str_array_type(store: TypeStore, tid: i64) -> bool {
 
 // Check if a type_id represents a named/struct type (not a builtin)
 fn _is_named_type(store: TypeStore, tid: i64) -> bool {
-    if tid >= 100 { return true }
+    if tid >= TY_STRUCT_BASE { return true }
     if tid <= 16 { return false }
     info := store_get(store, tid)
     if type_kind_name(info.kind) == "Named" { return true }
@@ -369,7 +370,7 @@ fn _lower_struct_eq(l: Lowerer, a: i64, b: i64, sname: str, result_temp: i64) ->
 }
 
 fn _is_struct_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> bool {
-    if tid >= 100 { return true }
+    if tid >= TY_STRUCT_BASE { return true }
     if tid <= 16 { return false }
     info := store_get(store, tid)
     if type_kind_name(info.kind) == "Named" {
@@ -380,8 +381,8 @@ fn _is_struct_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> bool {
 }
 
 fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
-    // Check registry-based 100+ range first
-    if tid >= 100 {
+    // Check registry-based struct types first
+    if tid >= TY_STRUCT_BASE {
         return _struct_name_from_type(reg, tid)
     }
     // Check store-based type_ids
@@ -394,7 +395,7 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 }
 
 // --- Type tracking helpers ---
-// Type IDs: 0=unknown, 1=i64, 12=str, 13=[str], 100+=struct types
+// Type IDs: 0=unknown, 1-20=builtins, 21-99=store types, TY_STRUCT_BASE+=registry struct types
 
 fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
     // Bounds check: temp should never exceed a few thousand in any function
@@ -417,7 +418,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
         }
         idx = idx + 1
     }
-    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -535,7 +536,7 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                             ci = ci + 1
                         }
                         if neg { num = 0 - num }
-                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                                      table: ll.table, file: ll.file, module: ll.module,
                                      current_func: ll.current_func,
                                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -548,7 +549,7 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                         ll = _ladv(ll)
                     } else if _lk(ll) == "STRING" {
                         sval := _lcur(ll).text
-                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                                      table: ll.table, file: ll.file, module: ll.module,
                                      current_func: ll.current_func,
                                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -576,7 +577,7 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                                 ci = ci + 1
                             }
                             num = 0 - num
-                            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                                          table: ll.table, file: ll.file, module: ll.module,
                                          current_func: ll.current_func,
                                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -635,7 +636,7 @@ fn _lower_bodies(l: Lowerer, index: DeclIndex) -> Lowerer {
                 // before/after fixture — pass the actual keyword to _lower_fixture
                 ll = _lower_fixture(ll, _lk(ll))
             } else {
-                ll = _lower_fn(ll)
+                ll = _lower_fn_d(ll, decl)
             }
         } else if kname == "entry" {
             ll = _lower_entry(ll)
@@ -646,7 +647,7 @@ fn _lower_bodies(l: Lowerer, index: DeclIndex) -> Lowerer {
                 ll = _lower_test(ll)
             }
         } else if kname == "impl" {
-            ll = _lower_impl(ll)
+            ll = _lower_impl_d(ll, decl)
         } else {
             // type, enum, trait, const, use — skip (already handled by checker/const scan)
             ll = _lset_pos(ll, decl.body_end)
@@ -688,6 +689,125 @@ fn _skip_to_next_l(l: Lowerer) -> Lowerer {
 
 // --- Lower function ---
 
+// DeclInfo-aware fn lowering — jumps directly to body_start
+fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
+    name := decl.name
+    mut ll := l
+
+    sig := reg_find_fn(ll.registry, name)
+    if sig.name == "" { return _lset_pos(ll, decl.body_end) }
+
+    // Skip generic function bodies — they are lowered via monomorphization
+    if fn_is_generic(sig) { return _lset_pos(ll, decl.body_end) }
+
+    // Count actual register args (strings take 2 regs each)
+    mut actual_param_count := 0
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+            actual_param_count = actual_param_count + 2
+        } else {
+            actual_param_count = actual_param_count + 1
+        }
+        pi = pi + 1
+    }
+
+    // Start a new IR function with actual register arg count
+    ll = _lset_func(ll, new_ir_func(name, actual_param_count, sig.return_type))
+
+    // Track error type for Ok wrapping and ? operator
+    if sig.error_type > 0 {
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
+                table: ll.table, file: ll.file, module: ll.module,
+                current_func: ll.current_func,
+                temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                env_names: ll.env_names, env_slots: ll.env_slots,
+                loop_start: ll.loop_start, loop_end: ll.loop_end,
+                const_names: ll.const_names, const_vals: ll.const_vals,
+                const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                temp_types: ll.temp_types,
+                fn_error_type: sig.error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
+    }
+
+    // Allocate temps for parameters
+    pi = 1
+    while pi < sig.param_names.len() {
+        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+            ll = _lset_type(ll, nt.temp, 12)
+        } else {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+            if pi <= sig.param_types.len() - 1 && sig.param_types[pi] > 0 {
+                pt := sig.param_types[pi]
+                if _is_str_array_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 13)
+                } else {
+                    ll = _lset_type(ll, nt.temp, pt)
+                }
+            }
+        }
+        pi = pi + 1
+    }
+
+    // Jump directly to body using DeclIndex body_start
+    ll = _lset_pos(ll, decl.body_start)
+    _lower_fn_body_d(ll, sig)
+}
+
+// Shared body-lowering logic for _lower_fn_d — dispatches to = expr or { block } forms
+fn _lower_fn_body_d(l: Lowerer, sig: FnSig) -> Lowerer {
+    mut ll := l
+    lb := "\{"
+
+    if _lk(ll) == "=" {
+        ll = _ladv(ll)
+        ll = _lskip_nl(ll)
+        result := _lower_expr(ll)
+        ll = result.l
+        ll = _emit_defers(ll)
+        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+            ret_type := _lget_type(ll, result.temp)
+            mut ok_slots := 2
+            if ret_type == 12 { ok_slots = 3 }
+            ok_nt := _lnew_temp(ll)
+            ll = ok_nt.l
+            ll = _lemit(ll, new_inst(OpAlloc, ok_nt.temp, ok_slots, 0, "_Result", 0))
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, tag_nt.temp, 0, "_tag", 0))
+            if ret_type == 12 {
+                ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, result.temp, 1, "_val", 0))
+                val_len := result.temp + 1
+                ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, val_len, 2, "_val_len", 0))
+            } else {
+                ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, result.temp, 1, "_val", 0))
+            }
+            ll = _lemit(ll, new_inst(OpRet, 0, ok_nt.temp, 0, "", 0))
+        } else {
+            ret_type := _lget_type(ll, result.temp)
+            ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", ret_type))
+        }
+        ll = _lfinish_func(ll)
+    } else if _lk(ll) == lb {
+        ll = _lower_fn_body(ll, sig.return_type)
+        ll = _lfinish_func(ll)
+    } else {
+        ll = _lskip_nl(ll)
+        if _lk(ll) == lb {
+            ll = _lower_fn_body(ll, sig.return_type)
+            ll = _lfinish_func(ll)
+        } else {
+            ll = _lfinish_func(ll)
+        }
+    }
+    ll
+}
+
 fn _lower_fn(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip fn
     if _lk(ll) != "IDENT" { return ll }
@@ -717,7 +837,7 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
 
     // Track error type for Ok wrapping and ? operator
     if sig.error_type > 0 {
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                 table: ll.table, file: ll.file, module: ll.module,
                 current_func: ll.current_func,
                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -826,7 +946,7 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
     ll = _lfinish_func(ll)
     mut new_mod := ll.module
     new_mod = mod_set_entry(new_mod, "_main")
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -870,7 +990,7 @@ fn _lower_test(l: Lowerer) -> Lowerer {
     mut new_mod := mod_add_test(ll.module, test_label)
     // Also add the string constant for the test name for printing
     new_mod = mod_add_string(new_mod, test_label)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -976,7 +1096,7 @@ fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
 
     // Register extern function in module
     new_mod := mod_add_extern(ll.module, name, param_count, ret_type, lib)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -1013,7 +1133,7 @@ fn _lower_bench(l: Lowerer) -> Lowerer {
     // Register as test (bench runner treats these specially)
     mut new_mod := mod_add_test(ll.module, bench_label)
     new_mod = mod_add_string(new_mod, bench_label)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -1042,6 +1162,157 @@ fn _lower_fixture(l: Lowerer, kind: str) -> Lowerer {
 }
 
 // --- Lower impl block ---
+
+// DeclInfo-aware impl lowering — walks AST method children
+fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
+    mut ll := _ladv(l)  // skip impl
+    mut impl_type := ""
+    if _lk(ll) == "IDENT" {
+        impl_type = _lcur(ll).text
+        ll = _ladv(ll)
+    }
+    if _lk(ll) == "for" {
+        ll = _ladv(ll)
+        if _lk(ll) == "IDENT" {
+            impl_type = _lcur(ll).text
+            ll = _ladv(ll)
+        }
+    }
+
+    // AST path: walk method children from EkImplDecl
+    if decl.node_idx > 0 {
+        impl_node := pool_get(ll.pool, decl.node_idx)
+        // Position inside the impl block for token scanning
+        ll = _lset_pos(ll, decl.body_start)
+        lb2 := "\{"
+        if _lk(ll) == lb2 { ll = _ladv(ll) }
+        ll = _lskip_nl(ll)
+
+        mut mi := 0
+        while mi < impl_node.list_count {
+            midx_node := pool_get(ll.pool, impl_node.list_start + mi)
+            method_node := pool_get(ll.pool, midx_node.c0)
+            raw_name := method_node.s1
+            name := impl_type + "_" + raw_name
+
+            sig := reg_find_fn(ll.registry, name)
+            if sig.name != "" && fn_is_generic(sig) == false && method_node.b1 {
+                ll = _lower_impl_method_by_name(ll, impl_type, raw_name, sig)
+            }
+            mi = mi + 1
+        }
+        ll = _lset_pos(ll, decl.body_end)
+        return ll
+    }
+
+    // Legacy fallback
+    ll = _lower_impl_legacy(ll, impl_type)
+    return ll
+}
+
+// Lower a specific impl method — scans forward from current pos to find it
+fn _lower_impl_method_by_name(l: Lowerer, impl_type: str, raw_name: str, sig: FnSig) -> Lowerer {
+    mut ll := l
+    // Scan forward from current position to find fn <raw_name>
+    tlen := ll.tokens.len()
+    mut search_pos := ll.pos
+    lb := "\{"
+    while search_pos < tlen {
+        tk := token_name(ll.tokens[search_pos].kind)
+        if tk == "fn" {
+            next := search_pos + 1
+            if next < tlen {
+                if ll.tokens[next].text == raw_name {
+                    // Found it — position past fn + name
+                    ll = _lset_pos(ll, search_pos + 2)
+
+                    // Count actual register args
+                    mut actual_param_count := 0
+                    mut pi := 1
+                    while pi < sig.param_names.len() {
+                        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+                            actual_param_count = actual_param_count + 2
+                        } else {
+                            actual_param_count = actual_param_count + 1
+                        }
+                        pi = pi + 1
+                    }
+
+                    ll = _lset_func(ll, new_ir_func(impl_type + "_" + raw_name, actual_param_count, sig.return_type))
+
+                    // Allocate temps for parameters
+                    pi = 1
+                    while pi < sig.param_names.len() {
+                        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+                            nt := _lnew_str_temp(ll)
+                            ll = nt.l
+                            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+                            ll = _lset_type(ll, nt.temp, 12)
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+                            if pi <= sig.param_types.len() - 1 && sig.param_types[pi] > 0 {
+                                pt := sig.param_types[pi]
+                                if _is_str_array_type(ll.store, pt) {
+                                    ll = _lset_type(ll, nt.temp, 13)
+                                } else {
+                                    ll = _lset_type(ll, nt.temp, pt)
+                                }
+                            }
+                        }
+                        pi = pi + 1
+                    }
+
+                    // Skip to body
+                    while _lk(ll) != "=" && _lk(ll) != lb && _lk(ll) != "EOF" {
+                        ll = _ladv(ll)
+                    }
+
+                    if _lk(ll) == "=" {
+                        ll = _ladv(ll)
+                        ll = _lskip_nl(ll)
+                        result := _lower_expr(ll)
+                        ll = result.l
+                        ret_type := _lget_type(ll, result.temp)
+                        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", ret_type))
+                    } else if _lk(ll) == lb {
+                        ll = _lower_fn_body(ll, sig.return_type)
+                    }
+                    ll = _lfinish_func(ll)
+                    return ll
+                }
+            }
+        }
+        search_pos = search_pos + 1
+    }
+    ll
+}
+
+// Legacy impl lowering — token-walks the impl block
+fn _lower_impl_legacy(l: Lowerer, impl_type: str) -> Lowerer {
+    mut ll := l
+    lb := "\{"
+    rb := "\}"
+    while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+    if _lk(ll) != lb { return ll }
+    ll = _ladv(ll)
+    ll = _lskip_nl(ll)
+    while _lk(ll) != rb && _lk(ll) != "EOF" {
+        ll = _lskip_nl(ll)
+        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        if _lk(ll) == "fn" {
+            ll = _lower_impl_fn(ll, impl_type)
+        } else if _lk(ll) == rb || _lk(ll) == "EOF" {
+            return ll
+        } else {
+            ll = _ladv(ll)
+        }
+        ll = _lskip_nl(ll)
+    }
+    if _lk(ll) == rb { ll = _ladv(ll) }
+    return ll
+}
 
 fn _lower_impl(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip impl
@@ -2589,7 +2860,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             if panic_str_idx == 0 {
                 new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
                 panic_str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                              table: ll.table, file: ll.file, module: new_mod,
                              current_func: ll.current_func,
                              temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -2671,7 +2942,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         if str_idx == 0 {
             new_mod := mod_add_string(ll.module, val)
             str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                          table: ll.table, file: ll.file, module: new_mod,
                          current_func: ll.current_func,
                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -2698,7 +2969,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         if str_idx == 0 {
             new_mod := mod_add_string(ll.module, val)
             str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                          table: ll.table, file: ll.file, module: new_mod,
                          current_func: ll.current_func,
                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -4350,7 +4621,7 @@ fn _lower_primary(l: Lowerer) -> LT {
             if str_idx == 0 {
                 new_mod := mod_add_string(ll.module, sval)
                 str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                              table: ll.table, file: ll.file, module: new_mod,
                              current_func: ll.current_func,
                              temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -4953,7 +5224,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if hdr_idx == 0 {
                 new_mod := mod_add_string(ll.module, sname + "\{")
                 hdr_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                              table: ll.table, file: ll.file, module: new_mod,
                              current_func: ll.current_func,
                              temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -4982,7 +5253,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                     if sep_idx == 0 {
                         new_mod := mod_add_string(ll.module, ", ")
                         sep_idx = new_mod.string_constants.len() - 1
-                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                                      table: ll.table, file: ll.file, module: new_mod,
                                      current_func: ll.current_func,
                                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5007,7 +5278,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                 if fname_idx == 0 {
                     new_mod := mod_add_string(ll.module, fname_str)
                     fname_idx = new_mod.string_constants.len() - 1
-                    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                                  table: ll.table, file: ll.file, module: new_mod,
                                  current_func: ll.current_func,
                                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5060,7 +5331,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if close_idx == 0 {
                 new_mod := mod_add_string(ll.module, "\}")
                 close_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                              table: ll.table, file: ll.file, module: new_mod,
                              current_func: ll.current_func,
                              temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5264,8 +5535,8 @@ fn _field_index_any(reg: TypeRegistry, field_name: str) -> i64 {
 }
 
 fn _struct_name_from_type(reg: TypeRegistry, type_id: i64) -> str {
-    // type_id >= 100 means struct index = type_id - 100 + 1
-    idx := type_id - 99
+    // type_id >= TY_STRUCT_BASE means struct index = type_id - TY_STRUCT_BASE + 1
+    idx := type_id - TY_STRUCT_BASE + 1
     if idx >= 1 && idx < reg.struct_defs.len() {
         return reg.struct_defs[idx].name
     }
@@ -5276,7 +5547,7 @@ fn _struct_type_id(reg: TypeRegistry, struct_name: str) -> i64 {
     mut i := 1
     while i < reg.struct_defs.len() {
         if reg.struct_defs[i].name == struct_name {
-            return 99 + i  // 100-based
+            return TY_STRUCT_BASE - 1 + i
         }
         i = i + 1
     }
@@ -5548,7 +5819,7 @@ fn _lower_atom(l: Lowerer) -> LT {
             if panic_str_idx == 0 {
                 new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
                 panic_str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                              table: ll.table, file: ll.file, module: new_mod,
                              current_func: ll.current_func,
                              temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5798,7 +6069,7 @@ fn _lower_while(l: Lowerer) -> Lowerer {
     // Set loop labels for break/continue
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5813,7 +6084,7 @@ fn _lower_while(l: Lowerer) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5891,7 +6162,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
     // Set break/continue labels (continue jumps to increment)
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5906,7 +6177,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5953,7 +6224,7 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
     // Set loop labels for break/continue
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -5968,7 +6239,7 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -6087,7 +6358,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     // Set break/continue labels (continue jumps to increment)
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -6102,7 +6373,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -6179,7 +6450,7 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
     // Set loop labels
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -6194,7 +6465,7 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: ll.current_func,
                  temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -6357,7 +6628,7 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
     if idx == 6 { de6 = end }
     if idx == 7 { ds7 = start }
     if idx == 7 { de7 = end }
-    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
             temp_counter: l.temp_counter, label_counter: l.label_counter,
@@ -6701,7 +6972,7 @@ fn _lower_closure(l: Lowerer) -> LT {
     ll = _lfinish_func(ll)
 
     // Restore outer function state
-    ll = Lowerer{tokens: ll.tokens, pos: body_end, store: ll.store, registry: ll.registry, treg: ll.treg,
+    ll = Lowerer{tokens: ll.tokens, pos: body_end, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: saved_func,
                  temp_counter: saved_temp, label_counter: saved_label,
@@ -7048,7 +7319,7 @@ fn _lower_string_const(l: Lowerer, val: str) -> LT {
     if str_idx == 0 {
         new_mod := mod_add_string(ll.module, val)
         str_idx = new_mod.string_constants.len() - 1
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                      table: ll.table, file: ll.file, module: new_mod,
                      current_func: ll.current_func,
                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -8140,7 +8411,7 @@ fn _lower_match(l: Lowerer) -> LT {
                 if fstr_idx == 0 {
                     fnew_mod := mod_add_string(fll.module, pattern)
                     fstr_idx = fnew_mod.string_constants.len() - 1
-                    fll = Lowerer{tokens: fll.tokens, pos: fll.pos, store: fll.store, registry: fll.registry, treg: fll.treg,
+                    fll = Lowerer{tokens: fll.tokens, pos: fll.pos, store: fll.store, registry: fll.registry, treg: fll.treg, pool: fll.pool,
                                  table: fll.table, file: fll.file, module: fnew_mod,
                                  current_func: fll.current_func,
                                  temp_counter: fll.temp_counter, label_counter: fll.label_counter,
@@ -8756,8 +9027,8 @@ fn _lower_derive_debug(l: Lowerer, def: StructDef) -> Lowerer {
     ll
 }
 
-fn lower(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
-    mut l := _new_lowerer(tokens, store, reg, treg, table, file)
+fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
+    mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies(l, index)
     l = _lower_derives(l)
@@ -8766,8 +9037,8 @@ fn lower(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry,
 }
 
 // Lower for test mode: compile test blocks and generate a test runner _main
-fn lower_for_tests(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
-    mut l := _new_lowerer(tokens, store, reg, treg, table, file)
+fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
+    mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies(l, index)
     l = _lower_derives(l)
@@ -8787,7 +9058,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
         if no_tests_idx == 0 {
             new_mod := mod_add_string(ll.module, "no tests found")
             no_tests_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                          table: ll.table, file: ll.file, module: new_mod,
                          current_func: ll.current_func,
                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -8808,7 +9079,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
         ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
         ll = _lfinish_func(ll)
         mut new_mod2 := mod_set_entry(ll.module, "_main")
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                      table: ll.table, file: ll.file, module: new_mod2,
                      current_func: ll.current_func,
                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -8847,7 +9118,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
         if pass_idx == 0 {
             new_mod := mod_add_string(ll.module, "PASS: ")
             pass_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                          table: ll.table, file: ll.file, module: new_mod,
                          current_func: ll.current_func,
                          temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -8883,7 +9154,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
     if done_idx == 0 {
         new_mod := mod_add_string(ll.module, "all tests passed")
         done_idx = new_mod.string_constants.len() - 1
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                      table: ll.table, file: ll.file, module: new_mod,
                      current_func: ll.current_func,
                      temp_counter: ll.temp_counter, label_counter: ll.label_counter,
@@ -8907,7 +9178,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
 
     ll = _lfinish_func(ll)
     mut new_mod := mod_set_entry(ll.module, "_main")
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
             table: ll.table, file: ll.file, module: new_mod,
             current_func: ll.current_func,
             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
