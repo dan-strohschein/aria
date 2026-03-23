@@ -10,6 +10,7 @@ mod codegen
 
 use diagnostic
 use lexer
+use parser
 use resolver
 use checker
 
@@ -40,16 +41,24 @@ struct Lowerer {
     temp_types: [i64]
     // Error type for current function (0 = not fallible)
     fn_error_type: i64
-    // Defer tracking: token positions of deferred expressions (up to 4)
+    // Defer tracking: token positions of deferred expressions (up to 8)
     defer_count: i64
     defer_start_0: i64
     defer_start_1: i64
     defer_start_2: i64
     defer_start_3: i64
+    defer_start_4: i64
+    defer_start_5: i64
+    defer_start_6: i64
+    defer_start_7: i64
     defer_end_0: i64
     defer_end_1: i64
     defer_end_2: i64
     defer_end_3: i64
+    defer_end_4: i64
+    defer_end_5: i64
+    defer_end_6: i64
+    defer_end_7: i64
 }
 
 // --- Lowerer + temp result (like CE) ---
@@ -73,7 +82,7 @@ fn _new_lowerer(tokens: [Token], store: TypeStore, reg: TypeRegistry, treg: Trai
         const_names: [""], const_vals: [0],
         const_str_names: [""], const_str_vals: [""],
         temp_types: [0],
-        fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0
+        fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_start_4: 0, defer_start_5: 0, defer_start_6: 0, defer_start_7: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0, defer_end_4: 0, defer_end_5: 0, defer_end_6: 0, defer_end_7: 0
     }
 
 // --- Helpers ---
@@ -98,7 +107,7 @@ fn _ladv(l: Lowerer) -> Lowerer =
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
     Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry, treg: l.treg,
@@ -110,7 +119,7 @@ fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 
 fn _lskip_nl(l: Lowerer) -> Lowerer {
     mut ll := l
@@ -129,7 +138,7 @@ fn _lnew_temp(l: Lowerer) -> LT {
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
     LT{l: ll, temp: temp}
 }
 
@@ -144,7 +153,7 @@ fn _lnew_label(l: Lowerer) -> LT {
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
     LT{l: ll, temp: lbl}
 }
 
@@ -159,7 +168,7 @@ fn _lemit(l: Lowerer, inst: IrInst) -> Lowerer {
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 }
 
 fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
@@ -172,7 +181,7 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: [0],
-            fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0}
+            fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_start_4: 0, defer_start_5: 0, defer_start_6: 0, defer_start_7: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0, defer_end_4: 0, defer_end_5: 0, defer_end_6: 0, defer_end_7: 0}
 
 fn _lfinish_func(l: Lowerer) -> Lowerer {
     f := func_set_locals(l.current_func, l.temp_counter)
@@ -186,7 +195,7 @@ fn _lfinish_func(l: Lowerer) -> Lowerer {
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 }
 
 fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
@@ -199,7 +208,7 @@ fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 
 fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     mut i := l.env_names.len() - 1
@@ -417,7 +426,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: new_types,
-            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3}
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 }
 
 fn _lget_type(l: Lowerer, temp: i64) -> i64 {
@@ -543,7 +552,7 @@ fn _scan_consts(l: Lowerer) -> Lowerer {
                                      const_names: ll.const_names.append(cname), const_vals: ll.const_vals.append(num),
                                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                                      temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
                         ll = _ladv(ll)
                     } else if _lk(ll) == "STRING" {
                         sval := _lcur(ll).text
@@ -556,7 +565,7 @@ fn _scan_consts(l: Lowerer) -> Lowerer {
                                      const_names: ll.const_names, const_vals: ll.const_vals,
                                      const_str_names: ll.const_str_names.append(cname), const_str_vals: ll.const_str_vals.append(sval),
                                      temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
                         ll = _ladv(ll)
                     } else if _lk(ll) == "-" {
                         // Negative int: - INT
@@ -584,7 +593,7 @@ fn _scan_consts(l: Lowerer) -> Lowerer {
                                          const_names: ll.const_names.append(cname), const_vals: ll.const_vals.append(num),
                                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                                          temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
                             ll = _ladv(ll)
                         }
                     }
@@ -601,45 +610,57 @@ fn _scan_consts(l: Lowerer) -> Lowerer {
 // Pass 3: Lower function/entry/test bodies
 // ============================================================
 
-fn _lower_bodies(l: Lowerer) -> Lowerer {
-    mut ll := _lset_pos(l, 0)
-    ll = _lskip_nl(ll)
-    if ll.pos == 0 { ll = _ladv(ll) }
+fn _lower_bodies(l: Lowerer, index: DeclIndex) -> Lowerer {
+    mut ll := l
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
 
-    if _lk(ll) == "mod" { ll = _ladv(_ladv(ll)) }
-    ll = _lskip_nl(ll)
-    while _lk(ll) == "use" {
-        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" { ll = _ladv(ll) }
-        ll = _lskip_nl(ll)
-    }
+        // Position to the token_start of this declaration
+        ll = _lset_pos(ll, decl.token_start)
 
-    while _lk(ll) != "EOF" {
-        ll = _lskip_nl(ll)
-        if _lk(ll) == "EOF" { return ll }
+        // Skip pub keyword if present
         if _lk(ll) == "pub" { ll = _ladv(ll) }
 
-        k := _lk(ll)
-        if k == "fn" {
-            ll = _lower_fn(ll)
-        } else if k == "entry" {
-            ll = _lower_entry(ll)
-        } else if k == "test" {
-            ll = _lower_test(ll)
-        } else if k == "bench" {
-            ll = _lower_bench(ll)
-        } else if k == "extern" {
-            ll = _lower_extern(ll)
-        } else if k == "before" || k == "after" {
-            // before/after fixtures — lower as special functions
-            ll = _lower_fixture(ll, k)
-        } else if k == "impl" {
-            ll = _lower_impl(ll)
-        } else if k == "const" {
-            ll = _skip_to_next_l(ll)
-        } else {
-            ll = _skip_to_next_l(ll)
+        // Skip annotations
+        if _lk(ll) == "@" {
+            ll = _ladv(ll)
+            if _lk(ll) == "IDENT" { ll = _ladv(ll) }
+            if _lk(ll) == "(" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+            }
+            ll = _lskip_nl(ll)
         }
-        ll = _lskip_nl(ll)
+
+        k := _lk(ll)
+        if kname == "fn" && k == "fn" {
+            // Check for extern fn (name starts with _extern)
+            if decl.name == "_extern" {
+                ll = _lower_extern(ll)
+            } else if decl.name.startsWith("_fixture:") {
+                // before/after fixture — pass the actual keyword to _lower_fixture
+                ll = _lower_fixture(ll, _lk(ll))
+            } else {
+                ll = _lower_fn(ll)
+            }
+        } else if kname == "entry" {
+            ll = _lower_entry(ll)
+        } else if kname == "test" {
+            if decl.name.startsWith("_bench:") {
+                ll = _lower_bench(ll)
+            } else {
+                ll = _lower_test(ll)
+            }
+        } else if kname == "impl" {
+            ll = _lower_impl(ll)
+        } else {
+            // type, enum, trait, const, use — skip (already handled by checker/const scan)
+            ll = _lset_pos(ll, decl.body_end)
+        }
+        di = di + 1
     }
     ll
 }
@@ -714,7 +735,7 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
                 const_names: ll.const_names, const_vals: ll.const_vals,
                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                 temp_types: ll.temp_types,
-                fn_error_type: sig.error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                fn_error_type: sig.error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
     }
 
     // Allocate temps for parameters
@@ -823,7 +844,7 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
             const_names: ll.const_names, const_vals: ll.const_vals,
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 }
 
 // --- Lower test block ---
@@ -832,8 +853,8 @@ fn _lower_test(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip test
 
     // Get test name from string literal or identifier
-    mut test_name := "_test_" + _i2s_lower(ll.module.test_count)
-    mut test_label := "test " + _i2s_lower(ll.module.test_count)
+    mut test_name := "_test_" + i2s(ll.module.test_count)
+    mut test_label := "test " + i2s(ll.module.test_count)
     if _lk(ll) == "STRING" {
         test_label = _lcur(ll).text
         ll = _ladv(ll)
@@ -867,7 +888,7 @@ fn _lower_test(l: Lowerer) -> Lowerer {
             const_names: ll.const_names, const_vals: ll.const_vals,
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 }
 
 // --- Lower extern declaration ---
@@ -973,7 +994,7 @@ fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
             const_names: ll.const_names, const_vals: ll.const_vals,
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 }
 
 // --- Lower bench block ---
@@ -981,8 +1002,8 @@ fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
 
 fn _lower_bench(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip bench
-    mut bench_name := "_bench_" + _i2s_lower(ll.module.test_count)
-    mut bench_label := "bench " + _i2s_lower(ll.module.test_count)
+    mut bench_name := "_bench_" + i2s(ll.module.test_count)
+    mut bench_label := "bench " + i2s(ll.module.test_count)
     if _lk(ll) == "STRING" {
         bench_label = _lcur(ll).text
         ll = _ladv(ll)
@@ -1010,7 +1031,7 @@ fn _lower_bench(l: Lowerer) -> Lowerer {
             const_names: ll.const_names, const_vals: ll.const_vals,
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 }
 
 // --- Lower before/after test fixtures ---
@@ -1027,27 +1048,6 @@ fn _lower_fixture(l: Lowerer, kind: str) -> Lowerer {
     ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
     ll = _lfinish_func(ll)
     ll
-}
-
-fn _i2s_lower(n: i64) -> str {
-    if n == 0 { return "0" }
-    mut result := ""
-    mut v := n
-    while v > 0 {
-        d := v % 10
-        v = v / 10
-        if d == 0 { result = "0" + result }
-        if d == 1 { result = "1" + result }
-        if d == 2 { result = "2" + result }
-        if d == 3 { result = "3" + result }
-        if d == 4 { result = "4" + result }
-        if d == 5 { result = "5" + result }
-        if d == 6 { result = "6" + result }
-        if d == 7 { result = "7" + result }
-        if d == 8 { result = "8" + result }
-        if d == 9 { result = "9" + result }
-    }
-    result
 }
 
 // --- Lower impl block ---
@@ -1181,7 +1181,7 @@ fn _lower_fn_body(l: Lowerer, return_type: i64) -> Lowerer {
             // Explicit return — lower normally, it emits OpRet
             ll = _lower_stmt(ll)
             last_temp = -1  // return already handled
-        } else if k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" {
+        } else if k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" || k == "with" {
             ll = _lower_stmt(ll)
         } else if k == "if" {
             result := _lower_if(ll)
@@ -1313,9 +1313,22 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
         // Check if this is effect clause (with [...]) or resource block
         mut ll := _ladv(l)  // skip with
         if _lk(ll) != "[" {
+            // Check for named binding: with name := expr { body }
+            mut res_name := ""
+            if _lk(ll) == "IDENT" {
+                next := ll.pos + 1
+                if next < ll.tokens.len() && token_name(ll.tokens[next].kind) == ":=" {
+                    res_name = _lcur(ll).text
+                    ll = _ladv(ll)  // skip name
+                    ll = _ladv(ll)  // skip :=
+                }
+            }
             // Resource block: lower resource expr
             resource := _lower_expr(ll)
             ll = resource.l
+            if res_name.len() > 0 {
+                ll = _lenv_add(ll, res_name, resource.temp)
+            }
             // Store resource in a named slot for drop access
             res_slot := resource.temp
             // Determine the drop function name
@@ -1384,6 +1397,14 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
             ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 2)
         } else if dc == 3 {
             ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 3)
+        } else if dc == 4 {
+            ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 4)
+        } else if dc == 5 {
+            ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 5)
+        } else if dc == 6 {
+            ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 6)
+        } else if dc == 7 {
+            ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 7)
         }
         return ll
     }
@@ -1465,7 +1486,63 @@ fn _lower_return(l: Lowerer) -> Lowerer {
 // --- Lower expression or binding ---
 
 fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
-    if _lk(l) == "IDENT" {
+    // Tuple destructuring: (name1, name2) := expr
+    if _lk(l) == "(" {
+        mut scan := l.pos + 1
+        mut is_tuple_destr := false
+        while scan < l.tokens.len() {
+            sk := token_name(l.tokens[scan].kind)
+            if sk == ")" {
+                next2 := scan + 1
+                if next2 < l.tokens.len() && token_name(l.tokens[next2].kind) == ":=" {
+                    is_tuple_destr = true
+                }
+                scan = l.tokens.len()
+            } else if sk == "IDENT" || sk == "," || sk == "_" {
+                scan = scan + 1
+            } else {
+                scan = l.tokens.len()
+            }
+        }
+        if is_tuple_destr {
+            mut ll := _ladv(l)  // skip (
+            mut names := [""]
+            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    names = names.append(_lcur(ll).text)
+                }
+                ll = _ladv(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+            }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+            if _lk(ll) == ":=" { ll = _ladv(ll) }
+            result := _lower_expr(ll)
+            ll = result.l
+            // Extract each element
+            mut ni := 1
+            while ni < names.len() {
+                elt_nt := _lnew_temp(ll)
+                ll = elt_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, elt_nt.temp, result.temp, ni - 1, names[ni], 0))
+                ll = _lenv_add(ll, names[ni], elt_nt.temp)
+                ni = ni + 1
+            }
+            return ll
+        }
+    }
+    // Check for binding — handles both IDENT and keyword-as-identifier
+    // Keywords (before, after, where, scope, etc.) followed by := are treated as bindings
+    mut _is_binding_name := _lk(l) == "IDENT"
+    if _is_binding_name == false && l.pos + 1 < l.tokens.len() {
+        _nk := token_name(l.tokens[l.pos + 1].kind)
+        if _nk == ":=" || _nk == ":" {
+            _ck := _lk(l)
+            if _ck != "fn" && _ck != "type" && _ck != "struct" && _ck != "enum" && _ck != "trait" && _ck != "impl" && _ck != "const" && _ck != "entry" && _ck != "test" && _ck != "if" && _ck != "match" && _ck != "for" && _ck != "while" && _ck != "loop" && _ck != "return" && _ck != "mut" && _ck != "break" && _ck != "continue" && _ck != "defer" && _ck != "assert" && _ck != "pub" && _ck != "use" && _ck != "mod" {
+                _is_binding_name = true
+            }
+        }
+    }
+    if _is_binding_name {
         name := _lcur(l).text
         next_pos := l.pos + 1
         if next_pos < l.tokens.len() {
@@ -2037,6 +2114,75 @@ fn _lower_expr(l: Lowerer) -> LT {
                     if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
                     left = nt_temp
                 }
+            } else if _lk(ll) == "\{" {
+                // Record update: original.{field: new_val, ...}
+                rb2 := "\}"
+                ll = _ladv(ll)  // skip {
+                ll = _lskip_nl(ll)
+                // Allocate new struct, copy from original
+                left_type := _lget_type(ll, left)
+                sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+                new_nt := _lnew_temp(ll)
+                ll = new_nt.l
+                // Copy original struct
+                if sname != "" {
+                    sdef := reg_find_struct(ll.registry, sname)
+                    alloc_sz := sdef.fields.len()
+                    ll = _lemit(ll, new_inst(OpAlloc, new_nt.temp, alloc_sz, 0, sname, 0))
+                    // Copy all fields
+                    mut cfi := 1
+                    while cfi < sdef.fields.len() {
+                        copy_nt := _lnew_temp(ll)
+                        ll = copy_nt.l
+                        fidx2 := cfi - 1
+                        ll = _lemit(ll, new_inst(OpFieldGet, copy_nt.temp, left, fidx2, sdef.fields[cfi].name, 0))
+                        ll = _lemit(ll, new_inst(OpFieldSet, new_nt.temp, copy_nt.temp, fidx2, sdef.fields[cfi].name, 0))
+                        cfi = cfi + 1
+                    }
+                } else {
+                    ll = _lemit(ll, new_inst(OpAlloc, new_nt.temp, 8, 0, "_RecordUpdate", 0))
+                    ll = _lemit(ll, new_inst(OpStore, new_nt.temp, left, 0, "", 0))
+                }
+                ll = _lset_type(ll, new_nt.temp, left_type)
+                // Override specified fields
+                while _lk(ll) != rb2 && _lk(ll) != "EOF" {
+                    if _lk(ll) == "IDENT" {
+                        upd_field := _lcur(ll).text
+                        ll = _ladv(ll)
+                        if _lk(ll) == ":" { ll = _ladv(ll) }
+                        upd_val := _lower_expr(ll)
+                        ll = upd_val.l
+                        if sname != "" {
+                            upd_fidx := _field_index(ll.registry, sname, upd_field)
+                            ll = _lemit(ll, new_inst(OpFieldSet, new_nt.temp, upd_val.temp, upd_fidx, upd_field, 0))
+                        }
+                    } else {
+                        ll = _ladv(ll)
+                    }
+                    ll = _lskip_nl(ll)
+                    if _lk(ll) == "," {
+                        ll = _ladv(ll)
+                        ll = _lskip_nl(ll)
+                    }
+                }
+                if _lk(ll) == rb2 { ll = _ladv(ll) }
+                left = new_nt.temp
+            } else if _lk(ll) == "INT" {
+                // Numeric tuple field access: .0, .1, .2
+                field_idx_str := _lcur(ll).text
+                ll = _ladv(ll)
+                mut fidx := 0
+                if field_idx_str == "1" { fidx = 1 }
+                if field_idx_str == "2" { fidx = 2 }
+                if field_idx_str == "3" { fidx = 3 }
+                if field_idx_str == "4" { fidx = 4 }
+                if field_idx_str == "5" { fidx = 5 }
+                if field_idx_str == "6" { fidx = 6 }
+                if field_idx_str == "7" { fidx = 7 }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
+                left = nt.temp
             } else {
                 running = false
             }
@@ -2461,7 +2607,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                              const_names: ll.const_names, const_vals: ll.const_vals,
                              const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                              temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
@@ -2519,24 +2665,7 @@ fn _lower_primary(l: Lowerer) -> LT {
 
     if k == "INT" {
         val := _lcur(l).text
-        // Parse integer (simplified — just decimal for now)
-        mut num := 0
-        mut i := 0
-        mut neg := false
-        if val.len() > 0 && val.charAt(0) == "-" {
-            neg = true
-            i = 1
-        }
-        while i < val.len() {
-            ch := val.charAt(i)
-            if ch != "_" {
-                mut digit := 0
-                if ch == "0" { digit = 0 } else if ch == "1" { digit = 1 } else if ch == "2" { digit = 2 } else if ch == "3" { digit = 3 } else if ch == "4" { digit = 4 } else if ch == "5" { digit = 5 } else if ch == "6" { digit = 6 } else if ch == "7" { digit = 7 } else if ch == "8" { digit = 8 } else if ch == "9" { digit = 9 }
-                num = num * 10 + digit
-            }
-            i = i + 1
-        }
-        if neg { num = 0 - num }
+        num := _parse_int_literal(val)
         nt := _lnew_temp(l)
         mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, num, 0, "", 0))
         ll = _lset_type(ll, nt.temp, 1)
@@ -2560,7 +2689,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                          const_names: ll.const_names, const_vals: ll.const_vals,
                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                          temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
         }
         // Use OpConstStr with arg2 = -9 as float marker
         // arg1 = string constant index, arg2 = -9 signals float
@@ -2587,7 +2716,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                          const_names: ll.const_names, const_vals: ll.const_vals,
                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                          temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
         }
         nt := _lnew_str_temp(ll)
         ll = nt.l
@@ -4239,7 +4368,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                              const_names: ll.const_names, const_vals: ll.const_vals,
                              const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                              temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
             }
             nt := _lnew_str_temp(ll)
             ll = _lemit(nt.l, new_inst(OpConstStr, nt.temp, str_idx, sval.len(), "", 0))
@@ -4259,6 +4388,28 @@ fn _lower_primary(l: Lowerer) -> LT {
         ll = _lskip_nl(ll)
         result := _lower_expr(ll)
         ll = result.l
+        // Check for tuple: comma means tuple literal
+        if _lk(ll) == "," {
+            // Tuple: allocate struct, store each element
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            mut count := 1
+            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 8, 0, "_Tuple", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, result.temp, 0, "0", 0))
+            while _lk(ll) == "," && _lk(ll) != "EOF" {
+                ll = _ladv(ll)
+                ll = _lskip_nl(ll)
+                if _lk(ll) != ")" {
+                    elem := _lower_expr(ll)
+                    ll = elem.l
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, elem.temp, count, i2s(count), 0))
+                    count = count + 1
+                }
+                ll = _lskip_nl(ll)
+            }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+            return LT{l: ll, temp: nt.temp}
+        }
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
         return LT{l: ll, temp: result.temp}
@@ -4284,9 +4435,33 @@ fn _lower_primary(l: Lowerer) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    // Default: advance and return 0
+    // Keywords used as identifiers (before, after, where, scope, etc.)
+    // The lexer tokenizes these as keywords, not IDENTs. Check the environment
+    // to see if the token text matches a variable name.
+    keyword_name := _lcur(l).text
+    kw_slot := _lenv_lookup(l, keyword_name)
+    if kw_slot >= 0 {
+        mut ll := _ladv(l)
+        kw_type := _lget_type(ll, kw_slot)
+        if kw_type == 12 {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpLoad, nt.temp, kw_slot, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLoad, nt.temp + 1, kw_slot + 1, 0, "", 0))
+            ll = _lset_type(ll, nt.temp, 12)
+            return LT{l: ll, temp: nt.temp}
+        }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpLoad, nt.temp, kw_slot, 0, "", 0))
+        if kw_type != 0 { ll = _lset_type(ll, nt.temp, kw_type) }
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // Default: unrecognized token in expression position — emit 0
     nt := _lnew_temp(l)
-    ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 0, 0, "", 0))
+    mut ll := _ladv(nt.l)
+    ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
     LT{l: ll, temp: nt.temp}
 }
 
@@ -4796,7 +4971,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                              const_names: ll.const_names, const_vals: ll.const_vals,
                              const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                              temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
             }
             hdr_len := sname.len() + 1
             result_nt := _lnew_str_temp(ll)
@@ -4825,7 +5000,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                                      const_names: ll.const_names, const_vals: ll.const_vals,
                                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                                      temp_types: ll.temp_types,
-                                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
                     }
                     sep_nt := _lnew_str_temp(ll)
                     ll = sep_nt.l
@@ -4850,7 +5025,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                                  const_names: ll.const_names, const_vals: ll.const_vals,
                                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                                  temp_types: ll.temp_types,
-                                 fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                                 fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
                 }
                 fname_nt := _lnew_str_temp(ll)
                 ll = fname_nt.l
@@ -4903,7 +5078,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                              const_names: ll.const_names, const_vals: ll.const_vals,
                              const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                              temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
             }
             close_nt := _lnew_str_temp(ll)
             ll = close_nt.l
@@ -5391,7 +5566,7 @@ fn _lower_atom(l: Lowerer) -> LT {
                              const_names: ll.const_names, const_vals: ll.const_vals,
                              const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                              temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
@@ -5536,7 +5711,7 @@ fn _lower_if(l: Lowerer) -> LT {
         mut then_last := -1
         while _lk(ll) != rb && _lk(ll) != "EOF" {
             k := _lk(ll)
-            if k == "return" || k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" {
+            if k == "return" || k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" || k == "with" {
                 ll = _lower_stmt(ll)
             } else if k == "if" {
                 r := _lower_if(ll)
@@ -5579,7 +5754,7 @@ fn _lower_if(l: Lowerer) -> LT {
             mut else_last := -1
             while _lk(ll) != rb && _lk(ll) != "EOF" {
                 k := _lk(ll)
-                if k == "return" || k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" {
+                if k == "return" || k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" || k == "with" {
                     ll = _lower_stmt(ll)
                 } else if k == "if" {
                     r := _lower_if(ll)
@@ -5641,7 +5816,7 @@ fn _lower_while(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Body
     ll = _lower_block(ll)
@@ -5656,7 +5831,7 @@ fn _lower_while(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -5734,7 +5909,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Body
     ll = _lower_block(ll)
@@ -5749,7 +5924,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Increment label (continue target)
     ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
@@ -5796,7 +5971,7 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Body
     ll = _lower_block(ll)
@@ -5811,7 +5986,7 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -5858,9 +6033,16 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     // Skip remaining until {
     while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
 
-    // Check if iterator is a channel (type 17 = TY_CHAN)
+    // Check if iterator is a channel (by TypeKind, not ID — ID 17 can collide with user types)
     iter_type_check := _lget_type(ll, iter.temp)
-    if iter_type_check == 17 {
+    mut is_chan := false
+    if iter_type_check > 0 && iter_type_check < ll.store.types.len() {
+        iter_kind := type_kind_name(ll.store.types[iter_type_check].kind)
+        if iter_kind == "Named" && (ll.store.types[iter_type_check].name == "Chan" || ll.store.types[iter_type_check].name == "Channel") {
+            is_chan = true
+        }
+    }
+    if is_chan {
         return _lower_for_channel(ll, var_name, iter.temp)
     }
 
@@ -5923,7 +6105,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Body
     ll = _lower_block(ll)
@@ -5938,7 +6120,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Increment label (continue target)
     ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
@@ -6015,7 +6197,7 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Body
     ll = _lower_block(ll)
@@ -6030,7 +6212,7 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 
     // Jump back
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -6156,10 +6338,18 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
     mut ds1 := l.defer_start_1
     mut ds2 := l.defer_start_2
     mut ds3 := l.defer_start_3
+    mut ds4 := l.defer_start_4
+    mut ds5 := l.defer_start_5
+    mut ds6 := l.defer_start_6
+    mut ds7 := l.defer_start_7
     mut de0 := l.defer_end_0
     mut de1 := l.defer_end_1
     mut de2 := l.defer_end_2
     mut de3 := l.defer_end_3
+    mut de4 := l.defer_end_4
+    mut de5 := l.defer_end_5
+    mut de6 := l.defer_end_6
+    mut de7 := l.defer_end_7
     if idx == 0 { ds0 = start }
     if idx == 0 { de0 = end }
     if idx == 1 { ds1 = start }
@@ -6168,6 +6358,14 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
     if idx == 2 { de2 = end }
     if idx == 3 { ds3 = start }
     if idx == 3 { de3 = end }
+    if idx == 4 { ds4 = start }
+    if idx == 4 { de4 = end }
+    if idx == 5 { ds5 = start }
+    if idx == 5 { de5 = end }
+    if idx == 6 { ds6 = start }
+    if idx == 6 { de6 = end }
+    if idx == 7 { ds7 = start }
+    if idx == 7 { de7 = end }
     Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
@@ -6177,7 +6375,7 @@ fn _lset_defer(l: Lowerer, new_count: i64, start: i64, end: i64, idx: i64) -> Lo
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
-            fn_error_type: l.fn_error_type, defer_count: new_count, defer_start_0: ds0, defer_start_1: ds1, defer_start_2: ds2, defer_start_3: ds3, defer_end_0: de0, defer_end_1: de1, defer_end_2: de2, defer_end_3: de3}
+            fn_error_type: l.fn_error_type, defer_count: new_count, defer_start_0: ds0, defer_start_1: ds1, defer_start_2: ds2, defer_start_3: ds3, defer_start_4: ds4, defer_start_5: ds5, defer_start_6: ds6, defer_start_7: ds7, defer_end_0: de0, defer_end_1: de1, defer_end_2: de2, defer_end_3: de3, defer_end_4: de4, defer_end_5: de5, defer_end_6: de6, defer_end_7: de7}
 }
 
 // Emit deferred expressions in reverse order (LIFO)
@@ -6199,6 +6397,14 @@ fn _emit_defers(l: Lowerer) -> Lowerer {
         if di == 2 { de = ll.defer_end_2 }
         if di == 3 { ds = ll.defer_start_3 }
         if di == 3 { de = ll.defer_end_3 }
+        if di == 4 { ds = ll.defer_start_4 }
+        if di == 4 { de = ll.defer_end_4 }
+        if di == 5 { ds = ll.defer_start_5 }
+        if di == 5 { de = ll.defer_end_5 }
+        if di == 6 { ds = ll.defer_start_6 }
+        if di == 6 { de = ll.defer_end_6 }
+        if di == 7 { ds = ll.defer_start_7 }
+        if di == 7 { de = ll.defer_end_7 }
         if ds > 0 && de > ds {
             saved_pos := ll.pos
             ll = _lset_pos(ll, ds)
@@ -6297,7 +6503,7 @@ fn _emit_drops(l: Lowerer) -> Lowerer =
 fn _lower_closure(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip fn
     // Generate unique closure name based on module function count
-    closure_name := "_closure_" + _closure_i2s(ll.module.funcs.len())
+    closure_name := "_closure_" + i2s(ll.module.funcs.len())
 
     // Parse parameter names and count
     mut param_count := 0
@@ -6513,7 +6719,7 @@ fn _lower_closure(l: Lowerer) -> LT {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: saved_types,
-                 fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0}
+                 fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_start_4: 0, defer_start_5: 0, defer_start_6: 0, defer_start_7: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0, defer_end_4: 0, defer_end_5: 0, defer_end_6: 0, defer_end_7: 0}
 
     // Build fat pointer: {fn_ptr, env_ptr}
     // Allocate 2-slot struct
@@ -6561,27 +6767,6 @@ fn _lower_closure(l: Lowerer) -> LT {
     }
 
     LT{l: ll, temp: fat_nt.temp}
-}
-
-fn _closure_i2s(n: i64) -> str {
-    if n == 0 { return "0" }
-    mut result := ""
-    mut v := n
-    while v > 0 {
-        d := v % 10
-        v = v / 10
-        if d == 0 { result = "0" + result }
-        if d == 1 { result = "1" + result }
-        if d == 2 { result = "2" + result }
-        if d == 3 { result = "3" + result }
-        if d == 4 { result = "4" + result }
-        if d == 5 { result = "5" + result }
-        if d == 6 { result = "6" + result }
-        if d == 7 { result = "7" + result }
-        if d == 8 { result = "8" + result }
-        if d == 9 { result = "9" + result }
-    }
-    result
 }
 
 // --- Newtype detection ---
@@ -6881,7 +7066,7 @@ fn _lower_string_const(l: Lowerer, val: str) -> LT {
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                      temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
     }
     nt := _lnew_str_temp(ll)
     ll = nt.l
@@ -7080,7 +7265,7 @@ fn _lower_closure_from_block(l: Lowerer) -> LT {
     lb := "\{"
     rb := "\}"
     // Create a new function for the closure body
-    fname := "_spawn_fn_" + _i2s_lower(ll.temp_counter)
+    fname := "_spawn_fn_" + i2s(ll.temp_counter)
     saved_func := ll.current_func
     saved_tc := ll.temp_counter
     saved_lc := ll.label_counter
@@ -7973,7 +8158,7 @@ fn _lower_match(l: Lowerer) -> LT {
                                  const_names: fll.const_names, const_vals: fll.const_vals,
                                  const_str_names: fll.const_str_names, const_str_vals: fll.const_str_vals,
                                  temp_types: fll.temp_types,
-                                 fn_error_type: fll.fn_error_type, defer_count: fll.defer_count, defer_start_0: fll.defer_start_0, defer_start_1: fll.defer_start_1, defer_start_2: fll.defer_start_2, defer_start_3: fll.defer_start_3, defer_end_0: fll.defer_end_0, defer_end_1: fll.defer_end_1, defer_end_2: fll.defer_end_2, defer_end_3: fll.defer_end_3}
+                                 fn_error_type: fll.fn_error_type, defer_count: fll.defer_count, defer_start_0: fll.defer_start_0, defer_start_1: fll.defer_start_1, defer_start_2: fll.defer_start_2, defer_start_3: fll.defer_start_3, defer_start_4: fll.defer_start_4, defer_start_5: fll.defer_start_5, defer_start_6: fll.defer_start_6, defer_start_7: fll.defer_start_7, defer_end_0: fll.defer_end_0, defer_end_1: fll.defer_end_1, defer_end_2: fll.defer_end_2, defer_end_3: fll.defer_end_3, defer_end_4: fll.defer_end_4, defer_end_5: fll.defer_end_5, defer_end_6: fll.defer_end_6, defer_end_7: fll.defer_end_7}
                 }
                 ll = fll
                 flit_nt := _lnew_temp(ll)
@@ -8580,20 +8765,20 @@ fn _lower_derive_debug(l: Lowerer, def: StructDef) -> Lowerer {
     ll
 }
 
-fn lower(tokens: [Token], store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
+fn lower(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, store, reg, treg, table, file)
     l = _scan_consts(l)
-    l = _lower_bodies(l)
+    l = _lower_bodies(l, index)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     return l.module
 }
 
 // Lower for test mode: compile test blocks and generate a test runner _main
-fn lower_for_tests(tokens: [Token], store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
+fn lower_for_tests(tokens: [Token], index: DeclIndex, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, store, reg, treg, table, file)
     l = _scan_consts(l)
-    l = _lower_bodies(l)
+    l = _lower_bodies(l, index)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function
@@ -8620,7 +8805,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
                          const_names: ll.const_names, const_vals: ll.const_vals,
                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                          temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
         }
         nt := _lnew_str_temp(ll)
         ll = nt.l
@@ -8641,7 +8826,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                      temp_types: ll.temp_types,
-                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
         return ll
     }
 
@@ -8651,7 +8836,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
     // For each test, call it and print pass
     mut ti := 0
     while ti < test_count {
-        test_fn_name := "_test_" + _i2s_lower(ti)
+        test_fn_name := "_test_" + i2s(ti)
         // 1-based index into test_names (0 is sentinel)
         test_label_idx := ti + 1
 
@@ -8680,7 +8865,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
                          const_names: ll.const_names, const_vals: ll.const_vals,
                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                          temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                         fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
         }
         // Print "PASS: " + test name by concatenating
         pass_nt := _lnew_str_temp(ll)
@@ -8716,7 +8901,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                      temp_types: ll.temp_types,
-                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+                     fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
     }
     done_nt := _lnew_str_temp(ll)
     ll = done_nt.l
@@ -8740,7 +8925,7 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
             const_names: ll.const_names, const_vals: ll.const_vals,
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_start_4: ll.defer_start_4, defer_start_5: ll.defer_start_5, defer_start_6: ll.defer_start_6, defer_start_7: ll.defer_start_7, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3, defer_end_4: ll.defer_end_4, defer_end_5: ll.defer_end_5, defer_end_6: ll.defer_end_6, defer_end_7: ll.defer_end_7}
 }
 
 // Monomorphization pass: generate specialized copies of generic functions
@@ -8846,6 +9031,15 @@ fn _lower_mono_fn(l: Lowerer, spec: MonoSpec) -> Lowerer {
     if _lk(ll) == "!" {
         ll = _ladv(ll)
         while _lk(ll) == "IDENT" { ll = _ladv(ll) }
+    }
+
+    // Skip where clause: where T: Trait + Trait2, U: Trait3
+    if _lk(ll) == "where" {
+        ll = _ladv(ll)  // skip where
+        lb2 := "\{"
+        while _lk(ll) != "=" && _lk(ll) != lb2 && _lk(ll) != "EOF" && _lk(ll) != "NEWLINE" {
+            ll = _ladv(ll)
+        }
     }
 
     // Now lower the body

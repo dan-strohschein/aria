@@ -92,9 +92,10 @@ fn prefix_binding_power(kind: TokenKind) -> i64 {
 
 fn postfix_binding_power(kind: TokenKind) -> i64 {
     name := token_name(kind)
-    // Level 15: Error propagation / assert (postfix)
+    // Level 15: Error propagation / assert / catch (postfix)
     if name == "?" { return 150 }
     if name == "!" { return 150 }
+    if name == "catch" { return 150 }
     // Level 16: Field access, call, index (postfix)
     if name == "." { return 160 }
     if name == "?." { return 160 }

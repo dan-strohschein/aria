@@ -37,10 +37,20 @@ type ExprKind =
     | EkWhile
     | EkLoop
     | EkDefer
+    | EkWith
+    | EkTuple
+    | EkCatch
     | EkPipeline
     | EkRange
     | EkPropagate
     | EkAssertOk
+    | EkFnDecl
+    | EkTypeDecl
+    | EkEnumDecl
+    | EkTraitDecl
+    | EkImplDecl
+    | EkConstDecl
+    | EkUseDecl
     | EkNone
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
@@ -70,10 +80,20 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkWhile => "While"
     EkLoop => "Loop"
     EkDefer => "Defer"
+    EkWith => "With"
+    EkTuple => "Tuple"
+    EkCatch => "Catch"
     EkPipeline => "Pipeline"
     EkRange => "Range"
     EkPropagate => "Propagate"
     EkAssertOk => "AssertOk"
+    EkFnDecl => "FnDecl"
+    EkTypeDecl => "TypeDecl"
+    EkEnumDecl => "EnumDecl"
+    EkTraitDecl => "TraitDecl"
+    EkImplDecl => "ImplDecl"
+    EkConstDecl => "ConstDecl"
+    EkUseDecl => "UseDecl"
     EkNone => "None"
 }
 
@@ -250,8 +270,54 @@ fn mk_deferred(span: Span) -> Expr =
     Expr{kind: EkDefer, s1: "", s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
 
+fn mk_with(name: str, span: Span) -> Expr =
+    Expr{kind: EkWith, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_tuple(count: i64, span: Span) -> Expr =
+    Expr{kind: EkTuple, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: count, span: span}
+
+fn mk_catch(span: Span) -> Expr =
+    Expr{kind: EkCatch, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+// Declaration node constructors
+// s1=name, s2=params (comma-joined for fn), b1=has_body, b2=is_pub
+// list_count=param_count for fn, field_count for type/struct
+
+fn mk_fn_decl(name: str, params: str, param_count: i64, has_body: bool, span: Span) -> Expr =
+    Expr{kind: EkFnDecl, s1: name, s2: params, b1: has_body, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: param_count, span: span}
+
+fn mk_type_decl(name: str, is_sum: bool, count: i64, span: Span) -> Expr =
+    Expr{kind: EkTypeDecl, s1: name, s2: "", b1: is_sum, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: count, span: span}
+
+fn mk_enum_decl(name: str, span: Span) -> Expr =
+    Expr{kind: EkEnumDecl, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_trait_decl(name: str, method_count: i64, span: Span) -> Expr =
+    Expr{kind: EkTraitDecl, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: method_count, span: span}
+
+fn mk_impl_decl(type_name: str, trait_name: str, method_count: i64, span: Span) -> Expr =
+    Expr{kind: EkImplDecl, s1: type_name, s2: trait_name, b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: method_count, span: span}
+
+fn mk_const_decl(name: str, span: Span) -> Expr =
+    Expr{kind: EkConstDecl, s1: name, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_use_decl(module: str, span: Span) -> Expr =
+    Expr{kind: EkUseDecl, s1: module, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
 // --- Declaration Kind ---
 
+// DeclKind uses integer encoding to avoid bootstrap codegen bugs with large sum types
+// 0=none, 1=fn, 2=type, 3=enum, 4=trait, 5=impl, 6=const, 7=entry, 8=test, 9=use, 10=bench, 11=extern, 12=alias, 13=before, 14=after
 type DeclKind =
     | DkFn
     | DkType
@@ -263,6 +329,59 @@ type DeclKind =
     | DkTest
     | DkUse
     | DkNone
+
+fn decl_kind_name(k: DeclKind) -> str = match k {
+    DkFn => "fn"
+    DkType => "type"
+    DkEnum => "enum"
+    DkTrait => "trait"
+    DkImpl => "impl"
+    DkConst => "const"
+    DkEntry => "entry"
+    DkTest => "test"
+    DkUse => "use"
+    DkNone => "none"
+}
+
+// --- Declaration Index ---
+
+struct DeclInfo {
+    kind: DeclKind
+    name: str
+    token_start: i64
+    body_start: i64
+    body_end: i64
+    is_pub: bool
+}
+
+struct DeclIndex {
+    decls: [DeclInfo]
+}
+
+fn _sentinel_decl() -> DeclInfo =
+    DeclInfo{kind: DkNone, name: "", token_start: 0, body_start: 0, body_end: 0, is_pub: false}
+
+fn new_decl_index() -> DeclIndex =
+    DeclIndex{decls: [_sentinel_decl()]}
+
+fn decl_index_add(idx: DeclIndex, d: DeclInfo) -> DeclIndex =
+    DeclIndex{decls: idx.decls.append(d)}
+
+fn decl_index_len(idx: DeclIndex) -> i64 = idx.decls.len()
+
+fn decl_index_get(idx: DeclIndex, i: i64) -> DeclInfo {
+    if i >= 0 && i < idx.decls.len() {
+        return idx.decls[i]
+    }
+    _sentinel_decl()
+}
+
+// --- ParseResult (returned by build_decl_index) ---
+
+struct ParseResult {
+    index: DeclIndex
+    diagnostics: DiagnosticBag
+}
 
 // --- Program ---
 

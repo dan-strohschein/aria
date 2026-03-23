@@ -8,6 +8,7 @@ mod resolver
 
 use diagnostic
 use lexer
+use parser
 
 // --- Resolver state ---
 
@@ -300,168 +301,139 @@ fn _is_decl_keyword(k: str) -> bool =
     k == "fn" || k == "type" || k == "struct" || k == "enum" ||
     k == "trait" || k == "impl" || k == "const"
 
-fn _pass1(r: Resolver) -> Resolver {
-    mut rr := _rset_pos(r, 0)
-    rr = _rskip_nl(rr)
+fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
+    mut rr := r
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
+        is_pub := decl.is_pub
 
-    // Skip sentinel token at index 0
-    if rr.pos == 0 { rr = _radv(rr) }
+        // Position to the declaration
+        rr = _rset_pos(rr, decl.token_start)
 
-    // Skip mod declaration
-    if _rk(rr) == "mod" {
-        rr = _radv(rr)  // skip "mod"
-        rr = _radv(rr)  // skip module name
-        rr = _rskip_nl(rr)
-    }
-
-    // Skip use declarations (but register imported names and aliases)
-    while _rk(rr) == "use" {
-        rr = _radv(rr)  // skip "use"
-        if _rk(rr) == "IDENT" {
-            name := _rcur(rr).text
-            span := _rspan(rr)
-            rr = _add_sym(rr, name, SkModule, span, false, false)
-            rr = _radv(rr)
-            // Handle "as alias"
-            if _rk(rr) == "as" {
-                rr = _radv(rr)  // skip "as"
-                if _rk(rr) == "IDENT" {
-                    alias_name := _rcur(rr).text
-                    alias_span := _rspan(rr)
-                    rr = _add_sym(rr, alias_name, SkModule, alias_span, false, false)
-                    rr = _radv(rr)
+        if kname == "use" {
+            // Register imported module names and aliases
+            rr = _radv(rr)  // skip "use"
+            if _rk(rr) == "IDENT" {
+                name := _rcur(rr).text
+                span := _rspan(rr)
+                rr = _add_sym(rr, name, SkModule, span, false, false)
+                rr = _radv(rr)
+                if _rk(rr) == "as" {
+                    rr = _radv(rr)  // skip "as"
+                    if _rk(rr) == "IDENT" {
+                        alias_name := _rcur(rr).text
+                        alias_span := _rspan(rr)
+                        rr = _add_sym(rr, alias_name, SkModule, alias_span, false, false)
+                    }
                 }
             }
-        }
-        // Skip to end of use line
-        while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
-            rr = _radv(rr)
-        }
-        rr = _rskip_nl(rr)
-    }
-
-    // Scan for top-level declarations
-    while _rk(rr) != "EOF" {
-        mut is_pub := false
-        if _rk(rr) == "pub" {
-            is_pub = true
-            rr = _radv(rr)
-        }
-
-        // Skip annotations before declarations
-        if _rk(rr) == "@" {
-            rr = _radv(rr)  // skip @
-            if _rk(rr) == "IDENT" { rr = _radv(rr) }  // skip annotation name
-            if _rk(rr) == "(" {
-                rr = _radv(rr)
-                while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
-                if _rk(rr) == ")" { rr = _radv(rr) }
+        } else if kname == "fn" {
+            // Check for extern (name=="_extern") or alias (name starts with "_alias:")
+            if decl.name == "_extern" {
+                // extern fn — scan the extern block for fn declarations
+                rr = _radv(rr)  // skip "extern"
+                lb2 := "\{"
+                rb2 := "\}"
+                if _rk(rr) == "STRING" { rr = _radv(rr) }
+                if _rk(rr) == lb2 {
+                    rr = _radv(rr)  // skip {
+                    rr = _rskip_nl(rr)
+                    while _rk(rr) != rb2 && _rk(rr) != "EOF" {
+                        rr = _rskip_nl(rr)
+                        if _rk(rr) == "fn" {
+                            rr = _radv(rr)
+                            if _rk(rr) == "IDENT" {
+                                ename := _rcur(rr).text
+                                espan := _rspan(rr)
+                                rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
+                            }
+                        }
+                        while _rk(rr) != "NEWLINE" && _rk(rr) != rb2 && _rk(rr) != "EOF" { rr = _radv(rr) }
+                        rr = _rskip_nl(rr)
+                    }
+                } else if _rk(rr) == "fn" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "IDENT" {
+                        ename := _rcur(rr).text
+                        espan := _rspan(rr)
+                        rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
+                    }
+                }
+            } else if decl.name.startsWith("_fixture:") {
+                // before/after fixtures — no symbol registration needed
+                mut _skip := 0
+            } else {
+                // Regular function
+                if _rk(rr) == "pub" { rr = _radv(rr) }
+                // Skip annotations
+                if _rk(rr) == "@" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                    if _rk(rr) == "(" {
+                        rr = _radv(rr)
+                        while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                        if _rk(rr) == ")" { rr = _radv(rr) }
+                    }
+                    rr = _rskip_nl(rr)
+                }
+                rr = _radv(rr)  // skip "fn"
+                if _rk(rr) == "IDENT" {
+                    name := _rcur(rr).text
+                    span := _rspan(rr)
+                    rr = _add_sym(rr, name, SkFunction, span, false, is_pub)
+                }
             }
-            rr = _rskip_nl(rr)
-        }
-        k := _rk(rr)
-        if k == "fn" {
-            rr = _radv(rr)  // skip "fn"
-            if _rk(rr) == "IDENT" {
-                name := _rcur(rr).text
-                span := _rspan(rr)
-                rr = _add_sym(rr, name, SkFunction, span, false, is_pub)
+        } else if kname == "type" {
+            if decl.name.startsWith("_alias:") {
+                // alias declaration
+                alias_name := decl.name.substring(7, decl.name.len())
+                rr = _radv(rr)  // skip "alias"
+                if _rk(rr) == "IDENT" {
+                    span := _rspan(rr)
+                    rr = _add_sym(rr, alias_name, SkType, span, false, is_pub)
+                }
+            } else {
+                // type/struct declaration
+                if _rk(rr) == "pub" { rr = _radv(rr) }
+                rr = _radv(rr)  // skip "type"/"struct"
+                if _rk(rr) == "IDENT" {
+                    name := _rcur(rr).text
+                    span := _rspan(rr)
+                    rr = _add_sym(rr, name, SkType, span, false, is_pub)
+                    rr = _radv(rr)
+                    rr = _pass1_collect_variants(rr)
+                }
             }
-            rr = _radv(rr)
-            rr = _rskip_nl(rr)
-        } else if k == "type" || k == "struct" {
-            rr = _radv(rr)  // skip "type"/"struct"
-            if _rk(rr) == "IDENT" {
-                name := _rcur(rr).text
-                span := _rspan(rr)
-                rr = _add_sym(rr, name, SkType, span, false, is_pub)
-                rr = _radv(rr)
-                // Look for sum type variants after = |
-                rr = _pass1_collect_variants(rr)
-            }
-            // _pass1_collect_variants already leaves rr positioned correctly
-            rr = _rskip_nl(rr)
-        } else if k == "enum" {
-            rr = _radv(rr)
+        } else if kname == "enum" {
+            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _radv(rr)  // skip "enum"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkEnum, span, false, is_pub)
             }
-            rr = _radv(rr)
-            rr = _rskip_nl(rr)
-        } else if k == "trait" {
-            rr = _radv(rr)
+        } else if kname == "trait" {
+            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _radv(rr)  // skip "trait"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkTrait, span, false, is_pub)
             }
-            rr = _radv(rr)
-            rr = _rskip_nl(rr)
-        } else if k == "const" {
-            rr = _radv(rr)
+        } else if kname == "const" {
+            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _radv(rr)  // skip "const"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
                 span := _rspan(rr)
                 rr = _add_sym(rr, name, SkConst, span, false, is_pub)
             }
-            rr = _radv(rr)
-            rr = _rskip_nl(rr)
-        } else if k == "extern" {
-            // extern fn name(...) or extern "lib" { fn name(...); ... }
-            rr = _radv(rr)  // skip extern
-            lb2 := "\{"
-            rb2 := "\}"
-            if _rk(rr) == "STRING" { rr = _radv(rr) }
-            if _rk(rr) == lb2 {
-                rr = _radv(rr)  // skip {
-                rr = _rskip_nl(rr)
-                while _rk(rr) != rb2 && _rk(rr) != "EOF" {
-                    rr = _rskip_nl(rr)
-                    if _rk(rr) == "fn" {
-                        rr = _radv(rr)
-                        if _rk(rr) == "IDENT" {
-                            ename := _rcur(rr).text
-                            espan := _rspan(rr)
-                            rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
-                        }
-                    }
-                    while _rk(rr) != "NEWLINE" && _rk(rr) != rb2 && _rk(rr) != "EOF" { rr = _radv(rr) }
-                    rr = _rskip_nl(rr)
-                }
-                if _rk(rr) == rb2 { rr = _radv(rr) }
-                rr = _rskip_nl(rr)
-            } else if _rk(rr) == "fn" {
-                rr = _radv(rr)
-                if _rk(rr) == "IDENT" {
-                    ename := _rcur(rr).text
-                    espan := _rspan(rr)
-                    rr = _add_sym(rr, ename, SkFunction, espan, false, is_pub)
-                }
-                while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
-                rr = _rskip_nl(rr)
-            } else {
-                rr = _rskip_nl(rr)
-            }
-        } else if k == "entry" || k == "test" || k == "impl" {
-            // These have bodies — skip to next declaration boundary
-            rr = _skip_to_next_top(rr)
-        } else if k == "IDENT" && _rcur(rr).text == "alias" {
-            rr = _radv(rr)  // skip "alias"
-            if _rk(rr) == "IDENT" {
-                name := _rcur(rr).text
-                span := _rspan(rr)
-                rr = _add_sym(rr, name, SkType, span, false, is_pub)
-            }
-            // Skip to end of alias declaration
-            while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
-            rr = _rskip_nl(rr)
-        } else {
-            // Unknown — advance past it
-            rr = _radv(rr)
-            rr = _rskip_nl(rr)
         }
+        // entry, test, impl — no symbol registration in pass1
+
+        di = di + 1
     }
 
     rr
@@ -527,101 +499,55 @@ fn _pass1_collect_variants(r: Resolver) -> Resolver {
 // Pass 2: Resolve identifiers in bodies
 // ============================================================
 
-fn _pass2(r: Resolver) -> Resolver {
-    mut rr := _rset_pos(r, 0)
-    rr = _rskip_nl(rr)
+fn _pass2(r: Resolver, index: DeclIndex) -> Resolver {
+    mut rr := r
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
 
-    // Skip sentinel token at index 0
-    if rr.pos == 0 { rr = _radv(rr) }
+        // Position to token_start
+        rr = _rset_pos(rr, decl.token_start)
 
-    // Skip mod
-    if _rk(rr) == "mod" {
-        rr = _radv(rr)
-        rr = _radv(rr)
-        rr = _rskip_nl(rr)
-    }
-
-    // Skip use declarations
-    while _rk(rr) == "use" {
-        while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
-            rr = _radv(rr)
-        }
-        rr = _rskip_nl(rr)
-    }
-
-    // Process top-level declarations
-    while _rk(rr) != "EOF" {
-        rr = _rskip_nl(rr)
-        if _rk(rr) == "EOF" { return rr }
-
+        // Skip pub keyword if present
         if _rk(rr) == "pub" { rr = _radv(rr) }
 
-        k := _rk(rr)
-        if k == "fn" {
-            rr = _resolve_fn(rr)
-        } else if k == "type" || k == "struct" {
-            rr = _skip_to_next_top(rr)
-        } else if k == "enum" {
-            rr = _skip_to_next_top(rr)
-        } else if k == "trait" {
-            rr = _skip_to_next_top(rr)
-        } else if k == "impl" {
+        if kname == "fn" {
+            if decl.name == "_extern" {
+                // Skip extern declarations (already registered in pass 1)
+                rr = _rset_pos(rr, decl.body_end)
+            } else if decl.name.startsWith("_fixture:") {
+                // before/after fixtures — resolve like test blocks
+                rr = _resolve_test(rr)
+            } else {
+                // Skip annotations
+                if _rk(rr) == "@" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                    if _rk(rr) == "(" {
+                        rr = _radv(rr)
+                        while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                        if _rk(rr) == ")" { rr = _radv(rr) }
+                    }
+                    rr = _rskip_nl(rr)
+                }
+                rr = _resolve_fn(rr)
+            }
+        } else if kname == "impl" {
             rr = _resolve_impl(rr)
-        } else if k == "const" {
+        } else if kname == "const" {
             rr = _resolve_const(rr)
-        } else if k == "entry" {
+        } else if kname == "entry" {
             rr = _resolve_entry(rr)
-        } else if k == "test" || k == "bench" {
+        } else if kname == "test" {
+            // DkTest covers both test and bench (bench has _bench: prefix in name)
             rr = _resolve_test(rr)
-        } else if k == "extern" {
-            // Skip extern declarations (already registered in pass 1)
-            rr = _skip_to_next_top(rr)
-        } else if k == "before" || k == "after" {
-            rr = _resolve_test(rr)  // fixtures have same structure as test blocks
         } else {
-            rr = _radv(rr)
+            // type, enum, trait, use, alias — skip (no body resolution needed)
+            rr = _rset_pos(rr, decl.body_end)
         }
-        rr = _rskip_nl(rr)
-    }
-    rr
-}
 
-// Skip past current declaration to the next top-level item
-fn _skip_to_next_top(r: Resolver) -> Resolver {
-    mut rr := _radv(r)
-    lb := "\{"
-    rb := "\}"
-    while _rk(rr) != "EOF" {
-        k := _rk(rr)
-        if k == lb {
-            // Skip balanced braces
-            mut d := 1
-            rr = _radv(rr)
-            while d > 0 && _rk(rr) != "EOF" {
-                if _rk(rr) == lb { d = d + 1 }
-                if _rk(rr) == rb { d = d - 1 }
-                if d > 0 { rr = _radv(rr) }
-            }
-            if _rk(rr) == rb { rr = _radv(rr) }
-            rr = _rskip_nl(rr)
-            // Check if next is derives
-            if _rk(rr) == "derives" {
-                while _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" { rr = _radv(rr) }
-                rr = _rskip_nl(rr)
-            }
-            return rr
-        }
-        if k == "NEWLINE" {
-            rr = _rskip_nl(rr)
-            // Check if we hit a new top-level declaration
-            nk := _rk(rr)
-            if nk == "fn" || nk == "pub" || nk == "type" || nk == "struct" ||
-               nk == "enum" || nk == "trait" || nk == "impl" || nk == "const" ||
-               nk == "entry" || nk == "test" || nk == "EOF" {
-                return rr
-            }
-        }
-        rr = _radv(rr)
+        di = di + 1
     }
     rr
 }
@@ -670,7 +596,7 @@ fn _resolve_fn(r: Resolver) -> Resolver {
                 pspan := _rspan(rr)
                 rr = _add_sym_warn_shadow(rr, "self", SkParameter, pspan, false)
                 rr = _radv(rr)
-            } else if _rk(rr) == "IDENT" {
+            } else if _rk(rr) == "IDENT" || _rk(rr) == "before" || _rk(rr) == "after" || _rk(rr) == "where" || _rk(rr) == "scope" || _rk(rr) == "select" || _rk(rr) == "as" || _rk(rr) == "is" || _rk(rr) == "catch" {
                 pname := _rcur(rr).text
                 pspan := _rspan(rr)
                 rr = _add_sym_warn_shadow(rr, pname, SkParameter, pspan, false)
@@ -679,6 +605,8 @@ fn _resolve_fn(r: Resolver) -> Resolver {
                     rr = _radv(rr)  // skip :
                     rr = _skip_type_tokens(rr)
                 }
+            } else {
+                rr = _radv(rr)  // skip unknown token
             }
             if _rk(rr) == "," { rr = _radv(rr) }
         }
@@ -954,6 +882,7 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
     }
     if k == "if" { return _resolve_if(r) }
     if k == "match" { return _resolve_match(r) }
+    if k == "with" { return _resolve_with(r) }
 
     // Expression statement — may be a binding
     return _resolve_expr_or_binding(r)
@@ -984,6 +913,51 @@ fn _resolve_mut_binding(r: Resolver) -> Resolver {
 // --- Resolve expression or binding (name := expr) ---
 
 fn _resolve_expr_or_binding(r: Resolver) -> Resolver {
+    // Check for tuple destructuring: (name1, name2) := expr
+    if _rk(r) == "(" {
+        // Scan ahead to check for ) :=
+        mut scan := r.pos + 1
+        mut is_tuple_destr := false
+        while scan < r.tokens.len() {
+            sk := token_name(r.tokens[scan].kind)
+            if sk == ")" {
+                next2 := scan + 1
+                if next2 < r.tokens.len() && token_name(r.tokens[next2].kind) == ":=" {
+                    is_tuple_destr = true
+                }
+                scan = r.tokens.len()  // break
+            } else if sk == "IDENT" || sk == "," || sk == "_" {
+                scan = scan + 1
+            } else {
+                scan = r.tokens.len()  // break — not a tuple destructuring
+            }
+        }
+        if is_tuple_destr {
+            mut rr := _radv(r)  // skip (
+            // Collect names
+            mut names := [""]
+            mut name_count := 0
+            while _rk(rr) != ")" && _rk(rr) != "EOF" {
+                if _rk(rr) == "IDENT" {
+                    names = names.append(_rcur(rr).text)
+                    name_count = name_count + 1
+                }
+                rr = _radv(rr)
+                if _rk(rr) == "," { rr = _radv(rr) }
+            }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+            if _rk(rr) == ":=" { rr = _radv(rr) }
+            rr = _resolve_expr_until_nl(rr)
+            // Register each name
+            mut ni := 1
+            while ni < names.len() {
+                span := _rspan(rr)
+                rr = _add_sym_warn_shadow(rr, names[ni], SkVariable, span, false)
+                ni = ni + 1
+            }
+            return rr
+        }
+    }
     // Check for simple binding: IDENT := expr  or  IDENT : TYPE = expr
     if _rk(r) == "IDENT" {
         name := _rcur(r).text
@@ -1052,7 +1026,7 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
                k == "true" || k == "false" || k == "mut" || k == "return" ||
                k == "break" || k == "continue" || k == "for" || k == "while" ||
                k == "loop" || k == "defer" || k == "assert" || k == "if" ||
-               k == "match" || k == "const" || k == "fn" {
+               k == "match" || k == "const" || k == "fn" || k == "with" {
                 return rr
             }
         }
@@ -1075,10 +1049,11 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
         } else if k == lb {
             // Check if this is a struct literal (preceded by a type name IDENT or ] for generics)
             mut is_struct_lit := false
-            if consumed_value && rr.pos > 0 {
+            if rr.pos > 0 {
                 prev_k := token_name(rr.tokens[rr.pos - 1].kind)
-                if prev_k == "IDENT" { is_struct_lit = true }
-                if prev_k == "]" { is_struct_lit = true }
+                if consumed_value && prev_k == "IDENT" { is_struct_lit = true }
+                if consumed_value && prev_k == "]" { is_struct_lit = true }
+                if prev_k == "." { is_struct_lit = true }  // record update: .{field: val}
             }
             if is_struct_lit {
                 rr = _resolve_struct_lit(rr)
@@ -1439,6 +1414,39 @@ fn _resolve_loop(r: Resolver) -> Resolver {
     _resolve_block(rr)
 }
 
+// --- Resolve with statement ---
+
+fn _resolve_with(r: Resolver) -> Resolver {
+    mut rr := _radv(r)  // skip "with"
+    // with name := expr { body }
+    mut res_name := ""
+    mut res_span := _rspan(rr)
+    if _rk(rr) == "IDENT" {
+        next := rr.pos + 1
+        if next < rr.tokens.len() && token_name(rr.tokens[next].kind) == ":=" {
+            res_name = _rcur(rr).text
+            res_span = _rspan(rr)
+            rr = _radv(rr)  // skip name
+            rr = _radv(rr)  // skip :=
+        }
+    }
+    // Resolve expression tokens until we hit the block '{'
+    lb := "\{"
+    while _rk(rr) != lb && _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
+        if _rk(rr) == "IDENT" {
+            rr = _resolve_ident(rr)
+        } else {
+            rr = _radv(rr)
+        }
+    }
+    rr = _rskip_nl(rr)
+    // Register binding in current scope before the block
+    if res_name.len() > 0 {
+        rr = _add_sym_warn_shadow(rr, res_name, SkVariable, res_span, false)
+    }
+    _resolve_block(rr)
+}
+
 // --- Resolve closure ---
 
 fn _resolve_closure(r: Resolver) -> Resolver {
@@ -1545,7 +1553,7 @@ fn _skip_type_tokens(r: Resolver) -> Resolver {
 // Public API
 // ============================================================
 
-fn resolve(tokens: [Token], file: str) -> ResolveResult {
+fn resolve(tokens: [Token], index: DeclIndex, file: str) -> ResolveResult {
     // Create resolver
     mut r := _new_resolver(tokens, file)
 
@@ -1557,10 +1565,10 @@ fn resolve(tokens: [Token], file: str) -> ResolveResult {
     r = _push_scope(r, ScModule, "module")
 
     // Pass 1: collect top-level declarations
-    r = _pass1(r)
+    r = _pass1(r, index)
 
     // Pass 2: resolve identifiers
-    r = _pass2(r)
+    r = _pass2(r, index)
 
     ResolveResult{table: r.table, diagnostics: r.diagnostics}
 }

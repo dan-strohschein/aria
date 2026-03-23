@@ -8,6 +8,7 @@ mod codegen
 
 use diagnostic
 use lexer
+use parser
 use resolver
 use checker
 
@@ -22,16 +23,20 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
     lex_diags := get_diagnostics(lex)
     if bag_has_errors(lex_diags) { return lex_diags }
 
+    // 1b. Build declaration index
+    pr := build_decl_index(toks)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+
     // 2. Resolve
-    rr := resolve(toks, file)
+    rr := resolve(toks, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
     // 3. Type check
-    cr := check(toks, rr.table, file)
+    cr := check(toks, pr.index, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(toks, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower(toks, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR and compile with clang
     generate_from_module(m, output_path, runtime_path)
@@ -55,26 +60,9 @@ fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> Dia
 
     if exit_code != 0 {
         bag := new_bag()
-        return bag_add_error(bag, "E9000", "clang compilation failed (exit code " + _codegen_i2s(exit_code) + ")", new_span("<codegen>", 0, 0, 0, 0))
+        return bag_add_error(bag, "E9000", "clang compilation failed (exit code " + i2s(exit_code) + ")", new_span("<codegen>", 0, 0, 0, 0))
     }
     new_bag()
-}
-
-fn _codegen_i2s(n: i64) -> str {
-    if n < 0 { return "-" + _codegen_i2s(0 - n) }
-    if n == 0 { return "0" }
-    if n < 10 {
-        if n == 1 { return "1" }
-        if n == 2 { return "2" }
-        if n == 3 { return "3" }
-        if n == 4 { return "4" }
-        if n == 5 { return "5" }
-        if n == 6 { return "6" }
-        if n == 7 { return "7" }
-        if n == 8 { return "8" }
-        return "9"
-    }
-    _codegen_i2s(n / 10) + _codegen_i2s(n % 10)
 }
 
 // ============================================================
@@ -156,16 +144,20 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     // Use first file name for diagnostics
     file := files[1]
 
+    // 1b. Build declaration index
+    pr := build_decl_index(merged)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+
     // 2. Resolve
-    rr := resolve(merged, file)
+    rr := resolve(merged, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
     // 3. Type check
-    cr := check(merged, rr.table, file)
+    cr := check(merged, pr.index, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(merged, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR + compile
     generate_from_module(m, output_path, runtime_path)
@@ -192,9 +184,11 @@ fn check_sources(files: [str]) -> DiagnosticBag {
         fi = fi + 1
     }
     file := files[1]
-    rr := resolve(merged, file)
+    pr := build_decl_index(merged)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+    rr := resolve(merged, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, rr.table, file)
+    cr := check(merged, pr.index, rr.table, file)
     cr.diagnostics
 }
 
@@ -219,13 +213,15 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
         fi = fi + 1
     }
     file := files[1]
-    rr := resolve(merged, file)
+    pr := build_decl_index(merged)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+    rr := resolve(merged, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, rr.table, file)
+    cr := check(merged, pr.index, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // Lower with test runner generation
-    m := lower_for_tests(merged, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
 
     generate_from_module(m, output_path, runtime_path)
 }
@@ -251,10 +247,12 @@ fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str
         fi = fi + 1
     }
     file := files[1]
-    rr := resolve(merged, file)
+    pr := build_decl_index(merged)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+    rr := resolve(merged, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, rr.table, file)
+    cr := check(merged, pr.index, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
-    m := lower_for_tests(merged, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
     generate_from_module(m, output_path, runtime_path)
 }

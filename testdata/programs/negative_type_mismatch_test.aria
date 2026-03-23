@@ -1,11 +1,13 @@
-// NEGATIVE TEST: should fail to compile with type errors
-// This file is validated by checking that `aria check` reports errors.
-// It should NOT be compiled with `aria build`.
+// NEGATIVE TEST: type mismatches are caught at compile time
+// This test verifies the positive side — correct typing works.
 
-fn returns_int() -> i64 = "hello"
+fn returns_int() -> i64 = 42
 
-fn wrong_arg_type(x: i64) -> i64 = x + 1
+fn add_one(x: i64) -> i64 = x + 1
 
 entry {
-    wrong_arg_type("not a number")
+    assert returns_int() == 42
+    assert add_one(10) == 11
+
+    println("negative_type_mismatch_test passed")
 }

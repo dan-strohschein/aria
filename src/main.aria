@@ -6,6 +6,7 @@ mod main
 
 use diagnostic
 use lexer
+use parser
 use resolver
 use checker
 use codegen
@@ -250,10 +251,13 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
     lex_diags := get_diagnostics(lex)
     if bag_has_errors(lex_diags) { return lex_diags }
 
-    rr := resolve(toks, file)
+    pr := build_decl_index(toks)
+    if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+
+    rr := resolve(toks, pr.index, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
-    cr := check(toks, rr.table, file)
+    cr := check(toks, pr.index, rr.table, file)
     return cr.diagnostics
 }
 

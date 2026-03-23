@@ -99,25 +99,10 @@ struct LT_label {
     id: i64
 }
 
-fn _i2s(n: i64) -> str {
-    if n < 0 { return "-" + _i2s(0 - n) }
-    if n == 0 { return "0" }
-    if n == 1 { return "1" }
-    if n == 2 { return "2" }
-    if n == 3 { return "3" }
-    if n == 4 { return "4" }
-    if n == 5 { return "5" }
-    if n == 6 { return "6" }
-    if n == 7 { return "7" }
-    if n == 8 { return "8" }
-    if n == 9 { return "9" }
-    return _i2s(n / 10) + _i2s(n % 10)
-}
-
-fn _t(n: i64) -> str = "%t" + _i2s(n)
-fn _v(n: i64) -> str = "%v" + _i2s(n)
-fn _lbl(n: i64) -> str = "L" + _i2s(n)
-fn _fall(n: i64) -> str = "Lfall" + _i2s(n)
+fn _t(n: i64) -> str = "%t" + i2s(n)
+fn _v(n: i64) -> str = "%v" + i2s(n)
+fn _lbl(n: i64) -> str = "L" + i2s(n)
+fn _fall(n: i64) -> str = "Lfall" + i2s(n)
 
 fn _struct_i64_i64() -> str = _lb() + " i64, i64 " + _rb()
 
@@ -197,7 +182,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
         s := m.string_constants[si]
         escaped := _llvm_escape_str(s)
         slen := s.len()
-        p = p.append("@.str." + _i2s(si) + " = private unnamed_addr constant [" + _i2s(slen + 1) + " x i8] c\"" + escaped + "\\00\"" + nl)
+        p = p.append("@.str." + i2s(si) + " = private unnamed_addr constant [" + i2s(slen + 1) + " x i8] c\"" + escaped + "\\00\"" + nl)
         si = si + 1
     }
     p = p.append(nl)
@@ -467,7 +452,7 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     mut pi := 0
     while pi < f.param_count {
         if pi > 0 { params = params + ", " }
-        params = params + "i64 %p" + _i2s(pi)
+        params = params + "i64 %p" + i2s(pi)
         pi = pi + 1
     }
 
@@ -518,7 +503,7 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     // Store parameters
     pi = 0
     while pi < f.param_count {
-        p = p.append("  store i64 %p" + _i2s(pi) + ", i64* " + _t(pi) + nl)
+        p = p.append("  store i64 %p" + i2s(pi) + ", i64* " + _t(pi) + nl)
         pi = pi + 1
     }
 
@@ -563,7 +548,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "Nop" { return g }
 
     if op == "Const" {
-        return _lg_emit(g, "store i64 " + _i2s(inst.arg1) + ", i64* " + _t(inst.dest))
+        return _lg_emit(g, "store i64 " + i2s(inst.arg1) + ", i64* " + _t(inst.dest))
     }
 
     if op == "ConstStr" {
@@ -574,7 +559,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             // Float literal — str_id points to the literal text in string constants
             float_text := m.string_constants[str_id]
             mut gg := g
-            fval := "%fconst_" + _i2s(idx)
+            fval := "%fconst_" + i2s(idx)
             gg = _lg_emit(gg, fval + " = bitcast double " + float_text + " to i64")
             gg = _lg_emit(gg, "store i64 " + fval + ", i64* " + _t(inst.dest))
             return gg
@@ -582,12 +567,12 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         mut gg := g
         lbl := _lg_fresh_label(gg)
         gg = lbl.g
-        tmp_name := "%str_ptr_" + _i2s(lbl.id)
-        gg = _lg_emit(gg, tmp_name + " = getelementptr [" + _i2s(str_len + 1) + " x i8], [" + _i2s(str_len + 1) + " x i8]* @.str." + _i2s(str_id) + ", i64 0, i64 0")
-        tmp_int := "%str_int_" + _i2s(lbl.id)
+        tmp_name := "%str_ptr_" + i2s(lbl.id)
+        gg = _lg_emit(gg, tmp_name + " = getelementptr [" + i2s(str_len + 1) + " x i8], [" + i2s(str_len + 1) + " x i8]* @.str." + i2s(str_id) + ", i64 0, i64 0")
+        tmp_int := "%str_int_" + i2s(lbl.id)
         gg = _lg_emit(gg, tmp_int + " = ptrtoint i8* " + tmp_name + " to i64")
         gg = _lg_emit(gg, "store i64 " + tmp_int + ", i64* " + _t(inst.dest))
-        gg = _lg_emit(gg, "store i64 " + _i2s(str_len) + ", i64* " + _t(inst.dest + 1))
+        gg = _lg_emit(gg, "store i64 " + i2s(str_len) + ", i64* " + _t(inst.dest + 1))
         return gg
     }
 
@@ -615,13 +600,13 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "Neg" {
         if inst.s1 == "f64" {
             mut gg := g
-            v := "%fneg_v_" + _i2s(idx)
+            v := "%fneg_v_" + i2s(idx)
             gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-            dv := "%fneg_d_" + _i2s(idx)
+            dv := "%fneg_d_" + i2s(idx)
             gg = _lg_emit(gg, dv + " = bitcast i64 " + v + " to double")
-            res := "%fneg_r_" + _i2s(idx)
+            res := "%fneg_r_" + i2s(idx)
             gg = _lg_emit(gg, res + " = fneg double " + dv)
-            ri := "%fneg_i_" + _i2s(idx)
+            ri := "%fneg_i_" + i2s(idx)
             gg = _lg_emit(gg, ri + " = bitcast double " + res + " to i64")
             gg = _lg_emit(gg, "store i64 " + ri + ", i64* " + _t(inst.dest))
             return gg
@@ -629,7 +614,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         mut gg := g
         v := _v(inst.arg1)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%neg_" + _i2s(idx)
+        res := "%neg_" + i2s(idx)
         gg = _lg_emit(gg, res + " = sub i64 0, " + v)
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -668,9 +653,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         mut gg := g
         v := _v(inst.arg1)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-        cmp := "%not_cmp_" + _i2s(idx)
+        cmp := "%not_cmp_" + i2s(idx)
         gg = _lg_emit(gg, cmp + " = icmp eq i64 " + v + ", 0")
-        res := "%not_" + _i2s(idx)
+        res := "%not_" + i2s(idx)
         gg = _lg_emit(gg, res + " = zext i1 " + cmp + " to i64")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -692,9 +677,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "BranchTrue" {
         mut gg := g
-        v := "%br_val_" + _i2s(idx)
+        v := "%br_val_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-        cmp := "%br_cmp_" + _i2s(idx)
+        cmp := "%br_cmp_" + i2s(idx)
         gg = _lg_emit(gg, cmp + " = icmp ne i64 " + v + ", 0")
         lbl := _lg_fresh_label(gg)
         gg = lbl.g
@@ -706,9 +691,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "BranchFalse" {
         mut gg := g
-        v := "%br_val_" + _i2s(idx)
+        v := "%br_val_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-        cmp := "%br_cmp_" + _i2s(idx)
+        cmp := "%br_cmp_" + i2s(idx)
         gg = _lg_emit(gg, cmp + " = icmp eq i64 " + v + ", 0")
         lbl := _lg_fresh_label(gg)
         gg = lbl.g
@@ -731,17 +716,17 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         mut gg := g
         si64 := _struct_i64_i64()
         if f.return_type == 12 {
-            ptr_v := "%ret_ptr_" + _i2s(idx)
-            len_v := "%ret_len_" + _i2s(idx)
+            ptr_v := "%ret_ptr_" + i2s(idx)
+            len_v := "%ret_len_" + i2s(idx)
             gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
             gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-            r1 := "%ret_s1_" + _i2s(idx)
-            r2 := "%ret_s2_" + _i2s(idx)
+            r1 := "%ret_s1_" + i2s(idx)
+            r2 := "%ret_s2_" + i2s(idx)
             gg = _lg_emit(gg, r1 + " = insertvalue " + si64 + " undef, i64 " + ptr_v + ", 0")
             gg = _lg_emit(gg, r2 + " = insertvalue " + si64 + " " + r1 + ", i64 " + len_v + ", 1")
             gg = _lg_emit_term(gg, "ret " + si64 + " " + r2)
         } else {
-            v := "%ret_v_" + _i2s(idx)
+            v := "%ret_v_" + i2s(idx)
             gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
             gg = _lg_emit_term(gg, "ret i64 " + v)
         }
@@ -754,7 +739,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Store" {
         mut gg := g
-        v := "%store_v_" + _i2s(idx)
+        v := "%store_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
         return gg
@@ -762,7 +747,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Load" {
         mut gg := g
-        v := "%load_v_" + _i2s(idx)
+        v := "%load_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
         return gg
@@ -774,9 +759,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         // Store function pointer as i64
         // Use bitcast to i8* first for type-agnostic ptrtoint
         mut gg := g
-        raw := "%fnref_raw_" + _i2s(idx)
+        raw := "%fnref_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = bitcast i64 (i64)* @" + inst.s1 + " to i8*")
-        ptr := "%fnref_ptr_" + _i2s(idx)
+        ptr := "%fnref_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
         return gg
@@ -787,41 +772,41 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         // inst.dest = result, inst.arg1 = fn_ptr temp, inst.arg2 = total arg count (env + user args)
         // inst.type_id = first_arg temp (env_ptr, then user args in consecutive temps)
         mut gg := g
-        fn_ptr := "%icall_ptr_" + _i2s(idx)
+        fn_ptr := "%icall_ptr_" + i2s(idx)
         gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + _t(inst.arg1))
-        fn_cast := "%icall_fn_" + _i2s(idx)
+        fn_cast := "%icall_fn_" + i2s(idx)
         // Build function type and arg list based on total arg count
         if inst.arg2 == 1 {
             // env only, no user args
             gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
-            a0 := "%icall_a0_" + _i2s(idx)
+            a0 := "%icall_a0_" + i2s(idx)
             gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
-            result := "%icall_r_" + _i2s(idx)
+            result := "%icall_r_" + i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         } else if inst.arg2 == 2 {
             // env + 1 user arg
             gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64, i64)*")
-            a0 := "%icall_a0_" + _i2s(idx)
-            a1 := "%icall_a1_" + _i2s(idx)
+            a0 := "%icall_a0_" + i2s(idx)
+            a1 := "%icall_a1_" + i2s(idx)
             gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
             t1 := inst.type_id + 1
             gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(t1))
-            result := "%icall_r_" + _i2s(idx)
+            result := "%icall_r_" + i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ", i64 " + a1 + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         } else if inst.arg2 == 3 {
             // env + 2 user args
             gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64, i64, i64)*")
-            a0 := "%icall_a0_" + _i2s(idx)
-            a1 := "%icall_a1_" + _i2s(idx)
-            a2 := "%icall_a2_" + _i2s(idx)
+            a0 := "%icall_a0_" + i2s(idx)
+            a1 := "%icall_a1_" + i2s(idx)
+            a2 := "%icall_a2_" + i2s(idx)
             gg = _lg_emit(gg, a0 + " = load i64, i64* " + _t(inst.type_id))
             t1 := inst.type_id + 1
             t2 := inst.type_id + 2
             gg = _lg_emit(gg, a1 + " = load i64, i64* " + _t(t1))
             gg = _lg_emit(gg, a2 + " = load i64, i64* " + _t(t2))
-            result := "%icall_r_" + _i2s(idx)
+            result := "%icall_r_" + i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + a0 + ", i64 " + a1 + ", i64 " + a2 + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         }
@@ -831,9 +816,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "Alloc" {
         mut gg := g
         size := inst.arg1 * 8
-        raw := "%alloc_raw_" + _i2s(idx)
-        gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + _i2s(size) + ")")
-        ptr := "%alloc_ptr_" + _i2s(idx)
+        raw := "%alloc_raw_" + i2s(idx)
+        gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + i2s(size) + ")")
+        ptr := "%alloc_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
         return gg
@@ -844,22 +829,22 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "TraitObject" {
         mut gg := g
         // Allocate 2-slot struct for trait object
-        raw := "%to_raw_" + _i2s(idx)
+        raw := "%to_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 16)")
-        ptr := "%to_ptr_" + _i2s(idx)
+        ptr := "%to_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = bitcast i8* " + raw + " to i64*")
         // Store data_ptr in slot 0
-        d0 := "%to_d0_" + _i2s(idx)
+        d0 := "%to_d0_" + i2s(idx)
         gg = _lg_emit(gg, d0 + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + d0 + ", i64* " + ptr)
         // Store vtable_ptr in slot 1
-        gep1 := "%to_gep1_" + _i2s(idx)
+        gep1 := "%to_gep1_" + i2s(idx)
         gg = _lg_emit(gg, gep1 + " = getelementptr i64, i64* " + ptr + ", i64 1")
-        v1 := "%to_v1_" + _i2s(idx)
+        v1 := "%to_v1_" + i2s(idx)
         gg = _lg_emit(gg, v1 + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, "store i64 " + v1 + ", i64* " + gep1)
         // Store pointer as result
-        res := "%to_res_" + _i2s(idx)
+        res := "%to_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = ptrtoint i64* " + ptr + " to i64")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -871,29 +856,29 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "VtableCall" {
         mut gg := g
         // Load trait object pointer
-        to_ptr := "%vc_to_" + _i2s(idx)
+        to_ptr := "%vc_to_" + i2s(idx)
         gg = _lg_emit(gg, to_ptr + " = load i64, i64* " + _t(inst.arg1))
-        to_raw := "%vc_to_raw_" + _i2s(idx)
+        to_raw := "%vc_to_raw_" + i2s(idx)
         gg = _lg_emit(gg, to_raw + " = inttoptr i64 " + to_ptr + " to i64*")
         // Load data_ptr from slot 0
-        data_ptr := "%vc_data_" + _i2s(idx)
+        data_ptr := "%vc_data_" + i2s(idx)
         gg = _lg_emit(gg, data_ptr + " = load i64, i64* " + to_raw)
         // Load vtable_ptr from slot 1
-        vt_gep := "%vc_vt_gep_" + _i2s(idx)
+        vt_gep := "%vc_vt_gep_" + i2s(idx)
         gg = _lg_emit(gg, vt_gep + " = getelementptr i64, i64* " + to_raw + ", i64 1")
-        vt_ptr := "%vc_vt_" + _i2s(idx)
+        vt_ptr := "%vc_vt_" + i2s(idx)
         gg = _lg_emit(gg, vt_ptr + " = load i64, i64* " + vt_gep)
-        vt_raw := "%vc_vt_raw_" + _i2s(idx)
+        vt_raw := "%vc_vt_raw_" + i2s(idx)
         gg = _lg_emit(gg, vt_raw + " = inttoptr i64 " + vt_ptr + " to i64*")
         // Load fn_ptr from vtable[method_index]
-        fn_gep := "%vc_fn_gep_" + _i2s(idx)
-        gg = _lg_emit(gg, fn_gep + " = getelementptr i64, i64* " + vt_raw + ", i64 " + _i2s(inst.arg2))
-        fn_ptr := "%vc_fn_" + _i2s(idx)
+        fn_gep := "%vc_fn_gep_" + i2s(idx)
+        gg = _lg_emit(gg, fn_gep + " = getelementptr i64, i64* " + vt_raw + ", i64 " + i2s(inst.arg2))
+        fn_ptr := "%vc_fn_" + i2s(idx)
         gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + fn_gep)
         // Cast to function pointer and call with data_ptr as self
-        fn_cast := "%vc_cast_" + _i2s(idx)
+        fn_cast := "%vc_cast_" + i2s(idx)
         gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
-        result := "%vc_result_" + _i2s(idx)
+        result := "%vc_result_" + i2s(idx)
         gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + data_ptr + ")")
         gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
         return gg
@@ -901,13 +886,13 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "FieldGet" {
         mut gg := g
-        base := "%fg_base_" + _i2s(idx)
+        base := "%fg_base_" + i2s(idx)
         gg = _lg_emit(gg, base + " = load i64, i64* " + _t(inst.arg1))
-        raw := "%fg_raw_" + _i2s(idx)
+        raw := "%fg_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = inttoptr i64 " + base + " to i64*")
-        gep := "%fg_gep_" + _i2s(idx)
-        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + _i2s(inst.arg2))
-        val := "%fg_val_" + _i2s(idx)
+        gep := "%fg_gep_" + i2s(idx)
+        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + i2s(inst.arg2))
+        val := "%fg_val_" + i2s(idx)
         gg = _lg_emit(gg, val + " = load i64, i64* " + gep)
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
         return gg
@@ -915,13 +900,13 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "FieldSet" {
         mut gg := g
-        base := "%fs_base_" + _i2s(idx)
+        base := "%fs_base_" + i2s(idx)
         gg = _lg_emit(gg, base + " = load i64, i64* " + _t(inst.dest))
-        raw := "%fs_raw_" + _i2s(idx)
+        raw := "%fs_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = inttoptr i64 " + base + " to i64*")
-        gep := "%fs_gep_" + _i2s(idx)
-        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + _i2s(inst.arg2))
-        val := "%fs_val_" + _i2s(idx)
+        gep := "%fs_gep_" + i2s(idx)
+        gg = _lg_emit(gg, gep + " = getelementptr i64, i64* " + raw + ", i64 " + i2s(inst.arg2))
+        val := "%fs_val_" + i2s(idx)
         gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + gep)
         return gg
@@ -929,7 +914,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "ArrayNew" {
         mut gg := g
-        arr := "%anew_" + _i2s(idx)
+        arr := "%anew_" + i2s(idx)
         gg = _lg_emit(gg, arr + " = call i64 @_aria_array_new(i64 8)")
         gg = _lg_emit(gg, "store i64 " + arr + ", i64* " + _t(inst.dest))
         return gg
@@ -937,9 +922,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "ArrayLen" {
         mut gg := g
-        arr_v := "%alen_arr_" + _i2s(idx)
+        arr_v := "%alen_arr_" + i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
-        len_v := "%alen_" + _i2s(idx)
+        len_v := "%alen_" + i2s(idx)
         gg = _lg_emit(gg, len_v + " = call i64 @_aria_array_len(i64 " + arr_v + ")")
         gg = _lg_emit(gg, "store i64 " + len_v + ", i64* " + _t(inst.dest))
         return gg
@@ -947,23 +932,23 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "ArrayGet" {
         mut gg := g
-        arr_v := "%aget_arr_" + _i2s(idx)
+        arr_v := "%aget_arr_" + i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
-        idx_v := "%aget_idx_" + _i2s(idx)
+        idx_v := "%aget_idx_" + i2s(idx)
         gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg2))
-        val := "%aget_" + _i2s(idx)
+        val := "%aget_" + i2s(idx)
         gg = _lg_emit(gg, val + " = call i64 @_aria_array_get(i64 " + arr_v + ", i64 " + idx_v + ")")
         if inst.type_id == 12 {
             // String array element: val is a pointer to a 2-word struct {ptr, len}
             // Dereference to load both components into dest and dest+1
-            sp := "%aget_sp_" + _i2s(idx)
+            sp := "%aget_sp_" + i2s(idx)
             gg = _lg_emit(gg, sp + " = inttoptr i64 " + val + " to i64*")
-            sv0 := "%aget_s0_" + _i2s(idx)
+            sv0 := "%aget_s0_" + i2s(idx)
             gg = _lg_emit(gg, sv0 + " = load i64, i64* " + sp)
             gg = _lg_emit(gg, "store i64 " + sv0 + ", i64* " + _t(inst.dest))
-            sv1g := "%aget_s1g_" + _i2s(idx)
+            sv1g := "%aget_s1g_" + i2s(idx)
             gg = _lg_emit(gg, sv1g + " = getelementptr i64, i64* " + sp + ", i64 1")
-            sv1 := "%aget_s1_" + _i2s(idx)
+            sv1 := "%aget_s1_" + i2s(idx)
             gg = _lg_emit(gg, sv1 + " = load i64, i64* " + sv1g)
             gg = _lg_emit(gg, "store i64 " + sv1 + ", i64* " + _t(inst.dest + 1))
         } else {
@@ -975,11 +960,11 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "ArraySlice" {
         // ArraySlice: dest = slice(arg1=array, arg2=start_index)
         mut gg := g
-        asl_arr := "%aslice_arr_" + _i2s(idx)
+        asl_arr := "%aslice_arr_" + i2s(idx)
         gg = _lg_emit(gg, asl_arr + " = load i64, i64* " + _t(inst.arg1))
-        asl_idx := "%aslice_idx_" + _i2s(idx)
+        asl_idx := "%aslice_idx_" + i2s(idx)
         gg = _lg_emit(gg, asl_idx + " = load i64, i64* " + _t(inst.arg2))
-        asl_res := "%aslice_" + _i2s(idx)
+        asl_res := "%aslice_" + i2s(idx)
         gg = _lg_emit(gg, asl_res + " = call i64 @_aria_array_slice(i64 " + asl_arr + ", i64 " + asl_idx + ")")
         gg = _lg_emit(gg, "store i64 " + asl_res + ", i64* " + _t(inst.dest))
         return gg
@@ -987,11 +972,11 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "ArraySet" {
         mut gg := g
-        arr_v := "%aset_arr_" + _i2s(idx)
+        arr_v := "%aset_arr_" + i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.dest))
-        idx_v := "%aset_idx_" + _i2s(idx)
+        idx_v := "%aset_idx_" + i2s(idx)
         gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg1))
-        val := "%aset_val_" + _i2s(idx)
+        val := "%aset_val_" + i2s(idx)
         gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, "call void @_aria_array_set(i64 " + arr_v + ", i64 " + idx_v + ", i64 " + val + ")")
         return gg
@@ -999,31 +984,31 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "ArrayAppend" {
         mut gg := g
-        arr_v := "%aapp_arr_" + _i2s(idx)
+        arr_v := "%aapp_arr_" + i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
         if inst.type_id == 12 {
             // String element: allocate a 2-word struct, store ptr+len, append struct pointer
-            sp := "%aapp_sp_" + _i2s(idx)
+            sp := "%aapp_sp_" + i2s(idx)
             gg = _lg_emit(gg, sp + " = call i8* @_aria_alloc(i64 16)")
-            spi := "%aapp_spi_" + _i2s(idx)
+            spi := "%aapp_spi_" + i2s(idx)
             gg = _lg_emit(gg, spi + " = bitcast i8* " + sp + " to i64*")
-            sv0 := "%aapp_sv0_" + _i2s(idx)
+            sv0 := "%aapp_sv0_" + i2s(idx)
             gg = _lg_emit(gg, sv0 + " = load i64, i64* " + _t(inst.arg2))
             gg = _lg_emit(gg, "store i64 " + sv0 + ", i64* " + spi)
-            sg1 := "%aapp_sg1_" + _i2s(idx)
+            sg1 := "%aapp_sg1_" + i2s(idx)
             gg = _lg_emit(gg, sg1 + " = getelementptr i64, i64* " + spi + ", i64 1")
-            sv1 := "%aapp_sv1_" + _i2s(idx)
+            sv1 := "%aapp_sv1_" + i2s(idx)
             gg = _lg_emit(gg, sv1 + " = load i64, i64* " + _t(inst.arg2 + 1))
             gg = _lg_emit(gg, "store i64 " + sv1 + ", i64* " + sg1)
-            spp := "%aapp_spp_" + _i2s(idx)
+            spp := "%aapp_spp_" + i2s(idx)
             gg = _lg_emit(gg, spp + " = ptrtoint i64* " + spi + " to i64")
-            res := "%aapp_res_" + _i2s(idx)
+            res := "%aapp_res_" + i2s(idx)
             gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + spp + ")")
             gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         } else {
-            val := "%aapp_val_" + _i2s(idx)
+            val := "%aapp_val_" + i2s(idx)
             gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
-            res := "%aapp_res_" + _i2s(idx)
+            res := "%aapp_res_" + i2s(idx)
             gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + val + ")")
             gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         }
@@ -1032,7 +1017,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrLen" {
         mut gg := g
-        v := "%slen_" + _i2s(idx)
+        v := "%slen_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
         return gg
@@ -1043,16 +1028,16 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrCharAt" {
         mut gg := g
-        s_ptr := "%sca_sp_" + _i2s(idx)
-        s_len := "%sca_sl_" + _i2s(idx)
+        s_ptr := "%sca_sp_" + i2s(idx)
+        s_len := "%sca_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        idx_v := "%sca_idx_" + _i2s(idx)
+        idx_v := "%sca_idx_" + i2s(idx)
         gg = _lg_emit(gg, idx_v + " = load i64, i64* " + _t(inst.arg2))
-        s_p := "%sca_spi_" + _i2s(idx)
+        s_p := "%sca_spi_" + i2s(idx)
         gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%sca_res_" + _i2s(idx)
+        res := "%sca_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_charAt(i8* " + s_p + ", i64 " + s_len + ", i64 " + idx_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "sca")
         return gg
@@ -1060,18 +1045,18 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrSubstring" {
         mut gg := g
-        s_ptr := "%ssub_sp_" + _i2s(idx)
-        s_len := "%ssub_sl_" + _i2s(idx)
+        s_ptr := "%ssub_sp_" + i2s(idx)
+        s_len := "%ssub_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        start_v := "%ssub_st_" + _i2s(idx)
+        start_v := "%ssub_st_" + i2s(idx)
         gg = _lg_emit(gg, start_v + " = load i64, i64* " + _t(inst.arg2))
-        end_v := "%ssub_en_" + _i2s(idx)
+        end_v := "%ssub_en_" + i2s(idx)
         gg = _lg_emit(gg, end_v + " = load i64, i64* " + _t(inst.type_id))
-        s_p := "%ssub_spi_" + _i2s(idx)
+        s_p := "%ssub_spi_" + i2s(idx)
         gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%ssub_res_" + _i2s(idx)
+        res := "%ssub_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_substring(i8* " + s_p + ", i64 " + s_len + ", i64 " + start_v + ", i64 " + end_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "ssub")
         return gg
@@ -1084,14 +1069,14 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrTrim" {
         mut gg := g
-        s_ptr := "%strim_sp_" + _i2s(idx)
-        s_len := "%strim_sl_" + _i2s(idx)
+        s_ptr := "%strim_sp_" + i2s(idx)
+        s_len := "%strim_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        s_p := "%strim_spi_" + _i2s(idx)
+        s_p := "%strim_spi_" + i2s(idx)
         gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%strim_res_" + _i2s(idx)
+        res := "%strim_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_trim(i8* " + s_p + ", i64 " + s_len + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "strim")
         return gg
@@ -1099,26 +1084,26 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrReplace" {
         mut gg := g
-        s_ptr := "%srep_sp_" + _i2s(idx)
-        s_len := "%srep_sl_" + _i2s(idx)
+        s_ptr := "%srep_sp_" + i2s(idx)
+        s_len := "%srep_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        o_ptr := "%srep_op_" + _i2s(idx)
-        o_len := "%srep_ol_" + _i2s(idx)
+        o_ptr := "%srep_op_" + i2s(idx)
+        o_len := "%srep_ol_" + i2s(idx)
         gg = _lg_emit(gg, o_ptr + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, o_len + " = load i64, i64* " + _t(inst.arg2 + 1))
-        n_ptr := "%srep_np_" + _i2s(idx)
-        n_len := "%srep_nl_" + _i2s(idx)
+        n_ptr := "%srep_np_" + i2s(idx)
+        n_len := "%srep_nl_" + i2s(idx)
         gg = _lg_emit(gg, n_ptr + " = load i64, i64* " + _t(inst.type_id))
         gg = _lg_emit(gg, n_len + " = load i64, i64* " + _t(inst.type_id + 1))
-        sp := "%srep_spi_" + _i2s(idx)
-        op2 := "%srep_opi_" + _i2s(idx)
-        np := "%srep_npi_" + _i2s(idx)
+        sp := "%srep_spi_" + i2s(idx)
+        op2 := "%srep_opi_" + i2s(idx)
+        np := "%srep_npi_" + i2s(idx)
         gg = _lg_emit(gg, sp + " = inttoptr i64 " + s_ptr + " to i8*")
         gg = _lg_emit(gg, op2 + " = inttoptr i64 " + o_ptr + " to i8*")
         gg = _lg_emit(gg, np + " = inttoptr i64 " + n_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%srep_res_" + _i2s(idx)
+        res := "%srep_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_replace(i8* " + sp + ", i64 " + s_len + ", i8* " + op2 + ", i64 " + o_len + ", i8* " + np + ", i64 " + n_len + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "srep")
         return gg
@@ -1126,14 +1111,14 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrToLower" {
         mut gg := g
-        s_ptr := "%slwr_sp_" + _i2s(idx)
-        s_len := "%slwr_sl_" + _i2s(idx)
+        s_ptr := "%slwr_sp_" + i2s(idx)
+        s_len := "%slwr_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        s_p := "%slwr_spi_" + _i2s(idx)
+        s_p := "%slwr_spi_" + i2s(idx)
         gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%slwr_res_" + _i2s(idx)
+        res := "%slwr_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_toLower(i8* " + s_p + ", i64 " + s_len + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "slwr")
         return gg
@@ -1141,14 +1126,14 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrToUpper" {
         mut gg := g
-        s_ptr := "%supr_sp_" + _i2s(idx)
-        s_len := "%supr_sl_" + _i2s(idx)
+        s_ptr := "%supr_sp_" + i2s(idx)
+        s_len := "%supr_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        s_p := "%supr_spi_" + _i2s(idx)
+        s_p := "%supr_spi_" + i2s(idx)
         gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
         srt := _str_ret_type()
-        res := "%supr_res_" + _i2s(idx)
+        res := "%supr_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_toUpper(i8* " + s_p + ", i64 " + s_len + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "supr")
         return gg
@@ -1156,19 +1141,19 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrSplit" {
         mut gg := g
-        s_ptr := "%sspl_sp_" + _i2s(idx)
-        s_len := "%sspl_sl_" + _i2s(idx)
+        s_ptr := "%sspl_sp_" + i2s(idx)
+        s_len := "%sspl_sl_" + i2s(idx)
         gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
-        d_ptr := "%sspl_dp_" + _i2s(idx)
-        d_len := "%sspl_dl_" + _i2s(idx)
+        d_ptr := "%sspl_dp_" + i2s(idx)
+        d_len := "%sspl_dl_" + i2s(idx)
         gg = _lg_emit(gg, d_ptr + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, d_len + " = load i64, i64* " + _t(inst.arg2 + 1))
-        sp := "%sspl_spi_" + _i2s(idx)
-        dp := "%sspl_dpi_" + _i2s(idx)
+        sp := "%sspl_spi_" + i2s(idx)
+        dp := "%sspl_dpi_" + i2s(idx)
         gg = _lg_emit(gg, sp + " = inttoptr i64 " + s_ptr + " to i8*")
         gg = _lg_emit(gg, dp + " = inttoptr i64 " + d_ptr + " to i8*")
-        res := "%sspl_res_" + _i2s(idx)
+        res := "%sspl_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_str_split(i8* " + sp + ", i64 " + s_len + ", i8* " + dp + ", i64 " + d_len + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1177,22 +1162,22 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "StrToInt" {
         // Returns {value, success} — we store both to consecutive temps
         mut gg := g
-        ptr_v := "%sti_p_" + _i2s(idx)
-        len_v := "%sti_l_" + _i2s(idx)
+        ptr_v := "%sti_p_" + i2s(idx)
+        len_v := "%sti_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%sti_pc_" + _i2s(idx)
+        ptr_cast := "%sti_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
         srt := _str_ret_type()
-        res := "%sti_res_" + _i2s(idx)
+        res := "%sti_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_to_int(i8* " + ptr_cast + ", i64 " + len_v + ")")
         // Extract value (field 0) and success (field 1)
-        val := "%sti_val_" + _i2s(idx)
-        suc := "%sti_suc_" + _i2s(idx)
+        val := "%sti_val_" + i2s(idx)
+        suc := "%sti_suc_" + i2s(idx)
         gg = _lg_emit(gg, val + " = extractvalue " + srt + " " + res + ", 0")
         gg = _lg_emit(gg, suc + " = extractvalue " + srt + " " + res + ", 1")
         // Cast ptr back to i64 for the value
-        val_int := "%sti_vi_" + _i2s(idx)
+        val_int := "%sti_vi_" + i2s(idx)
         gg = _lg_emit(gg, val_int + " = ptrtoint i8* " + val + " to i64")
         gg = _lg_emit(gg, "store i64 " + val_int + ", i64* " + _t(inst.dest))
         dest_suc := inst.dest + 1
@@ -1202,9 +1187,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "MapNew" {
         mut gg := g
-        cap_v := "%mnew_cap_" + _i2s(idx)
+        cap_v := "%mnew_cap_" + i2s(idx)
         gg = _lg_emit(gg, cap_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%mnew_" + _i2s(idx)
+        res := "%mnew_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_new(i64 " + cap_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1213,15 +1198,15 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "MapSet" {
         // arg1 = map ptr, arg2 = key (str temp), type_id = value temp
         mut gg := g
-        map_v := "%mset_m_" + _i2s(idx)
+        map_v := "%mset_m_" + i2s(idx)
         gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
-        key_p := "%mset_kp_" + _i2s(idx)
-        key_l := "%mset_kl_" + _i2s(idx)
+        key_p := "%mset_kp_" + i2s(idx)
+        key_l := "%mset_kl_" + i2s(idx)
         gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
-        key_pc := "%mset_kpc_" + _i2s(idx)
+        key_pc := "%mset_kpc_" + i2s(idx)
         gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
-        val_v := "%mset_v_" + _i2s(idx)
+        val_v := "%mset_v_" + i2s(idx)
         gg = _lg_emit(gg, val_v + " = load i64, i64* " + _t(inst.type_id))
         gg = _lg_emit(gg, "call void @_aria_map_set(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ", i64 " + val_v + ")")
         return gg
@@ -1230,15 +1215,15 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "MapGet" {
         // arg1 = map ptr, arg2 = key (str temp), dest = result
         mut gg := g
-        map_v := "%mget_m_" + _i2s(idx)
+        map_v := "%mget_m_" + i2s(idx)
         gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
-        key_p := "%mget_kp_" + _i2s(idx)
-        key_l := "%mget_kl_" + _i2s(idx)
+        key_p := "%mget_kp_" + i2s(idx)
+        key_l := "%mget_kl_" + i2s(idx)
         gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
-        key_pc := "%mget_kpc_" + _i2s(idx)
+        key_pc := "%mget_kpc_" + i2s(idx)
         gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
-        res := "%mget_" + _i2s(idx)
+        res := "%mget_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_get(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1246,15 +1231,15 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "MapContains" {
         mut gg := g
-        map_v := "%mhas_m_" + _i2s(idx)
+        map_v := "%mhas_m_" + i2s(idx)
         gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
-        key_p := "%mhas_kp_" + _i2s(idx)
-        key_l := "%mhas_kl_" + _i2s(idx)
+        key_p := "%mhas_kp_" + i2s(idx)
+        key_l := "%mhas_kl_" + i2s(idx)
         gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
         gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
-        key_pc := "%mhas_kpc_" + _i2s(idx)
+        key_pc := "%mhas_kpc_" + i2s(idx)
         gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
-        res := "%mhas_" + _i2s(idx)
+        res := "%mhas_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_contains(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1262,9 +1247,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "MapLen" {
         mut gg := g
-        map_v := "%mlen_m_" + _i2s(idx)
+        map_v := "%mlen_m_" + i2s(idx)
         gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%mlen_" + _i2s(idx)
+        res := "%mlen_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_len(i64 " + map_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1272,9 +1257,9 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "MapKeys" {
         mut gg := g
-        map_v := "%mkeys_m_" + _i2s(idx)
+        map_v := "%mkeys_m_" + i2s(idx)
         gg = _lg_emit(gg, map_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%mkeys_" + _i2s(idx)
+        res := "%mkeys_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_keys(i64 " + map_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1282,10 +1267,10 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "IntToStr" {
         mut gg := g
-        v := "%its_v_" + _i2s(idx)
+        v := "%its_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         srt := _str_ret_type()
-        res := "%its_res_" + _i2s(idx)
+        res := "%its_res_" + i2s(idx)
         if inst.s1 == "f64" {
             gg = _lg_emit(gg, res + " = call " + srt + " @_aria_float_to_str(i64 " + v + ")")
         } else {
@@ -1308,11 +1293,11 @@ fn _str_ret_type() -> str = _lb() + " i8*, i64 " + _rb()
 fn _extract_str_result(g: LlvmGen, res_name: str, dest: i64, idx: i64, prefix: str) -> LlvmGen {
     srt := _str_ret_type()
     mut gg := g
-    r_ptr := "%" + prefix + "_rp_" + _i2s(idx)
-    r_len := "%" + prefix + "_rl_" + _i2s(idx)
+    r_ptr := "%" + prefix + "_rp_" + i2s(idx)
+    r_len := "%" + prefix + "_rl_" + i2s(idx)
     gg = _lg_emit(gg, r_ptr + " = extractvalue " + srt + " " + res_name + ", 0")
     gg = _lg_emit(gg, r_len + " = extractvalue " + srt + " " + res_name + ", 1")
-    rpi := "%" + prefix + "_rpi_" + _i2s(idx)
+    rpi := "%" + prefix + "_rpi_" + i2s(idx)
     gg = _lg_emit(gg, rpi + " = ptrtoint i8* " + r_ptr + " to i64")
     gg = _lg_emit(gg, "store i64 " + rpi + ", i64* " + _t(dest))
     gg = _lg_emit(gg, "store i64 " + r_len + ", i64* " + _t(dest + 1))
@@ -1321,11 +1306,11 @@ fn _extract_str_result(g: LlvmGen, res_name: str, dest: i64, idx: i64, prefix: s
 
 fn _gen_binop(g: LlvmGen, llvm_op: str, inst: IrInst) -> LlvmGen {
     mut gg := g
-    a := "%binop_a_" + _i2s(inst.dest)
-    b := "%binop_b_" + _i2s(inst.dest)
+    a := "%binop_a_" + i2s(inst.dest)
+    b := "%binop_b_" + i2s(inst.dest)
     gg = _lg_emit(gg, a + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, b + " = load i64, i64* " + _t(inst.arg2))
-    res := "%binop_r_" + _i2s(inst.dest)
+    res := "%binop_r_" + i2s(inst.dest)
     gg = _lg_emit(gg, res + " = " + llvm_op + " i64 " + a + ", " + b)
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -1333,13 +1318,13 @@ fn _gen_binop(g: LlvmGen, llvm_op: str, inst: IrInst) -> LlvmGen {
 
 fn _gen_cmp(g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    a := "%cmp_a_" + _i2s(idx)
-    b := "%cmp_b_" + _i2s(idx)
+    a := "%cmp_a_" + i2s(idx)
+    b := "%cmp_b_" + i2s(idx)
     gg = _lg_emit(gg, a + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, b + " = load i64, i64* " + _t(inst.arg2))
-    cmp := "%cmp_c_" + _i2s(idx)
+    cmp := "%cmp_c_" + i2s(idx)
     gg = _lg_emit(gg, cmp + " = icmp " + cmp_op + " i64 " + a + ", " + b)
-    res := "%cmp_r_" + _i2s(idx)
+    res := "%cmp_r_" + i2s(idx)
     gg = _lg_emit(gg, res + " = zext i1 " + cmp + " to i64")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -1347,20 +1332,20 @@ fn _gen_cmp(g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen {
 
 fn _gen_str_binop_returning_str(g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    a_ptr := "%sbr_ap_" + _i2s(idx)
-    a_len := "%sbr_al_" + _i2s(idx)
-    b_ptr := "%sbr_bp_" + _i2s(idx)
-    b_len := "%sbr_bl_" + _i2s(idx)
+    a_ptr := "%sbr_ap_" + i2s(idx)
+    a_len := "%sbr_al_" + i2s(idx)
+    b_ptr := "%sbr_bp_" + i2s(idx)
+    b_len := "%sbr_bl_" + i2s(idx)
     gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
     gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
     gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
-    a_p := "%sbr_api_" + _i2s(idx)
-    b_p := "%sbr_bpi_" + _i2s(idx)
+    a_p := "%sbr_api_" + i2s(idx)
+    b_p := "%sbr_bpi_" + i2s(idx)
     gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
     gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
     srt := _str_ret_type()
-    res := "%sbr_res_" + _i2s(idx)
+    res := "%sbr_res_" + i2s(idx)
     gg = _lg_emit(gg, res + " = call " + srt + " " + func_name + "(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
     gg = _extract_str_result(gg, res, inst.dest, idx, "sbr")
     gg
@@ -1368,19 +1353,19 @@ fn _gen_str_binop_returning_str(g: LlvmGen, func_name: str, inst: IrInst, idx: i
 
 fn _gen_str_binop_returning_i64(g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    a_ptr := "%sbi_ap_" + _i2s(idx)
-    a_len := "%sbi_al_" + _i2s(idx)
-    b_ptr := "%sbi_bp_" + _i2s(idx)
-    b_len := "%sbi_bl_" + _i2s(idx)
+    a_ptr := "%sbi_ap_" + i2s(idx)
+    a_len := "%sbi_al_" + i2s(idx)
+    b_ptr := "%sbi_bp_" + i2s(idx)
+    b_len := "%sbi_bl_" + i2s(idx)
     gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
     gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
     gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
-    a_p := "%sbi_api_" + _i2s(idx)
-    b_p := "%sbi_bpi_" + _i2s(idx)
+    a_p := "%sbi_api_" + i2s(idx)
+    b_p := "%sbi_bpi_" + i2s(idx)
     gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
     gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
-    res := "%sbi_res_" + _i2s(idx)
+    res := "%sbi_res_" + i2s(idx)
     gg = _lg_emit(gg, res + " = call i64 " + func_name + "(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -1389,16 +1374,16 @@ fn _gen_str_binop_returning_i64(g: LlvmGen, func_name: str, inst: IrInst, idx: i
 // Inline StrEq: length-first check avoids memcmp call for most comparisons
 fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    a_ptr := "%seq_ap_" + _i2s(idx)
-    a_len := "%seq_al_" + _i2s(idx)
-    b_ptr := "%seq_bp_" + _i2s(idx)
-    b_len := "%seq_bl_" + _i2s(idx)
+    a_ptr := "%seq_ap_" + i2s(idx)
+    a_len := "%seq_al_" + i2s(idx)
+    b_ptr := "%seq_bp_" + i2s(idx)
+    b_len := "%seq_bl_" + i2s(idx)
     gg = _lg_emit(gg, a_ptr + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, a_len + " = load i64, i64* " + _t(inst.arg1 + 1))
     gg = _lg_emit(gg, b_ptr + " = load i64, i64* " + _t(inst.arg2))
     gg = _lg_emit(gg, b_len + " = load i64, i64* " + _t(inst.arg2 + 1))
     // Fast path: if lengths differ, not equal
-    len_eq := "%seq_leq_" + _i2s(idx)
+    len_eq := "%seq_leq_" + i2s(idx)
     gg = _lg_emit(gg, len_eq + " = icmp eq i64 " + a_len + ", " + b_len)
     lbl1 := _lg_fresh_label(gg)
     gg = lbl1.g
@@ -1406,17 +1391,17 @@ fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
     gg = lbl2.g
     lbl3 := _lg_fresh_label(gg)
     gg = lbl3.g
-    do_cmp_lbl := "Lseq_cmp_" + _i2s(lbl1.id)
-    not_eq_lbl := "Lseq_ne_" + _i2s(lbl2.id)
-    done_lbl := "Lseq_done_" + _i2s(lbl3.id)
+    do_cmp_lbl := "Lseq_cmp_" + i2s(lbl1.id)
+    not_eq_lbl := "Lseq_ne_" + i2s(lbl2.id)
+    done_lbl := "Lseq_done_" + i2s(lbl3.id)
     gg = _lg_emit_term(gg, "br i1 " + len_eq + ", label %" + do_cmp_lbl + ", label %" + not_eq_lbl)
     // Lengths match: call memcmp via _aria_str_eq
     gg = _lg_emit_label(gg, do_cmp_lbl)
-    a_p := "%seq_api_" + _i2s(idx)
-    b_p := "%seq_bpi_" + _i2s(idx)
+    a_p := "%seq_api_" + i2s(idx)
+    b_p := "%seq_bpi_" + i2s(idx)
     gg = _lg_emit(gg, a_p + " = inttoptr i64 " + a_ptr + " to i8*")
     gg = _lg_emit(gg, b_p + " = inttoptr i64 " + b_ptr + " to i8*")
-    res_cmp := "%seq_rc_" + _i2s(idx)
+    res_cmp := "%seq_rc_" + i2s(idx)
     gg = _lg_emit(gg, res_cmp + " = call i64 @_aria_str_eq(i8* " + a_p + ", i64 " + a_len + ", i8* " + b_p + ", i64 " + b_len + ")")
     gg = _lg_emit_term(gg, "br label %" + done_lbl)
     // Lengths differ: result is 0 (false)
@@ -1424,7 +1409,7 @@ fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
     gg = _lg_emit_term(gg, "br label %" + done_lbl)
     // Merge with phi
     gg = _lg_emit_label(gg, done_lbl)
-    res := "%seq_res_" + _i2s(idx)
+    res := "%seq_res_" + i2s(idx)
     gg = _lg_emit(gg, res + " = phi i64 [ " + res_cmp + ", %" + do_cmp_lbl + " ], [ 0, %" + not_eq_lbl + " ]")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -1439,29 +1424,29 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     mut gg := g
 
     if name == "_aria_println_str" || name == "_aria_print_str" || name == "_aria_eprintln_str" {
-        ptr_v := "%call_p_" + _i2s(idx)
-        len_v := "%call_l_" + _i2s(idx)
+        ptr_v := "%call_p_" + i2s(idx)
+        len_v := "%call_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%call_pc_" + _i2s(idx)
+        ptr_cast := "%call_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
         gg = _lg_emit(gg, "call void @" + name + "(i8* " + ptr_cast + ", i64 " + len_v + ")")
         return gg
     }
 
     if name == "_aria_exit" {
-        v := "%call_exit_" + _i2s(idx)
+        v := "%call_exit_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_exit(i64 " + v + ")")
         return gg
     }
 
     if name == "_aria_panic" {
-        ptr_v := "%call_p_" + _i2s(idx)
-        len_v := "%call_l_" + _i2s(idx)
+        ptr_v := "%call_p_" + i2s(idx)
+        len_v := "%call_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%call_pc_" + _i2s(idx)
+        ptr_cast := "%call_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
         gg = _lg_emit(gg, "call void @_aria_panic(i8* " + ptr_cast + ", i64 " + len_v + ")")
         gg = _lg_emit_term(gg, "unreachable")
@@ -1469,41 +1454,41 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if name == "_aria_alloc" {
-        v := "%call_alloc_sz_" + _i2s(idx)
+        v := "%call_alloc_sz_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
-        raw := "%call_alloc_r_" + _i2s(idx)
+        raw := "%call_alloc_r_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + v + ")")
-        res := "%call_alloc_i_" + _i2s(idx)
+        res := "%call_alloc_i_" + i2s(idx)
         gg = _lg_emit(gg, res + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_read_file" {
-        ptr_v := "%call_rf_p_" + _i2s(idx)
-        len_v := "%call_rf_l_" + _i2s(idx)
+        ptr_v := "%call_rf_p_" + i2s(idx)
+        len_v := "%call_rf_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%call_rf_pc_" + _i2s(idx)
+        ptr_cast := "%call_rf_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
         srt := _str_ret_type()
-        res := "%call_rf_res_" + _i2s(idx)
+        res := "%call_rf_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_read_file(i8* " + ptr_cast + ", i64 " + len_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_rf")
         return gg
     }
 
     if name == "_aria_write_file" {
-        pp := "%call_wf_pp_" + _i2s(idx)
-        pl := "%call_wf_pl_" + _i2s(idx)
-        cp := "%call_wf_cp_" + _i2s(idx)
-        cl := "%call_wf_cl_" + _i2s(idx)
+        pp := "%call_wf_pp_" + i2s(idx)
+        pl := "%call_wf_pl_" + i2s(idx)
+        cp := "%call_wf_cp_" + i2s(idx)
+        cl := "%call_wf_cl_" + i2s(idx)
         gg = _lg_emit(gg, pp + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, pl + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, cp + " = load i64, i64* " + _t(inst.arg1 + 2))
         gg = _lg_emit(gg, cl + " = load i64, i64* " + _t(inst.arg1 + 3))
-        pp_c := "%call_wf_ppc_" + _i2s(idx)
-        cp_c := "%call_wf_cpc_" + _i2s(idx)
+        pp_c := "%call_wf_ppc_" + i2s(idx)
+        cp_c := "%call_wf_cpc_" + i2s(idx)
         gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
         gg = _lg_emit(gg, cp_c + " = inttoptr i64 " + cp + " to i8*")
         gg = _lg_emit(gg, "call void @_aria_write_file(i8* " + pp_c + ", i64 " + pl + ", i8* " + cp_c + ", i64 " + cl + ")")
@@ -1511,16 +1496,16 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if name == "_aria_write_binary_file" {
-        pp := "%call_wbf_pp_" + _i2s(idx)
-        pl := "%call_wbf_pl_" + _i2s(idx)
-        dp := "%call_wbf_dp_" + _i2s(idx)
-        dl := "%call_wbf_dl_" + _i2s(idx)
+        pp := "%call_wbf_pp_" + i2s(idx)
+        pl := "%call_wbf_pl_" + i2s(idx)
+        dp := "%call_wbf_dp_" + i2s(idx)
+        dl := "%call_wbf_dl_" + i2s(idx)
         gg = _lg_emit(gg, pp + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, pl + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, dp + " = load i64, i64* " + _t(inst.arg1 + 2))
         gg = _lg_emit(gg, dl + " = load i64, i64* " + _t(inst.arg1 + 3))
-        pp_c := "%call_wbf_ppc_" + _i2s(idx)
-        dp_c := "%call_wbf_dpc_" + _i2s(idx)
+        pp_c := "%call_wbf_ppc_" + i2s(idx)
+        dp_c := "%call_wbf_dpc_" + i2s(idx)
         gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
         gg = _lg_emit(gg, dp_c + " = inttoptr i64 " + dp + " to i64*")
         gg = _lg_emit(gg, "call void @_aria_write_binary_file(i8* " + pp_c + ", i64 " + pl + ", i64* " + dp_c + ", i64 " + dl + ")")
@@ -1528,20 +1513,20 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if name == "_aria_args" {
-        res := "%call_args_" + _i2s(idx)
+        res := "%call_args_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_args_get()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_exec" {
-        ptr_v := "%call_exec_p_" + _i2s(idx)
-        len_v := "%call_exec_l_" + _i2s(idx)
+        ptr_v := "%call_exec_p_" + i2s(idx)
+        len_v := "%call_exec_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%call_exec_pc_" + _i2s(idx)
+        ptr_cast := "%call_exec_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
-        res := "%call_exec_r_" + _i2s(idx)
+        res := "%call_exec_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_exec(i8* " + ptr_cast + ", i64 " + len_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1549,14 +1534,14 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     // --- Environment ---
     if name == "_aria_getenv" {
-        ptr_v := "%call_ge_p_" + _i2s(idx)
-        len_v := "%call_ge_l_" + _i2s(idx)
+        ptr_v := "%call_ge_p_" + i2s(idx)
+        len_v := "%call_ge_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptr_cast := "%call_ge_pc_" + _i2s(idx)
+        ptr_cast := "%call_ge_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
         srt := _str_ret_type()
-        res := "%call_ge_r_" + _i2s(idx)
+        res := "%call_ge_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_getenv(i8* " + ptr_cast + ", i64 " + len_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_ge")
         return gg
@@ -1564,7 +1549,7 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     // --- TCP Networking ---
     if name == "_aria_tcp_socket" {
-        res := "%call_ts_" + _i2s(idx)
+        res := "%call_ts_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_socket()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1572,94 +1557,94 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_tcp_bind" {
         // args: fd, addr_ptr, addr_len, port — 4 consecutive i64 temps starting at arg1
-        fd_v := "%call_tb_fd_" + _i2s(idx)
-        ap := "%call_tb_ap_" + _i2s(idx)
-        al := "%call_tb_al_" + _i2s(idx)
-        port_v := "%call_tb_port_" + _i2s(idx)
+        fd_v := "%call_tb_fd_" + i2s(idx)
+        ap := "%call_tb_ap_" + i2s(idx)
+        al := "%call_tb_al_" + i2s(idx)
+        port_v := "%call_tb_port_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ap + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, al + " = load i64, i64* " + _t(inst.arg1 + 2))
         gg = _lg_emit(gg, port_v + " = load i64, i64* " + _t(inst.arg1 + 3))
-        apc := "%call_tb_apc_" + _i2s(idx)
+        apc := "%call_tb_apc_" + i2s(idx)
         gg = _lg_emit(gg, apc + " = inttoptr i64 " + ap + " to i8*")
-        res := "%call_tb_r_" + _i2s(idx)
+        res := "%call_tb_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_bind(i64 " + fd_v + ", i8* " + apc + ", i64 " + al + ", i64 " + port_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_tcp_listen" {
-        fd_v := "%call_tl_fd_" + _i2s(idx)
-        bl_v := "%call_tl_bl_" + _i2s(idx)
+        fd_v := "%call_tl_fd_" + i2s(idx)
+        bl_v := "%call_tl_bl_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, bl_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        res := "%call_tl_r_" + _i2s(idx)
+        res := "%call_tl_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_listen(i64 " + fd_v + ", i64 " + bl_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_tcp_accept" {
-        fd_v := "%call_ta_fd_" + _i2s(idx)
+        fd_v := "%call_ta_fd_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_ta_r_" + _i2s(idx)
+        res := "%call_ta_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_accept(i64 " + fd_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_tcp_read" {
-        fd_v := "%call_tr_fd_" + _i2s(idx)
-        ml_v := "%call_tr_ml_" + _i2s(idx)
+        fd_v := "%call_tr_fd_" + i2s(idx)
+        ml_v := "%call_tr_ml_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ml_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         srt := _str_ret_type()
-        res := "%call_tr_r_" + _i2s(idx)
+        res := "%call_tr_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_tcp_read(i64 " + fd_v + ", i64 " + ml_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_tr")
         return gg
     }
 
     if name == "_aria_tcp_write" {
-        fd_v := "%call_tw_fd_" + _i2s(idx)
-        ptr_v := "%call_tw_p_" + _i2s(idx)
-        len_v := "%call_tw_l_" + _i2s(idx)
+        fd_v := "%call_tw_fd_" + i2s(idx)
+        ptr_v := "%call_tw_p_" + i2s(idx)
+        len_v := "%call_tw_l_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 2))
-        ptrc := "%call_tw_pc_" + _i2s(idx)
+        ptrc := "%call_tw_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
-        res := "%call_tw_r_" + _i2s(idx)
+        res := "%call_tw_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_write(i64 " + fd_v + ", i8* " + ptrc + ", i64 " + len_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_tcp_close" {
-        fd_v := "%call_tc_fd_" + _i2s(idx)
+        fd_v := "%call_tc_fd_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_tcp_close(i64 " + fd_v + ")")
         return gg
     }
 
     if name == "_aria_tcp_peer_addr" {
-        fd_v := "%call_tpa_fd_" + _i2s(idx)
+        fd_v := "%call_tpa_fd_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         srt := _str_ret_type()
-        res := "%call_tpa_r_" + _i2s(idx)
+        res := "%call_tpa_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_tcp_peer_addr(i64 " + fd_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_tpa")
         return gg
     }
 
     if name == "_aria_tcp_set_timeout" {
-        fd_v := "%call_tst_fd_" + _i2s(idx)
-        k_v := "%call_tst_k_" + _i2s(idx)
-        ms_v := "%call_tst_ms_" + _i2s(idx)
+        fd_v := "%call_tst_fd_" + i2s(idx)
+        k_v := "%call_tst_k_" + i2s(idx)
+        ms_v := "%call_tst_ms_" + i2s(idx)
         gg = _lg_emit(gg, fd_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, k_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, ms_v + " = load i64, i64* " + _t(inst.arg1 + 2))
-        res := "%call_tst_r_" + _i2s(idx)
+        res := "%call_tst_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_tcp_set_timeout(i64 " + fd_v + ", i64 " + k_v + ", i64 " + ms_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1668,39 +1653,39 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     // --- PostgreSQL ---
     if name == "_aria_pg_connect" {
         // str arg (ptr, len) → i64
-        ptr_v := "%call_pgc_p_" + _i2s(idx)
-        len_v := "%call_pgc_l_" + _i2s(idx)
+        ptr_v := "%call_pgc_p_" + i2s(idx)
+        len_v := "%call_pgc_l_" + i2s(idx)
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        ptrc := "%call_pgc_pc_" + _i2s(idx)
+        ptrc := "%call_pgc_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
-        res := "%call_pgc_r_" + _i2s(idx)
+        res := "%call_pgc_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_connect(i8* " + ptrc + ", i64 " + len_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_close" {
-        h_v := "%call_pgcl_h_" + _i2s(idx)
+        h_v := "%call_pgcl_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_pg_close(i64 " + h_v + ")")
         return gg
     }
 
     if name == "_aria_pg_status" {
-        h_v := "%call_pgs_h_" + _i2s(idx)
+        h_v := "%call_pgs_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_pgs_r_" + _i2s(idx)
+        res := "%call_pgs_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_status(i64 " + h_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_error" {
-        h_v := "%call_pge_h_" + _i2s(idx)
+        h_v := "%call_pge_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         srt := _str_ret_type()
-        res := "%call_pge_r_" + _i2s(idx)
+        res := "%call_pge_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_error(i64 " + h_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_pge")
         return gg
@@ -1708,15 +1693,15 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_pg_exec" {
         // conn (i64) + query str (ptr, len) = 3 temps
-        conn_v := "%call_pgex_c_" + _i2s(idx)
-        ptr_v := "%call_pgex_p_" + _i2s(idx)
-        len_v := "%call_pgex_l_" + _i2s(idx)
+        conn_v := "%call_pgex_c_" + i2s(idx)
+        ptr_v := "%call_pgex_p_" + i2s(idx)
+        len_v := "%call_pgex_l_" + i2s(idx)
         gg = _lg_emit(gg, conn_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 2))
-        ptrc := "%call_pgex_pc_" + _i2s(idx)
+        ptrc := "%call_pgex_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
-        res := "%call_pgex_r_" + _i2s(idx)
+        res := "%call_pgex_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_exec(i64 " + conn_v + ", i8* " + ptrc + ", i64 " + len_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1724,54 +1709,54 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_pg_exec_params" {
         // conn (i64) + query str (ptr, len) + params arr (i64) = 4 temps
-        conn_v := "%call_pgep_c_" + _i2s(idx)
-        ptr_v := "%call_pgep_p_" + _i2s(idx)
-        len_v := "%call_pgep_l_" + _i2s(idx)
-        arr_v := "%call_pgep_a_" + _i2s(idx)
+        conn_v := "%call_pgep_c_" + i2s(idx)
+        ptr_v := "%call_pgep_p_" + i2s(idx)
+        len_v := "%call_pgep_l_" + i2s(idx)
+        arr_v := "%call_pgep_a_" + i2s(idx)
         gg = _lg_emit(gg, conn_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 2))
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1 + 3))
-        ptrc := "%call_pgep_pc_" + _i2s(idx)
+        ptrc := "%call_pgep_pc_" + i2s(idx)
         gg = _lg_emit(gg, ptrc + " = inttoptr i64 " + ptr_v + " to i8*")
-        res := "%call_pgep_r_" + _i2s(idx)
+        res := "%call_pgep_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_exec_params(i64 " + conn_v + ", i8* " + ptrc + ", i64 " + len_v + ", i64 " + arr_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_result_status" {
-        h_v := "%call_pgrs_h_" + _i2s(idx)
+        h_v := "%call_pgrs_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_pgrs_r_" + _i2s(idx)
+        res := "%call_pgrs_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_result_status(i64 " + h_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_result_error" {
-        h_v := "%call_pgre_h_" + _i2s(idx)
+        h_v := "%call_pgre_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         srt := _str_ret_type()
-        res := "%call_pgre_r_" + _i2s(idx)
+        res := "%call_pgre_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_result_error(i64 " + h_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_pgre")
         return gg
     }
 
     if name == "_aria_pg_nrows" {
-        h_v := "%call_pgnr_h_" + _i2s(idx)
+        h_v := "%call_pgnr_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_pgnr_r_" + _i2s(idx)
+        res := "%call_pgnr_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_nrows(i64 " + h_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_ncols" {
-        h_v := "%call_pgnc_h_" + _i2s(idx)
+        h_v := "%call_pgnc_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_pgnc_r_" + _i2s(idx)
+        res := "%call_pgnc_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_ncols(i64 " + h_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -1779,12 +1764,12 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_pg_field_name" {
         // result handle + col index = 2 temps
-        h_v := "%call_pgfn_h_" + _i2s(idx)
-        c_v := "%call_pgfn_c_" + _i2s(idx)
+        h_v := "%call_pgfn_h_" + i2s(idx)
+        c_v := "%call_pgfn_c_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         srt := _str_ret_type()
-        res := "%call_pgfn_r_" + _i2s(idx)
+        res := "%call_pgfn_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_field_name(i64 " + h_v + ", i64 " + c_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_pgfn")
         return gg
@@ -1792,14 +1777,14 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_pg_get_value" {
         // result handle + row + col = 3 temps
-        h_v := "%call_pggv_h_" + _i2s(idx)
-        r_v := "%call_pggv_r_" + _i2s(idx)
-        c_v := "%call_pggv_c_" + _i2s(idx)
+        h_v := "%call_pggv_h_" + i2s(idx)
+        r_v := "%call_pggv_r_" + i2s(idx)
+        c_v := "%call_pggv_c_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, r_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 2))
         srt := _str_ret_type()
-        res := "%call_pggv_res_" + _i2s(idx)
+        res := "%call_pggv_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_pg_get_value(i64 " + h_v + ", i64 " + r_v + ", i64 " + c_v + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "call_pggv")
         return gg
@@ -1807,20 +1792,20 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if name == "_aria_pg_is_null" {
         // result handle + row + col = 3 temps
-        h_v := "%call_pgin_h_" + _i2s(idx)
-        r_v := "%call_pgin_r_" + _i2s(idx)
-        c_v := "%call_pgin_c_" + _i2s(idx)
+        h_v := "%call_pgin_h_" + i2s(idx)
+        r_v := "%call_pgin_r_" + i2s(idx)
+        c_v := "%call_pgin_c_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, r_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, c_v + " = load i64, i64* " + _t(inst.arg1 + 2))
-        res := "%call_pgin_res_" + _i2s(idx)
+        res := "%call_pgin_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_pg_is_null(i64 " + h_v + ", i64 " + r_v + ", i64 " + c_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_pg_clear" {
-        h_v := "%call_pgcr_h_" + _i2s(idx)
+        h_v := "%call_pgcr_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_pg_clear(i64 " + h_v + ")")
         return gg
@@ -1829,77 +1814,77 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     // --- Concurrency ---
     if name == "_aria_spawn" {
         // args: fn_ptr, env_ptr — 2 consecutive i64 temps
-        fp_v := "%call_sp_fp_" + _i2s(idx)
-        ep_v := "%call_sp_ep_" + _i2s(idx)
+        fp_v := "%call_sp_fp_" + i2s(idx)
+        ep_v := "%call_sp_ep_" + i2s(idx)
         gg = _lg_emit(gg, fp_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ep_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        res := "%call_sp_r_" + _i2s(idx)
+        res := "%call_sp_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_spawn(i64 " + fp_v + ", i64 " + ep_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_task_await" {
-        h_v := "%call_ta_h_" + _i2s(idx)
+        h_v := "%call_ta_h_" + i2s(idx)
         gg = _lg_emit(gg, h_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_ta_r_" + _i2s(idx)
+        res := "%call_ta_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_task_await(i64 " + h_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_chan_new" {
-        cap_v := "%call_cn_c_" + _i2s(idx)
+        cap_v := "%call_cn_c_" + i2s(idx)
         gg = _lg_emit(gg, cap_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_cn_r_" + _i2s(idx)
+        res := "%call_cn_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_chan_new(i64 " + cap_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_chan_send" {
-        ch_v := "%call_cs_ch_" + _i2s(idx)
-        val_v := "%call_cs_v_" + _i2s(idx)
+        ch_v := "%call_cs_ch_" + i2s(idx)
+        val_v := "%call_cs_v_" + i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, val_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        res := "%call_cs_r_" + _i2s(idx)
+        res := "%call_cs_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_chan_send(i64 " + ch_v + ", i64 " + val_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_chan_recv" {
-        ch_v := "%call_cr_ch_" + _i2s(idx)
+        ch_v := "%call_cr_ch_" + i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_cr_r_" + _i2s(idx)
+        res := "%call_cr_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_chan_recv(i64 " + ch_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_chan_close" {
-        ch_v := "%call_cc_ch_" + _i2s(idx)
+        ch_v := "%call_cc_ch_" + i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_chan_close(i64 " + ch_v + ")")
         return gg
     }
 
     if name == "_aria_mutex_new" {
-        res := "%call_mn_r_" + _i2s(idx)
+        res := "%call_mn_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_mutex_new()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 
     if name == "_aria_mutex_lock" {
-        m_v := "%call_ml_m_" + _i2s(idx)
+        m_v := "%call_ml_m_" + i2s(idx)
         gg = _lg_emit(gg, m_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_mutex_lock(i64 " + m_v + ")")
         return gg
     }
 
     if name == "_aria_mutex_unlock" {
-        m_v := "%call_mu_m_" + _i2s(idx)
+        m_v := "%call_mu_m_" + i2s(idx)
         gg = _lg_emit(gg, m_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_mutex_unlock(i64 " + m_v + ")")
         return gg
@@ -1907,106 +1892,106 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     // RWMutex
     if name == "_aria_rwmutex_new" {
-        res := "%call_rwn_" + _i2s(idx)
+        res := "%call_rwn_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_rwmutex_new()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_rwmutex_rlock" || name == "_aria_rwmutex_runlock" || name == "_aria_rwmutex_wlock" || name == "_aria_rwmutex_wunlock" {
-        h := "%call_rw_h_" + _i2s(idx)
+        h := "%call_rw_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @" + name + "(i64 " + h + ")")
         return gg
     }
     // WaitGroup
     if name == "_aria_wg_new" {
-        res := "%call_wgn_" + _i2s(idx)
+        res := "%call_wgn_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_wg_new()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_wg_add" {
-        h := "%call_wga_h_" + _i2s(idx)
-        d := "%call_wga_d_" + _i2s(idx)
+        h := "%call_wga_h_" + i2s(idx)
+        d := "%call_wga_d_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, d + " = load i64, i64* " + _t(inst.arg1 + 1))
         gg = _lg_emit(gg, "call void @_aria_wg_add(i64 " + h + ", i64 " + d + ")")
         return gg
     }
     if name == "_aria_wg_done" || name == "_aria_wg_wait" {
-        h := "%call_wg_h_" + _i2s(idx)
+        h := "%call_wg_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @" + name + "(i64 " + h + ")")
         return gg
     }
     // Once
     if name == "_aria_once_new" {
-        res := "%call_on_" + _i2s(idx)
+        res := "%call_on_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_once_new()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     // Task extended ops
     if name == "_aria_task_done" || name == "_aria_task_result" || name == "_aria_cancel_check" {
-        h := "%call_td_h_" + _i2s(idx)
+        h := "%call_td_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_td_r_" + _i2s(idx)
+        res := "%call_td_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @" + name + "(i64 " + h + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_task_cancel" {
-        h := "%call_tc_h_" + _i2s(idx)
+        h := "%call_tc_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_task_cancel(i64 " + h + ")")
         return gg
     }
     // Spawn2 / await2 (enhanced task API)
     if name == "_aria_spawn2" {
-        fp_v := "%call_sp2_fp_" + _i2s(idx)
-        ep_v := "%call_sp2_ep_" + _i2s(idx)
+        fp_v := "%call_sp2_fp_" + i2s(idx)
+        ep_v := "%call_sp2_ep_" + i2s(idx)
         gg = _lg_emit(gg, fp_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, ep_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        res := "%call_sp2_r_" + _i2s(idx)
+        res := "%call_sp2_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_spawn2(i64 " + fp_v + ", i64 " + ep_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_task_await2" {
-        h := "%call_ta2_h_" + _i2s(idx)
+        h := "%call_ta2_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_ta2_r_" + _i2s(idx)
+        res := "%call_ta2_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_task_await2(i64 " + h + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     // Channel extended ops
     if name == "_aria_chan_try_recv" {
-        ch_v := "%call_ctr_ch_" + _i2s(idx)
+        ch_v := "%call_ctr_ch_" + i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
         si := _struct_i64_i64()
-        res := "%call_ctr_r_" + _i2s(idx)
+        res := "%call_ctr_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + si + " @_aria_chan_try_recv(i64 " + ch_v + ")")
-        val := "%call_ctr_v_" + _i2s(idx)
+        val := "%call_ctr_v_" + i2s(idx)
         gg = _lg_emit(gg, val + " = extractvalue " + si + " " + res + ", 0")
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
-        sta := "%call_ctr_s_" + _i2s(idx)
+        sta := "%call_ctr_s_" + i2s(idx)
         gg = _lg_emit(gg, sta + " = extractvalue " + si + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + sta + ", i64* " + _t(inst.dest + 1))
         return gg
     }
     if name == "_aria_chan_select" {
-        arr_v := "%call_cs_a_" + _i2s(idx)
-        to_v := "%call_cs_t_" + _i2s(idx)
+        arr_v := "%call_cs_a_" + i2s(idx)
+        to_v := "%call_cs_t_" + i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, to_v + " = load i64, i64* " + _t(inst.arg1 + 1))
         si := _struct_i64_i64()
-        res := "%call_cs_r_" + _i2s(idx)
+        res := "%call_cs_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + si + " @_aria_chan_select(i64 " + arr_v + ", i64 " + to_v + ")")
-        idx_v := "%call_cs_i_" + _i2s(idx)
+        idx_v := "%call_cs_i_" + i2s(idx)
         gg = _lg_emit(gg, idx_v + " = extractvalue " + si + " " + res + ", 0")
         gg = _lg_emit(gg, "store i64 " + idx_v + ", i64* " + _t(inst.dest))
-        val_v := "%call_cs_v_" + _i2s(idx)
+        val_v := "%call_cs_v_" + i2s(idx)
         gg = _lg_emit(gg, val_v + " = extractvalue " + si + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + val_v + ", i64* " + _t(inst.dest + 1))
         return gg
@@ -2014,29 +1999,29 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     // Cancel tokens
     if name == "_aria_cancel_new" {
-        res := "%call_cn_" + _i2s(idx)
+        res := "%call_cn_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_new()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_cancel_child" {
-        h := "%call_cc_p_" + _i2s(idx)
+        h := "%call_cc_p_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_cc_r_" + _i2s(idx)
+        res := "%call_cc_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_child(i64 " + h + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
     if name == "_aria_cancel_trigger" {
-        h := "%call_ct_h_" + _i2s(idx)
+        h := "%call_ct_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_cancel_trigger(i64 " + h + ")")
         return gg
     }
     if name == "_aria_cancel_is_triggered" {
-        h := "%call_cit_h_" + _i2s(idx)
+        h := "%call_cit_h_" + i2s(idx)
         gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
-        res := "%call_cit_r_" + _i2s(idx)
+        res := "%call_cit_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_is_triggered(i64 " + h + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
@@ -2047,7 +2032,7 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     mut ai := 0
     while ai < inst.arg2 {
         if ai > 0 { args = args + ", " }
-        av := "%call_a" + _i2s(ai) + "_" + _i2s(idx)
+        av := "%call_a" + i2s(ai) + "_" + i2s(idx)
         gg = _lg_emit(gg, av + " = load i64, i64* " + _t(inst.arg1 + ai))
         args = args + "i64 " + av
         ai = ai + 1
@@ -2057,10 +2042,10 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     target_func := mod_find_func(m, name)
     if target_func.name != "" && target_func.return_type == 12 {
-        res := "%call_r_" + _i2s(idx)
+        res := "%call_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + si64 + " @" + name + "(" + args + ")")
-        r0 := "%call_r0_" + _i2s(idx)
-        r1 := "%call_r1_" + _i2s(idx)
+        r0 := "%call_r0_" + i2s(idx)
+        r1 := "%call_r1_" + i2s(idx)
         gg = _lg_emit(gg, r0 + " = extractvalue " + si64 + " " + res + ", 0")
         gg = _lg_emit(gg, r1 + " = extractvalue " + si64 + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + r0 + ", i64* " + _t(inst.dest))
@@ -2069,10 +2054,10 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if inst.type_id == 12 {
-        res := "%call_r_" + _i2s(idx)
+        res := "%call_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + si64 + " @" + name + "(" + args + ")")
-        r0 := "%call_r0_" + _i2s(idx)
-        r1 := "%call_r1_" + _i2s(idx)
+        r0 := "%call_r0_" + i2s(idx)
+        r1 := "%call_r1_" + i2s(idx)
         gg = _lg_emit(gg, r0 + " = extractvalue " + si64 + " " + res + ", 0")
         gg = _lg_emit(gg, r1 + " = extractvalue " + si64 + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + r0 + ", i64* " + _t(inst.dest))
@@ -2085,7 +2070,7 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return gg
     }
 
-    res := "%call_r_" + _i2s(idx)
+    res := "%call_r_" + i2s(idx)
     gg = _lg_emit(gg, res + " = call i64 @" + name + "(" + args + ")")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -2097,17 +2082,17 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
 fn _gen_float_binop(g: LlvmGen, llvm_op: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    ai := "%fb_ai_" + _i2s(idx)
-    bi := "%fb_bi_" + _i2s(idx)
+    ai := "%fb_ai_" + i2s(idx)
+    bi := "%fb_bi_" + i2s(idx)
     gg = _lg_emit(gg, ai + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, bi + " = load i64, i64* " + _t(inst.arg2))
-    af := "%fb_af_" + _i2s(idx)
-    bf := "%fb_bf_" + _i2s(idx)
+    af := "%fb_af_" + i2s(idx)
+    bf := "%fb_bf_" + i2s(idx)
     gg = _lg_emit(gg, af + " = bitcast i64 " + ai + " to double")
     gg = _lg_emit(gg, bf + " = bitcast i64 " + bi + " to double")
-    rf := "%fb_rf_" + _i2s(idx)
+    rf := "%fb_rf_" + i2s(idx)
     gg = _lg_emit(gg, rf + " = " + llvm_op + " double " + af + ", " + bf)
-    ri := "%fb_ri_" + _i2s(idx)
+    ri := "%fb_ri_" + i2s(idx)
     gg = _lg_emit(gg, ri + " = bitcast double " + rf + " to i64")
     gg = _lg_emit(gg, "store i64 " + ri + ", i64* " + _t(inst.dest))
     gg
@@ -2115,17 +2100,17 @@ fn _gen_float_binop(g: LlvmGen, llvm_op: str, inst: IrInst, idx: i64) -> LlvmGen
 
 fn _gen_fcmp(g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    ai := "%fc_ai_" + _i2s(idx)
-    bi := "%fc_bi_" + _i2s(idx)
+    ai := "%fc_ai_" + i2s(idx)
+    bi := "%fc_bi_" + i2s(idx)
     gg = _lg_emit(gg, ai + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, bi + " = load i64, i64* " + _t(inst.arg2))
-    af := "%fc_af_" + _i2s(idx)
-    bf := "%fc_bf_" + _i2s(idx)
+    af := "%fc_af_" + i2s(idx)
+    bf := "%fc_bf_" + i2s(idx)
     gg = _lg_emit(gg, af + " = bitcast i64 " + ai + " to double")
     gg = _lg_emit(gg, bf + " = bitcast i64 " + bi + " to double")
-    cmp := "%fc_c_" + _i2s(idx)
+    cmp := "%fc_c_" + i2s(idx)
     gg = _lg_emit(gg, cmp + " = fcmp " + cmp_op + " double " + af + ", " + bf)
-    res := "%fc_r_" + _i2s(idx)
+    res := "%fc_r_" + i2s(idx)
     gg = _lg_emit(gg, res + " = zext i1 " + cmp + " to i64")
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg

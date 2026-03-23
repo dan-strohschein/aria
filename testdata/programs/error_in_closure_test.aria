@@ -1,7 +1,4 @@
-// Test: Error handling inside closures
-
-type MyError =
-    | Failed(str)
+// Test: Closures with return types and captures
 
 fn try_op(f: fn() -> i64) -> i64 {
     f()
@@ -17,8 +14,13 @@ entry {
     result2 := try_op(fn() -> i64 { x + 5 })
     assert result2 == 15
 
-    // Test 3: Higher-order function with closure
-    arr := [1, 2, 3, 4, 5]
+    // Test 3: Array sum with while loop
+    mut arr := [0]
+    arr = arr.append(1)
+    arr = arr.append(2)
+    arr = arr.append(3)
+    arr = arr.append(4)
+    arr = arr.append(5)
     mut sum := 0
     mut i := 1
     while i < arr.len() {
@@ -27,5 +29,5 @@ entry {
     }
     assert sum == 15
 
-    print("error_in_closure_test passed")
+    println("error_in_closure_test passed")
 }

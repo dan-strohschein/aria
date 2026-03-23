@@ -9,32 +9,9 @@ mod checker
 
 use diagnostic
 use lexer
+use parser
 use resolver
 
-// --- Tiny int-to-str for field name generation ---
-
-fn _i2s_checker(n: i64) -> str {
-    if n == 0 { return "0" }
-    mut result := ""
-    mut v := n
-    if v < 0 { v = 0 - v }
-    while v > 0 {
-        d := v % 10
-        v = v / 10
-        if d == 0 { result = "0" + result }
-        if d == 1 { result = "1" + result }
-        if d == 2 { result = "2" + result }
-        if d == 3 { result = "3" + result }
-        if d == 4 { result = "4" + result }
-        if d == 5 { result = "5" + result }
-        if d == 6 { result = "6" + result }
-        if d == 7 { result = "7" + result }
-        if d == 8 { result = "8" + result }
-        if d == 9 { result = "9" + result }
-    }
-    if n < 0 { result = "-" + result }
-    result
-}
 
 // --- Checker state ---
 
@@ -266,17 +243,34 @@ fn _parse_type_ann(c: Checker) -> CE {
                 return CE{c: cc, type_id: TY_UNKNOWN}
             }
         }
-        // Check for array type [T]
+        // Check for generic type Name[T, U, ...]
         if _ck2(cc) == "[" {
-            // Generic type like Map[K, V] — skip for now
-            mut d := 1
-            cc = _cadv(cc)
-            while d > 0 && _ck2(cc) != "EOF" {
-                if _ck2(cc) == "[" { d = d + 1 }
-                if _ck2(cc) == "]" { d = d - 1 }
-                if d > 0 { cc = _cadv(cc) }
+            cc = _cadv(cc)  // skip [
+            // Parse type arguments
+            mut arg1 := TY_UNKNOWN
+            mut arg2 := TY_UNKNOWN
+            mut argc := 0
+            while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
+                pr := _parse_type_ann(cc)
+                cc = pr.c
+                if argc == 0 { arg1 = pr.type_id }
+                if argc == 1 { arg2 = pr.type_id }
+                argc = argc + 1
+                if _ck2(cc) == "," { cc = _cadv(cc) }
             }
             if _ck2(cc) == "]" { cc = _cadv(cc) }
+            // Construct specialized types for known generics
+            if name == "Result" && argc >= 2 {
+                new_store := store_add(cc.store, mk_result_type(arg1, arg2))
+                cc = _cset_store(cc, new_store)
+                return CE{c: cc, type_id: store_last_id(cc.store)}
+            }
+            if name == "Optional" && argc >= 1 {
+                new_store := store_add(cc.store, mk_optional_type(arg1))
+                cc = _cset_store(cc, new_store)
+                return CE{c: cc, type_id: store_last_id(cc.store)}
+            }
+            // For other generic types (Map, user-defined), resolve base type
             tid := resolve_type_name(cc.store, name)
             return CE{c: cc, type_id: tid}
         }
@@ -333,11 +327,31 @@ fn _parse_type_ann(c: Checker) -> CE {
         return CE{c: cc, type_id: ret}
     }
     if k == "(" {
-        // Tuple type or grouped type — skip for now
+        // Tuple type (T1, T2, ...) or grouped type (T)
         mut cc := _cadv(c)
-        while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        mut elem_ids := ""
+        mut arity := 0
+        while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+            pr := _parse_type_ann(cc)
+            cc = pr.c
+            if arity > 0 { elem_ids = elem_ids + "," }
+            elem_ids = elem_ids + i2s(pr.type_id)
+            arity = arity + 1
+            if _ck2(cc) == "," { cc = _cadv(cc) }
+        }
         if _ck2(cc) == ")" { cc = _cadv(cc) }
-        return CE{c: cc, type_id: TY_UNKNOWN}
+        if arity <= 1 {
+            // Grouped type (T) — not a tuple
+            if arity == 1 {
+                // Parse the single type id back out
+                first_pr := _parse_type_ann(_cset_pos(c, c.pos + 1))
+                return CE{c: cc, type_id: first_pr.type_id}
+            }
+            return CE{c: cc, type_id: TY_UNKNOWN}
+        }
+        new_store := store_add(cc.store, mk_tuple_type(elem_ids, arity))
+        cc = _cset_store(cc, new_store)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
     }
     return CE{c: c, type_id: TY_UNKNOWN}
 }
@@ -409,33 +423,29 @@ fn _skip_type_toks(c: Checker) -> Checker {
 // Pass 1: Register type declarations
 // ============================================================
 
-fn _pass1_types(c: Checker) -> Checker {
-    mut cc := _cset_pos(c, 0)
-    cc = _cskip_nl(cc)
-    if cc.pos == 0 { cc = _cadv(cc) }
+fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
+    mut cc := c
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
 
-    // Skip mod
-    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
-    cc = _cskip_nl(cc)
-    // Skip use
-    while _ck2(cc) == "use" {
-        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
-        cc = _cskip_nl(cc)
-    }
-
-    while _ck2(cc) != "EOF" {
-        if _ck2(cc) == "pub" { cc = _cadv(cc) }
-        k := _ck2(cc)
-        if k == "type" || k == "struct" {
-            cc = _register_type_decl(cc)
-        } else if k == "enum" {
+        if kname == "type" {
+            cc = _cset_pos(cc, decl.token_start)
+            if _ck2(cc) == "pub" { cc = _cadv(cc) }
+            if decl.name.startsWith("_alias:") {
+                // alias declaration
+                cc = _register_alias_decl(cc)
+            } else {
+                // type/struct
+                cc = _register_type_decl(cc)
+            }
+        } else if kname == "enum" {
+            cc = _cset_pos(cc, decl.token_start)
+            if _ck2(cc) == "pub" { cc = _cadv(cc) }
             cc = _register_enum_decl(cc)
-        } else if k == "IDENT" && _ccur(cc).text == "alias" {
-            cc = _register_alias_decl(cc)
-        } else {
-            cc = _cadv(cc)
         }
-        cc = _cskip_nl(cc)
+        di = di + 1
     }
     cc
 }
@@ -578,7 +588,7 @@ fn _register_type_decl(c: Checker) -> Checker {
                         // For tuple variants, auto-generate field names: _0, _1, ...
                         ft := _parse_type_ann(cc)
                         cc = ft.c
-                        vf_names = vf_names.append("_" + _i2s_checker(fi))
+                        vf_names = vf_names.append("_" + i2s(fi))
                         vf_types = vf_types.append(ft.type_id)
                         field_count = field_count + 1
                         flat_pos = flat_pos + 1
@@ -714,20 +724,16 @@ fn _skip_braces2(c: Checker) -> Checker {
 // Pass 2: Register function signatures
 // ============================================================
 
-fn _pass2_fns(c: Checker) -> Checker {
-    mut cc := _cset_pos(c, 0)
-    cc = _cskip_nl(cc)
-    if cc.pos == 0 { cc = _cadv(cc) }
+fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
+    mut cc := c
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
 
-    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
-    cc = _cskip_nl(cc)
-    while _ck2(cc) == "use" {
-        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
-        cc = _cskip_nl(cc)
-    }
-
-    while _ck2(cc) != "EOF" {
+        cc = _cset_pos(cc, decl.token_start)
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
+
         // Parse annotations before declarations
         mut ann_deprecated := ""
         mut ann_cold := false
@@ -737,7 +743,6 @@ fn _pass2_fns(c: Checker) -> Checker {
                 ann_name := _ccur(cc).text
                 cc = _cadv(cc)
                 if ann_name == "deprecated" {
-                    // Parse optional message: @deprecated("msg")
                     if _ck2(cc) == "(" {
                         cc = _cadv(cc)
                         if _ck2(cc) == "STRING" {
@@ -749,7 +754,6 @@ fn _pass2_fns(c: Checker) -> Checker {
                     if ann_deprecated == "" { ann_deprecated = "deprecated" }
                 }
                 if ann_name == "cold" { ann_cold = true }
-                // Skip other annotations (opaque, cstruct, cffi, owned, borrowed)
                 if _ck2(cc) == "(" {
                     cc = _cadv(cc)
                     while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -758,32 +762,37 @@ fn _pass2_fns(c: Checker) -> Checker {
             }
             cc = _cskip_nl(cc)
         }
-        k := _ck2(cc)
-        if k == "fn" {
-            // Peek at fn name to register annotations
-            next_pos := cc.pos + 1
-            if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == "IDENT" {
-                fn_name := cc.tokens[next_pos].text
-                if ann_deprecated != "" {
-                    cc = _cset_reg(cc, reg_add_deprecated(cc.registry, fn_name, ann_deprecated))
+
+        if kname == "fn" {
+            if decl.name == "_extern" {
+                cc = _register_extern(cc)
+            } else if decl.name.startsWith("_fixture:") {
+                // before/after fixtures — no signature registration needed
+                mut _skip := 0
+            } else {
+                // Regular function — register annotations and signature
+                next_pos := cc.pos + 1
+                if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == "IDENT" {
+                    fn_name := cc.tokens[next_pos].text
+                    if ann_deprecated != "" {
+                        cc = _cset_reg(cc, reg_add_deprecated(cc.registry, fn_name, ann_deprecated))
+                    }
+                    if ann_cold {
+                        cc = _cset_reg(cc, reg_add_cold(cc.registry, fn_name))
+                    }
                 }
-                if ann_cold {
-                    cc = _cset_reg(cc, reg_add_cold(cc.registry, fn_name))
-                }
+                cc = _register_fn_sig(cc)
             }
-            cc = _register_fn_sig(cc)
-        } else if k == "impl" {
+        } else if kname == "impl" {
             cc = _register_impl_fns(cc)
-        } else if k == "trait" {
+        } else if kname == "trait" {
             cc = _register_trait_decl(cc)
-        } else if k == "const" {
+        } else if kname == "const" {
             cc = _register_const(cc)
-        } else if k == "extern" {
-            cc = _register_extern(cc)
-        } else {
-            cc = _cadv(cc)
         }
-        cc = _cskip_nl(cc)
+        // type, enum, entry, test, use — skip in pass2
+
+        di = di + 1
     }
     cc
 }
@@ -967,13 +976,21 @@ fn _register_fn_sig(c: Checker) -> Checker {
         cc = _cset_store(cc, new_st)
     }
 
-    // Parse parameters
+    // Parse parameters — accept both IDENT and keyword tokens as parameter names
+    // (keywords like before, after, where, scope can be used as param names)
     mut pnames := [""]
     mut ptypes := [0]
     if _ck2(cc) == "(" {
         cc = _cadv(cc)
         while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
-            if _ck2(cc) == "IDENT" {
+            // Check if current token is followed by ":" — if so, treat as param name
+            mut is_param := _ck2(cc) == "IDENT" || _ck2(cc) == "self"
+            if is_param == false && cc.pos + 1 < cc.tokens.len() {
+                if token_name(cc.tokens[cc.pos + 1].kind) == ":" {
+                    is_param = true
+                }
+            }
+            if is_param {
                 pn := _ccur(cc).text
                 cc = _cadv(cc)
                 if _ck2(cc) == ":" {
@@ -1408,40 +1425,48 @@ fn _register_const(c: Checker) -> Checker {
 // Pass 3: Check function/entry/test bodies
 // ============================================================
 
-fn _pass3_bodies(c: Checker) -> Checker {
-    mut cc := _cset_pos(c, 0)
-    cc = _cskip_nl(cc)
-    if cc.pos == 0 { cc = _cadv(cc) }
+fn _pass3_bodies(c: Checker, index: DeclIndex) -> Checker {
+    mut cc := c
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
 
-    if _ck2(cc) == "mod" { cc = _cadv(_cadv(cc)) }
-    cc = _cskip_nl(cc)
-    while _ck2(cc) == "use" {
-        while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
-        cc = _cskip_nl(cc)
-    }
-
-    while _ck2(cc) != "EOF" {
-        cc = _cskip_nl(cc)
-        if _ck2(cc) == "EOF" { return cc }
+        cc = _cset_pos(cc, decl.token_start)
         if _ck2(cc) == "pub" { cc = _cadv(cc) }
 
-        k := _ck2(cc)
-        if k == "fn" {
-            cc = _check_fn(cc)
-        } else if k == "impl" {
-            cc = _check_impl(cc)
-        } else if k == "entry" {
-            cc = _check_entry(cc)
-        } else if k == "test" {
-            cc = _check_test(cc)
-        } else if k == "type" || k == "struct" || k == "enum" || k == "trait" || k == "const" {
-            cc = _skip_decl(cc)
-        } else if k == "IDENT" && _ccur(cc).text == "alias" {
-            cc = _skip_decl(cc)
-        } else {
+        // Skip annotations
+        if _ck2(cc) == "@" {
             cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+            if _ck2(cc) == "(" {
+                cc = _cadv(cc)
+                while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+                if _ck2(cc) == ")" { cc = _cadv(cc) }
+            }
+            cc = _cskip_nl(cc)
         }
-        cc = _cskip_nl(cc)
+
+        if kname == "fn" {
+            if decl.name == "_extern" || decl.name.startsWith("_fixture:") {
+                // extern and fixtures — skip body checking
+                cc = _cset_pos(cc, decl.body_end)
+            } else {
+                cc = _check_fn(cc)
+            }
+        } else if kname == "impl" {
+            cc = _check_impl(cc)
+        } else if kname == "entry" {
+            cc = _check_entry(cc)
+        } else if kname == "test" {
+            // DkTest covers both test and bench
+            cc = _check_test(cc)
+        } else {
+            // type, enum, trait, const, use, alias — skip
+            cc = _cset_pos(cc, decl.body_end)
+        }
+
+        di = di + 1
     }
     cc
 }
@@ -1706,9 +1731,21 @@ fn _check_stmt(c: Checker) -> CE {
         mut cc := _cadv(c)  // skip with
         // Check if this is a resource block (next is expr) vs effect clause (next is [)
         if _ck2(cc) != "[" {
-            // Resource block: with expr { body }
+            // with name := expr { body }
+            mut res_name := ""
+            if _ck2(cc) == "IDENT" {
+                next_pos := cc.pos + 1
+                if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == ":=" {
+                    res_name = _ccur(cc).text
+                    cc = _cadv(cc)  // skip name
+                    cc = _cadv(cc)  // skip :=
+                }
+            }
             result := _check_expr_full(cc)
             cc = result.c
+            if res_name.len() > 0 {
+                cc = _env_add(cc, res_name, result.type_id, 0)
+            }
             body := _check_block(cc)
             return CE{c: body.c, type_id: body.type_id}
         }
@@ -1738,7 +1775,14 @@ fn _check_mut_binding(c: Checker) -> CE {
     result := _check_expr_full(cc)
     cc = result.c
     mut final_type := result.type_id
-    if ann_type != TY_UNKNOWN { final_type = ann_type }
+    if ann_type != TY_UNKNOWN {
+        // Verify initializer type matches annotation
+        if result.type_id != TY_UNKNOWN && is_assignable(cc.store, result.type_id, ann_type) == false {
+            q := _q()
+            cc = _cerror(cc, E0100, "type mismatch in binding: expected " + q + format_type(cc.store, ann_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+        }
+        final_type = ann_type
+    }
     cc = _env_add(cc, name, final_type, 0)
     return CE{c: cc, type_id: TY_UNIT}
 }
@@ -1776,6 +1820,48 @@ fn _check_return(c: Checker) -> CE {
 }
 
 fn _check_expr_or_binding(c: Checker) -> CE {
+    // Tuple destructuring: (name1, name2) := expr
+    if _ck2(c) == "(" {
+        mut scan := c.pos + 1
+        mut is_tuple_destr := false
+        while scan < c.tokens.len() {
+            sk := token_name(c.tokens[scan].kind)
+            if sk == ")" {
+                next2 := scan + 1
+                if next2 < c.tokens.len() && token_name(c.tokens[next2].kind) == ":=" {
+                    is_tuple_destr = true
+                }
+                scan = c.tokens.len()
+            } else if sk == "IDENT" || sk == "," || sk == "_" {
+                scan = scan + 1
+            } else {
+                scan = c.tokens.len()
+            }
+        }
+        if is_tuple_destr {
+            mut cc := _cadv(c)  // skip (
+            mut names := [""]
+            while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
+                if _ck2(cc) == "IDENT" {
+                    names = names.append(_ccur(cc).text)
+                }
+                cc = _cadv(cc)
+                if _ck2(cc) == "," { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+            if _ck2(cc) == ":=" { cc = _cadv(cc) }
+            result := _check_expr_full(cc)
+            cc = result.c
+            // Register each name with extracted tuple element type
+            mut ni := 1
+            while ni < names.len() {
+                elem_t := tuple_elem_type(cc.store, result.type_id, ni - 1)
+                cc = _env_add(cc, names[ni], elem_t, 0)
+                ni = ni + 1
+            }
+            return CE{c: cc, type_id: TY_UNIT}
+        }
+    }
     if _ck2(c) == "IDENT" {
         name := _ccur(c).text
         next_pos := c.pos + 1
@@ -2096,6 +2182,41 @@ fn _check_postfix_chain(c: Checker, base_type: i64) -> CE {
                     cc = fr.c
                     cur_type = fr.type_id
                 }
+            } else if _ck2(cc) == "INT" {
+                // Numeric tuple field access: .0, .1, .2
+                field_idx_str := _ccur(cc).text
+                cc = _cadv(cc)
+                // Extract element type from tuple type
+                mut fidx := 0
+                if field_idx_str == "1" { fidx = 1 }
+                if field_idx_str == "2" { fidx = 2 }
+                if field_idx_str == "3" { fidx = 3 }
+                if field_idx_str == "4" { fidx = 4 }
+                if field_idx_str == "5" { fidx = 5 }
+                if field_idx_str == "6" { fidx = 6 }
+                if field_idx_str == "7" { fidx = 7 }
+                elem_tid := tuple_elem_type(cc.store, cur_type, fidx)
+                if elem_tid != TY_UNKNOWN {
+                    cur_type = elem_tid
+                } else {
+                    cur_type = TY_UNKNOWN
+                }
+            } else if _ck2(cc) == "\{" {
+                // Record update: .{field: val, ...}
+                rb := "\}"
+                cc = _cadv(cc)  // skip {
+                cc = _cskip_nl(cc)
+                while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+                    if _ck2(cc) == ":" { cc = _cadv(cc) }
+                    ur := _check_expr_full(cc)
+                    cc = ur.c
+                    cc = _cskip_nl(cc)
+                    if _ck2(cc) == "," { cc = _cadv(cc) }
+                    cc = _cskip_nl(cc)
+                }
+                if _ck2(cc) == rb { cc = _cadv(cc) }
+                // Result type is the same as the original struct type
             } else {
                 running = false
             }
@@ -2307,11 +2428,33 @@ fn _check_primary(c: Checker) -> CE {
     }
 
     if k == "(" {
-        // Grouped expression
+        // Grouped expression or tuple literal
         mut cc := _cadv(c)
         cc = _cskip_nl(cc)
         result := _check_expr_full(cc)
         cc = result.c
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," {
+            // Tuple literal: (expr1, expr2, ...)
+            mut elem_ids := i2s(result.type_id)
+            mut arity := 1
+            while _ck2(cc) == "," && _ck2(cc) != "EOF" {
+                cc = _cadv(cc)  // skip comma
+                cc = _cskip_nl(cc)
+                if _ck2(cc) != ")" {
+                    er := _check_expr_full(cc)
+                    cc = er.c
+                    elem_ids = elem_ids + "," + i2s(er.type_id)
+                    arity = arity + 1
+                }
+                cc = _cskip_nl(cc)
+            }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+            new_store := store_add(cc.store, mk_tuple_type(elem_ids, arity))
+            cc = _cset_store(cc, new_store)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
+        }
+        // Single grouped expression
         while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
         if _ck2(cc) == ")" { cc = _cadv(cc) }
         return CE{c: cc, type_id: result.type_id}
@@ -2614,11 +2757,20 @@ fn _check_struct_lit(c: Checker, name: str, type_id: i64) -> CE {
     cc = _cskip_nl(cc)
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         if _ck2(cc) == "IDENT" {
+            field_name := _ccur(cc).text
             cc = _cadv(cc)  // skip field name
             if _ck2(cc) == ":" {
                 cc = _cadv(cc)
                 result := _check_expr_full(cc)
                 cc = result.c
+                // Check field type matches expected
+                fi := reg_find_field(cc.registry, name, field_name)
+                if fi.name != "" && result.type_id != TY_UNKNOWN && fi.type_id != TY_UNKNOWN {
+                    if types_equal(cc.store, result.type_id, fi.type_id) == false {
+                        q := _q()
+                        cc = _cerror(cc, E0100, "field " + q + field_name + q + " expects " + format_type(cc.store, fi.type_id) + ", got " + format_type(cc.store, result.type_id))
+                    }
+                }
             }
         } else {
             cc = _cadv(cc)
@@ -3045,17 +3197,17 @@ fn _check_loop(c: Checker) -> CE {
 // Public API
 // ============================================================
 
-fn check(tokens: [Token], table: SymbolTable, file: str) -> CheckResult {
+fn check(tokens: [Token], index: DeclIndex, table: SymbolTable, file: str) -> CheckResult {
     mut c := _new_checker(tokens, table, file)
 
     // Pass 1: register type declarations
-    c = _pass1_types(c)
+    c = _pass1_types(c, index)
 
     // Pass 2: register function signatures
-    c = _pass2_fns(c)
+    c = _pass2_fns(c, index)
 
     // Pass 3: check bodies
-    c = _pass3_bodies(c)
+    c = _pass3_bodies(c, index)
 
     CheckResult{store: c.store, registry: c.registry, treg: c.treg, diagnostics: c.diagnostics}
 }

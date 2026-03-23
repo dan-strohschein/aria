@@ -34,6 +34,7 @@ type TypeKind =
     | TyOptional
     | TyTypeVar
     | TyTraitObject
+    | TyTuple
     | TyNever
     | TyUnknown
     | TyNone
@@ -60,6 +61,7 @@ fn type_kind_name(k: TypeKind) -> str = match k {
     TyOptional => "Optional"
     TyTypeVar => "TypeVar"
     TyTraitObject => "TraitObject"
+    TyTuple => "Tuple"
     TyNever => "Never"
     TyUnknown => "Unknown"
     TyNone => "None"
@@ -103,6 +105,11 @@ fn mk_optional_type(inner_id: i64) -> TypeInfo =
 fn mk_typevar(name: str) -> TypeInfo =
     TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
 
+// Tuple type: element type IDs encoded as comma-delimited string in name field,
+// param_count = arity (number of elements)
+fn mk_tuple_type(elem_ids: str, arity: i64) -> TypeInfo =
+    TypeInfo{kind: TyTuple, name: elem_ids, type_id: 0, type_id2: 0, param_start: 0, param_count: arity}
+
 // --- TypeStore ---
 
 struct TypeStore {
@@ -130,6 +137,7 @@ const TY_UNIT: i64 = 14
 const TY_NEVER: i64 = 15
 const TY_UNKNOWN: i64 = 16
 const TY_CHAN: i64 = 17
+const TY_TASK: i64 = 18
 const TY_CHAN_SEND: i64 = 19
 const TY_CHAN_RECV: i64 = 20
 
@@ -151,6 +159,12 @@ fn new_store() -> TypeStore {
     types = types.append(_mk_prim(TyUnit))    // 14: unit
     types = types.append(TypeInfo{kind: TyNever, name: "Never", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
     types = types.append(TypeInfo{kind: TyUnknown, name: "Unknown", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+    // Reserve slots 17-20 for concurrency types (Chan, Task, ChanSend, ChanRecv)
+    // so user-defined types start at ID 21 and never collide with these well-known IDs
+    types = types.append(mk_named_type("Chan"))      // 17: TY_CHAN
+    types = types.append(mk_named_type("Task"))      // 18: TY_TASK
+    types = types.append(mk_named_type("ChanSend"))  // 19: TY_CHAN_SEND
+    types = types.append(mk_named_type("ChanRecv"))  // 20: TY_CHAN_RECV
     TypeStore{types: types}
 }
 
@@ -186,6 +200,7 @@ fn format_type(store: TypeStore, id: i64) -> str {
     if kn == "Result" {
         return format_type(store, info.type_id) + " ! " + format_type(store, info.type_id2)
     }
+    if kn == "Tuple" { return "(" + info.name + ")" }
     if kn == "Function" { return "fn(...)" }
     if kn == "TypeVar" { return info.name }
     if kn == "TraitObject" { return "dyn " + info.name }
@@ -196,26 +211,23 @@ fn format_type(store: TypeStore, id: i64) -> str {
 
 fn is_numeric(store: TypeStore, id: i64) -> bool {
     if id <= 0 { return false }
-    info := store.types[id]
-    kn := type_kind_name(info.kind)
-    kn == "i64" || kn == "i32" || kn == "i16" || kn == "i8" ||
-    kn == "u64" || kn == "u32" || kn == "u16" || kn == "u8" ||
-    kn == "f64" || kn == "f32"
+    k := store.types[id].kind
+    tk_eq(k, TyI64) || tk_eq(k, TyI32) || tk_eq(k, TyI16) || tk_eq(k, TyI8) ||
+    tk_eq(k, TyU64) || tk_eq(k, TyU32) || tk_eq(k, TyU16) || tk_eq(k, TyU8) ||
+    tk_eq(k, TyF64) || tk_eq(k, TyF32)
 }
 
 fn is_integer(store: TypeStore, id: i64) -> bool {
     if id <= 0 { return false }
-    info := store.types[id]
-    kn := type_kind_name(info.kind)
-    kn == "i64" || kn == "i32" || kn == "i16" || kn == "i8" ||
-    kn == "u64" || kn == "u32" || kn == "u16" || kn == "u8"
+    k := store.types[id].kind
+    tk_eq(k, TyI64) || tk_eq(k, TyI32) || tk_eq(k, TyI16) || tk_eq(k, TyI8) ||
+    tk_eq(k, TyU64) || tk_eq(k, TyU32) || tk_eq(k, TyU16) || tk_eq(k, TyU8)
 }
 
 fn is_float(store: TypeStore, id: i64) -> bool {
     if id <= 0 { return false }
-    info := store.types[id]
-    kn := type_kind_name(info.kind)
-    return kn == "f64" || kn == "f32"
+    k := store.types[id].kind
+    tk_eq(k, TyF64) || tk_eq(k, TyF32)
 }
 
 fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
@@ -234,6 +246,7 @@ fn types_equal(store: TypeStore, a: i64, b: i64) -> bool {
                types_equal(store, ai.type_id2, bi.type_id2)
     }
     if ak == "Optional" { return types_equal(store, ai.type_id, bi.type_id) }
+    if ak == "Tuple" { return ai.name == bi.name && ai.param_count == bi.param_count }
     return true
 }
 
@@ -250,6 +263,58 @@ fn substitute_type(store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64
         return elem  // caller must add new array type
     }
     tid
+}
+
+// Extract the Nth element type ID from a tuple type's comma-delimited name field
+fn tuple_elem_type(store: TypeStore, tuple_id: i64, index: i64) -> i64 {
+    if tuple_id <= 0 || tuple_id >= store.types.len() { return TY_UNKNOWN }
+    info := store.types[tuple_id]
+    if type_kind_name(info.kind) != "Tuple" { return TY_UNKNOWN }
+    if index < 0 || index >= info.param_count { return TY_UNKNOWN }
+    // Parse comma-delimited type IDs: "1,12,11" → element 0=1, 1=12, 2=11
+    ids := info.name
+    mut cur_idx := 0
+    mut start := 0
+    mut i := 0
+    while i <= ids.len() {
+        mut at_delim := false
+        if i == ids.len() {
+            at_delim = true
+        } else if ids.charAt(i) == "," {
+            at_delim = true
+        }
+        if at_delim {
+            if cur_idx == index {
+                // Parse integer from ids[start..i]
+                return _parse_int_from(ids, start, i)
+            }
+            cur_idx = cur_idx + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    TY_UNKNOWN
+}
+
+fn _parse_int_from(s: str, start_pos: i64, end_pos: i64) -> i64 {
+    mut result := 0
+    mut i := start_pos
+    while i < end_pos {
+        ch := s.charAt(i)
+        mut digit := 0
+        if ch == "1" { digit = 1 }
+        if ch == "2" { digit = 2 }
+        if ch == "3" { digit = 3 }
+        if ch == "4" { digit = 4 }
+        if ch == "5" { digit = 5 }
+        if ch == "6" { digit = 6 }
+        if ch == "7" { digit = 7 }
+        if ch == "8" { digit = 8 }
+        if ch == "9" { digit = 9 }
+        result = result * 10 + digit
+        i = i + 1
+    }
+    result
 }
 
 fn _type_name_suffix(store: TypeStore, tid: i64) -> str {
@@ -301,7 +366,7 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
     if name == "char" { return TY_CHAR }
     if name == "unit" { return TY_UNIT }
     // Search for named types and type variables
-    mut i := 17  // after well-known types
+    mut i := 21  // after well-known + reserved concurrency types (0-20)
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {
