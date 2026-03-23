@@ -129,6 +129,9 @@ const TY_CHAR: i64 = 13
 const TY_UNIT: i64 = 14
 const TY_NEVER: i64 = 15
 const TY_UNKNOWN: i64 = 16
+const TY_CHAN: i64 = 17
+const TY_CHAN_SEND: i64 = 19
+const TY_CHAN_RECV: i64 = 20
 
 fn new_store() -> TypeStore {
     mut types := [_sentinel_type()]
@@ -505,6 +508,7 @@ fn _builtin_effect(name: str) -> str {
     if name == "_ariaRWMutexNew" || name == "_ariaRWMutexRlock" || name == "_ariaRWMutexRunlock" || name == "_ariaRWMutexWlock" || name == "_ariaRWMutexWunlock" { return "Async" }
     if name == "_ariaWgNew" || name == "_ariaWgAdd" || name == "_ariaWgDone" || name == "_ariaWgWait" { return "Async" }
     if name == "_ariaOnceNew" || name == "_ariaOnceCall" { return "Async" }
+    if name == "_ariaCancelNew" || name == "_ariaCancelChild" || name == "_ariaCancelTrigger" || name == "_ariaCancelIsTriggered" { return "Async" }
     ""
 }
 

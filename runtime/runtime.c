@@ -1452,6 +1452,43 @@ long _aria_cancel_check(long handle) {
     return task->cancelled ? 1 : 0;
 }
 
+// --- Cancellation Token ---
+// Hierarchical: child tokens are triggered when parent is triggered.
+
+struct _aria_cancel_token {
+    volatile int triggered;
+    struct _aria_cancel_token *parent;
+};
+
+long _aria_cancel_new(void) {
+    struct _aria_cancel_token *ct = (struct _aria_cancel_token *)calloc(1, sizeof(struct _aria_cancel_token));
+    ct->triggered = 0;
+    ct->parent = NULL;
+    return (long)ct;
+}
+
+long _aria_cancel_child(long parent_handle) {
+    struct _aria_cancel_token *child = (struct _aria_cancel_token *)calloc(1, sizeof(struct _aria_cancel_token));
+    child->triggered = 0;
+    child->parent = (struct _aria_cancel_token *)parent_handle;
+    return (long)child;
+}
+
+void _aria_cancel_trigger(long handle) {
+    struct _aria_cancel_token *ct = (struct _aria_cancel_token *)handle;
+    ct->triggered = 1;
+}
+
+long _aria_cancel_is_triggered(long handle) {
+    struct _aria_cancel_token *ct = (struct _aria_cancel_token *)handle;
+    // Walk up parent chain — if any ancestor is triggered, we're triggered
+    while (ct != NULL) {
+        if (ct->triggered) return 1;
+        ct = ct->parent;
+    }
+    return 0;
+}
+
 // --- Entry point ---
 
 extern void _aria_entry(void);

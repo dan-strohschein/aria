@@ -237,6 +237,10 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaTaskCancel", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTaskResult", SkBuiltin)
     rr = _add_builtin(rr, "_ariaCancelCheck", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaCancelNew", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaCancelChild", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaCancelTrigger", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaCancelIsTriggered", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)

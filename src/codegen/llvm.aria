@@ -278,6 +278,11 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare void @_aria_task_cancel(i64)" + nl)
     p = p.append("declare i64 @_aria_task_result(i64)" + nl)
     p = p.append("declare i64 @_aria_cancel_check(i64)" + nl)
+    // Cancellation tokens
+    p = p.append("declare i64 @_aria_cancel_new()" + nl)
+    p = p.append("declare i64 @_aria_cancel_child(i64)" + nl)
+    p = p.append("declare void @_aria_cancel_trigger(i64)" + nl)
+    p = p.append("declare i64 @_aria_cancel_is_triggered(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
     p = p.append(nl)
 
@@ -1885,14 +1890,14 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if name == "_aria_chan_try_recv" {
         ch_v := "%call_ctr_ch_" + _i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
-        srt := _str_ret_type()
+        si := _struct_i64_i64()
         res := "%call_ctr_r_" + _i2s(idx)
-        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_chan_try_recv(i64 " + ch_v + ")")
+        gg = _lg_emit(gg, res + " = call " + si + " @_aria_chan_try_recv(i64 " + ch_v + ")")
         val := "%call_ctr_v_" + _i2s(idx)
-        gg = _lg_emit(gg, val + " = extractvalue " + srt + " " + res + ", 0")
+        gg = _lg_emit(gg, val + " = extractvalue " + si + " " + res + ", 0")
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
         sta := "%call_ctr_s_" + _i2s(idx)
-        gg = _lg_emit(gg, sta + " = extractvalue " + srt + " " + res + ", 1")
+        gg = _lg_emit(gg, sta + " = extractvalue " + si + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + sta + ", i64* " + _t(inst.dest + 1))
         return gg
     }
@@ -1901,15 +1906,45 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         to_v := "%call_cs_t_" + _i2s(idx)
         gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, to_v + " = load i64, i64* " + _t(inst.arg1 + 1))
-        srt := _str_ret_type()
+        si := _struct_i64_i64()
         res := "%call_cs_r_" + _i2s(idx)
-        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_chan_select(i64 " + arr_v + ", i64 " + to_v + ")")
+        gg = _lg_emit(gg, res + " = call " + si + " @_aria_chan_select(i64 " + arr_v + ", i64 " + to_v + ")")
         idx_v := "%call_cs_i_" + _i2s(idx)
-        gg = _lg_emit(gg, idx_v + " = extractvalue " + srt + " " + res + ", 0")
+        gg = _lg_emit(gg, idx_v + " = extractvalue " + si + " " + res + ", 0")
         gg = _lg_emit(gg, "store i64 " + idx_v + ", i64* " + _t(inst.dest))
         val_v := "%call_cs_v_" + _i2s(idx)
-        gg = _lg_emit(gg, val_v + " = extractvalue " + srt + " " + res + ", 1")
+        gg = _lg_emit(gg, val_v + " = extractvalue " + si + " " + res + ", 1")
         gg = _lg_emit(gg, "store i64 " + val_v + ", i64* " + _t(inst.dest + 1))
+        return gg
+    }
+
+    // Cancel tokens
+    if name == "_aria_cancel_new" {
+        res := "%call_cn_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_new()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_cancel_child" {
+        h := "%call_cc_p_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_cc_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_child(i64 " + h + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+    if name == "_aria_cancel_trigger" {
+        h := "%call_ct_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_cancel_trigger(i64 " + h + ")")
+        return gg
+    }
+    if name == "_aria_cancel_is_triggered" {
+        h := "%call_cit_h_" + _i2s(idx)
+        gg = _lg_emit(gg, h + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_cit_r_" + _i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_cancel_is_triggered(i64 " + h + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 

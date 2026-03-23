@@ -3112,7 +3112,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 nt := _lnew_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_chan_new", 1))
-                ll = _lset_type(ll, nt.temp, 1)
+                ll = _lset_type(ll, nt.temp, 17)  // TY_CHAN
                 return LT{l: ll, temp: nt.temp}
             }
             if name == "_ariaChanSend" {
@@ -3370,6 +3370,50 @@ fn _lower_primary(l: Lowerer) -> LT {
                 nt := _lnew_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 3, "_aria_once_call", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+
+            // Cancel tokens
+            if name == "_ariaCancelNew" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_cancel_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaCancelChild" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_cancel_child", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaCancelTrigger" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_cancel_trigger", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaCancelIsTriggered" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_cancel_is_triggered", 1))
                 ll = _lset_type(ll, nt.temp, 1)
                 return LT{l: ll, temp: nt.temp}
             }
@@ -3727,6 +3771,79 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         } else {
             ll = _lemit(ll, new_inst(OpArrayLen, nt.temp, obj, 0, "", 0))
         }
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // Channel methods: .send(val), .recv(), .close(), .try_recv()
+    obj_type_ch := _lget_type(ll, obj)
+    if method == "send" && (obj_type_ch == 17 || obj_type_ch == 19) {
+        val := _lower_expr(ll)
+        ll = val.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        pack0 := _lnew_temp(ll)
+        ll = pack0.l
+        ll = _lemit(ll, new_inst(OpStore, pack0.temp, obj, 0, "", 0))
+        pack1 := _lnew_temp(ll)
+        ll = pack1.l
+        ll = _lemit(ll, new_inst(OpStore, pack1.temp, val.temp, 0, "", 0))
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_send", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "recv" && (obj_type_ch == 17 || obj_type_ch == 20) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_recv", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "try_recv" && (obj_type_ch == 17 || obj_type_ch == 20) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_try_recv", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "close" && (obj_type_ch == 17 || obj_type_ch == 19 || obj_type_ch == 20) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_close", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    // Task methods: .await(), .done(), .cancel(), .result()
+    if method == "await" && (obj_type_ch == 1 || obj_type_ch == 18) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_await", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "done" && (obj_type_ch == 1 || obj_type_ch == 18) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_done", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "cancel" && (obj_type_ch == 1 || obj_type_ch == 18) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_cancel", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "result" && (obj_type_ch == 1 || obj_type_ch == 18) {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_result", 1))
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
@@ -5082,13 +5199,19 @@ fn _lower_for(l: Lowerer) -> Lowerer {
         return _lower_for_range(ll, var_name, is_inclusive)
     }
 
-    // Array iteration path
-    // Lower iterator expression (the array)
+    // Lower iterator expression
     iter := _lower_expr(ll)
     ll = iter.l
     // Skip remaining until {
     while _lk(ll) != lb && _lk(ll) != "EOF" { ll = _ladv(ll) }
 
+    // Check if iterator is a channel (type 17 = TY_CHAN)
+    iter_type_check := _lget_type(ll, iter.temp)
+    if iter_type_check == 17 {
+        return _lower_for_channel(ll, var_name, iter.temp)
+    }
+
+    // Array iteration path
     // Get array length
     len_nt := _lnew_temp(ll)
     ll = len_nt.l
@@ -5180,6 +5303,86 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
 
     // End label
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+    ll
+}
+
+// --- Lower for-in-channel ---
+// for msg in ch { body } desugars to:
+//   loop { {val, status} = try_recv(ch); if status == 0 { break }; msg = val; body }
+
+fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
+    mut ll := l
+    lb := "\{"
+    rb := "\}"
+
+    // Labels
+    loop_lbl := _lnew_label(ll)
+    ll = loop_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+
+    // Loop start
+    ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+
+    // Call _aria_chan_try_recv(ch) -> {value, status}
+    recv_nt := _lnew_str_temp(ll)
+    ll = recv_nt.l
+    ll = _lemit(ll, new_inst(OpCall, recv_nt.temp, ch_temp, 1, "_aria_chan_try_recv", 0))
+
+    // Check status (recv_nt.temp + 1): if 0, break
+    status_nt := _lnew_temp(ll)
+    ll = status_nt.l
+    ll = _lemit(ll, new_inst(OpLoad, status_nt.temp, recv_nt.temp + 1, 0, "", 0))
+    zero_nt := _lnew_temp(ll)
+    ll = zero_nt.l
+    ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+    cmp_nt := _lnew_temp(ll)
+    ll = cmp_nt.l
+    ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, status_nt.temp, zero_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, end_lbl.temp, "", 0))
+
+    // Bind value to loop variable
+    if var_name != "" {
+        val_nt := _lnew_temp(ll)
+        ll = val_nt.l
+        ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, recv_nt.temp, 0, "", 0))
+        ll = _lenv_add(ll, var_name, val_nt.temp)
+    }
+
+    // Set loop labels
+    prev_start := ll.loop_start
+    prev_end := ll.loop_end
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+
+    // Body
+    ll = _lower_block(ll)
+
+    // Restore loop labels
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: ll.current_func,
+                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+                 env_names: ll.env_names, env_slots: ll.env_slots,
+                 loop_start: prev_start, loop_end: prev_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+
+    // Jump back
+    ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+
+    // End
     ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
     ll
 }
@@ -6120,6 +6323,16 @@ fn _lower_match_subject(l: Lowerer) -> LT {
 fn _lower_spawn(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip spawn
     lb := "\{"
+    // Check for spawn.detach
+    mut is_detach := false
+    if _lk(ll) == "." {
+        next_pos := ll.pos + 1
+        if next_pos < ll.tokens.len() && ll.tokens[next_pos].text == "detach" {
+            ll = _ladv(ll)  // skip .
+            ll = _ladv(ll)  // skip detach
+            is_detach = true
+        }
+    }
     // If next token is {, it's a spawn block
     if _lk(ll) == lb {
         // Treat as spawn { block } — lower the block's body as a closure
@@ -6136,7 +6349,10 @@ fn _lower_spawn(l: Lowerer) -> LT {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
-        ll = _lset_type(ll, nt.temp, 1)
+        // Type 1 = joinable task, type 18 = detached task (scope won't auto-join)
+        mut spawn_type := 1
+        if is_detach { spawn_type = 18 }
+        ll = _lset_type(ll, nt.temp, spawn_type)
         return LT{l: ll, temp: nt.temp}
     }
     // spawn <expr> — the expr should evaluate to a closure
@@ -6151,7 +6367,9 @@ fn _lower_spawn(l: Lowerer) -> LT {
     nt := _lnew_temp(ll)
     ll = nt.l
     ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
-    ll = _lset_type(ll, nt.temp, 1)
+    mut spawn_type := 1
+    if is_detach { spawn_type = 18 }
+    ll = _lset_type(ll, nt.temp, spawn_type)
     LT{l: ll, temp: nt.temp}
 }
 
@@ -6266,9 +6484,13 @@ fn _lower_scope(l: Lowerer) -> LT {
         if ti == 5 { th = task_5 }
         if ti == 6 { th = task_6 }
         if ti == 7 { th = task_7 }
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpCall, nt.temp, th, 1, "_aria_task_await", 1))
+        // Only auto-join non-detached tasks (type 1, not type 18)
+        th_type := _lget_type(ll, th)
+        if th_type != 18 {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpCall, nt.temp, th, 1, "_aria_task_await", 1))
+        }
         ti = ti + 1
     }
     // Result is the last expression temp (or 0)

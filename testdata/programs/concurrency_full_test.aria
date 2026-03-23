@@ -1,0 +1,71 @@
+// Test: Full concurrency features — for-in-channel, spawn.detach, cancel tokens, method syntax
+
+entry {
+    // Test 1: for msg in channel
+    ch := _ariaChanNew(3)
+    _ariaChanSend(ch, 10)
+    _ariaChanSend(ch, 20)
+    _ariaChanSend(ch, 30)
+    _ariaChanClose(ch)
+    mut sum := 0
+    for msg in ch {
+        sum = sum + msg
+    }
+    assert sum == 60
+
+    // Test 2: channel method syntax
+    ch2 := _ariaChanNew(1)
+    ch2.send(42)
+    val := ch2.recv()
+    assert val == 42
+    ch2.close()
+
+    // Test 3: spawn.detach (detached tasks are not auto-joined by scope)
+    scope {
+        spawn.detach fn() -> i64 {
+            // This runs but scope won't wait for it
+            0
+        }
+        spawn fn() -> i64 {
+            // This WILL be auto-joined
+            1
+        }
+    }
+
+    // Test 4: task method syntax
+    task := _ariaSpawn(fn() -> i64 { 99 })
+    result := task.await()
+    assert result == 99
+
+    // Test 5: cancellation tokens
+    token := _ariaCancelNew()
+    child := _ariaCancelChild(token)
+    assert _ariaCancelIsTriggered(token) == 0
+    assert _ariaCancelIsTriggered(child) == 0
+    _ariaCancelTrigger(token)
+    assert _ariaCancelIsTriggered(token) == 1
+    // Child inherits parent's triggered state
+    assert _ariaCancelIsTriggered(child) == 1
+
+    // Test 6: WaitGroup
+    wg := _ariaWgNew()
+    _ariaWgAdd(wg, 3)
+    t1 := _ariaSpawn(fn() -> i64 {
+        _ariaWgDone(wg)
+        0
+    })
+    t2 := _ariaSpawn(fn() -> i64 {
+        _ariaWgDone(wg)
+        0
+    })
+    t3 := _ariaSpawn(fn() -> i64 {
+        _ariaWgDone(wg)
+        0
+    })
+    _ariaWgWait(wg)
+    _ariaTaskAwait(t1)
+    _ariaTaskAwait(t2)
+    _ariaTaskAwait(t3)
+
+    print("concurrency_full_test passed")
+}
