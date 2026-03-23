@@ -229,3 +229,32 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
 
     generate_from_module(m, output_path, runtime_path)
 }
+
+fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
+    // Same pipeline as test but for bench blocks
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
+    mut first := true
+    mut fi := 1
+    while fi < files.len() {
+        file := files[fi]
+        source := _ariaReadFile(file)
+        lex := tokenize(source, file)
+        toks := get_tokens(lex)
+        lex_diags := get_diagnostics(lex)
+        if bag_has_errors(lex_diags) { return lex_diags }
+        if first {
+            merged = toks
+            first = false
+        } else {
+            merged = _merge_file_tokens(merged, toks)
+        }
+        fi = fi + 1
+    }
+    file := files[1]
+    rr := resolve(merged, file)
+    if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
+    cr := check(merged, rr.table, file)
+    if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
+    m := lower_for_tests(merged, cr.store, cr.registry, cr.treg, rr.table, file)
+    generate_from_module(m, output_path, runtime_path)
+}

@@ -17,6 +17,9 @@ type Command =
     | CmdBuild
     | CmdRun
     | CmdTest
+    | CmdFix
+    | CmdExplain
+    | CmdBench
     | CmdHelp
     | CmdVersion
     | CmdUnknown
@@ -47,6 +50,9 @@ fn parse_command(arg: str) -> Command {
     if arg == "build" { return CmdBuild }
     if arg == "run" { return CmdRun }
     if arg == "test" { return CmdTest }
+    if arg == "fix" { return CmdFix }
+    if arg == "explain" { return CmdExplain }
+    if arg == "bench" { return CmdBench }
     if arg == "help" { return CmdHelp }
     if arg == "--help" { return CmdHelp }
     if arg == "-h" { return CmdHelp }
@@ -61,6 +67,9 @@ fn command_to_str(cmd: Command) -> str = match cmd {
     CmdBuild => "build"
     CmdRun => "run"
     CmdTest => "test"
+    CmdFix => "fix"
+    CmdExplain => "explain"
+    CmdBench => "bench"
     CmdHelp => "help"
     CmdVersion => "version"
     CmdUnknown => "unknown"
@@ -164,6 +173,9 @@ fn print_help() -> i64 {
     println("  build     Compile source files to executable")
     println("  run       Compile and run source files")
     println("  test      Compile and run test blocks")
+    println("  bench     Compile and run bench blocks")
+    println("  fix       Apply auto-fix suggestions")
+    println("  explain   Explain an error code (e.g., aria explain E0100)")
     println("")
     println("Flags:")
     println("  --format=text|json  Output format (default: text)")
@@ -359,6 +371,122 @@ fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     0
 }
 
+// --- Explain command ---
+
+fn run_explain(files: [str]) -> i64 {
+    // aria explain E0042 — print detailed error explanation
+    if files.len() <= 1 {
+        println("Usage: aria explain <error-code>")
+        println("")
+        println("Example: aria explain E0100")
+        return 1
+    }
+    code := files[1]
+    desc := describe_code(code)
+    if desc == "unknown error code" {
+        println("Unknown error code: " + code)
+        return 1
+    }
+    println(code + ": " + desc)
+    println("")
+    // Print extended explanation based on error category
+    first_char := code.charAt(0)
+    if first_char == "E" {
+        num := code.substring(1, code.len())
+        println("Category: " + _error_category(code))
+        println("")
+        println(_error_explanation(code))
+    }
+    if first_char == "W" {
+        println("Category: Warning")
+        println("")
+        println("This is a warning -- your code will still compile, but the")
+        println("indicated issue may cause problems or indicate a mistake.")
+    }
+    0
+}
+
+fn _error_category(code: str) -> str {
+    if code.startsWith("E000") { return "Syntax Error" }
+    if code.startsWith("E001") { return "Type Error" }
+    if code.startsWith("E002") { return "Trait Error" }
+    if code.startsWith("E003") { return "Effect Error" }
+    if code.startsWith("E004") { return "Pattern Error" }
+    if code.startsWith("E005") { return "Mutability Error" }
+    if code.startsWith("E007") { return "Module/Import Error" }
+    "Compiler Error"
+}
+
+fn _error_explanation(code: str) -> str {
+    if code == "E0100" { return "The types on the left and right side of an expression\ndon't match. Check that the types are compatible." }
+    if code == "E0106" { return "The function's return type doesn't match what the body\nactually returns. Check the return type annotation." }
+    if code == "E0200" { return "A type used in a generic context doesn't implement the\nrequired trait. Add a derives clause or impl block." }
+    if code == "E0400" { return "A match expression doesn't cover all possible cases.\nAdd the missing variant or a wildcard (_) arm." }
+    if code == "E0500" { return "Attempted to reassign a variable that wasn't declared\nwith 'mut'. Add 'mut' to the binding if reassignment is needed." }
+    if code == "E0701" { return "A name was used that isn't defined in the current scope.\nCheck spelling, imports, and visibility." }
+    if code == "E0704" { return "Attempted to access a symbol that is not marked 'pub'\nfrom a different file. Add 'pub' to the declaration or\nmove the access to the same file." }
+    "See the Aria language specification for details on this error."
+}
+
+// --- Fix command ---
+
+fn run_fix(raw_files: [str], format: str) -> i64 {
+    files := expand_files(raw_files)
+    if files.len() <= 1 {
+        println("error: no input files")
+        return 1
+    }
+    // Run check and collect diagnostics with suggestions
+    diags := check_sources(files)
+    mut fix_count := 0
+    mut di := 1
+    while di < diags.diagnostics.len() {
+        d := diags.diagnostics[di]
+        if d.suggestions.len() > 1 {
+            // Has fix suggestions — print them
+            mut si := 1
+            while si < d.suggestions.len() {
+                s := d.suggestions[si]
+                println("fix: " + d.code + " at " + format_span(d.span) + ": " + s.message)
+                fix_count = fix_count + 1
+                si = si + 1
+            }
+        }
+        di = di + 1
+    }
+    if fix_count == 0 {
+        println("No auto-fixable issues found.")
+    } else {
+        println(fix_count.toStr() + " fix(es) suggested. Use --apply to apply them.")
+    }
+    0
+}
+
+// --- Bench command ---
+
+fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
+    files := expand_files(raw_files)
+    if files.len() <= 1 {
+        println("error: no input files")
+        return 1
+    }
+    file := files[1]
+    mut output := file
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+    output = output + "_bench_runner"
+    // Compile with bench runner
+    diags := generate_bench_from_sources(files, output, runtime_path)
+    if bag_has_errors(diags) {
+        _print_diagnostics(diags, format)
+        return 1
+    }
+    // Run the bench binary
+    _ariaExec(output)
+    0
+}
+
 // --- Entry point ---
 
 entry {
@@ -374,6 +502,12 @@ entry {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {
             run_test(opts.files, opts.format, opts.runtime_path)
+        } else if cmd == "bench" {
+            run_bench(opts.files, opts.format, opts.runtime_path)
+        } else if cmd == "fix" {
+            run_fix(opts.files, opts.format)
+        } else if cmd == "explain" {
+            run_explain(opts.files)
         } else if cmd == "version" {
             print_version()
         } else {

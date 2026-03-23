@@ -625,6 +625,11 @@ fn _lower_bodies(l: Lowerer) -> Lowerer {
             ll = _lower_entry(ll)
         } else if k == "test" {
             ll = _lower_test(ll)
+        } else if k == "bench" {
+            ll = _lower_bench(ll)
+        } else if k == "before" || k == "after" {
+            // before/after fixtures — lower as special functions
+            ll = _lower_fixture(ll, k)
         } else if k == "impl" {
             ll = _lower_impl(ll)
         } else if k == "const" {
@@ -861,6 +866,59 @@ fn _lower_test(l: Lowerer) -> Lowerer {
             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
             temp_types: ll.temp_types,
             fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+}
+
+// --- Lower bench block ---
+// bench "name" { body } — lowered like test but with iteration wrapper
+
+fn _lower_bench(l: Lowerer) -> Lowerer {
+    mut ll := _ladv(l)  // skip bench
+    mut bench_name := "_bench_" + _i2s_lower(ll.module.test_count)
+    mut bench_label := "bench " + _i2s_lower(ll.module.test_count)
+    if _lk(ll) == "STRING" {
+        bench_label = _lcur(ll).text
+        ll = _ladv(ll)
+    } else if _lk(ll) == "IDENT" {
+        bench_label = _lcur(ll).text
+        ll = _ladv(ll)
+    }
+    // Create IR function — bench body will be called in a loop by the runner
+    ll = _lset_func(ll, new_ir_func(bench_name, 0, 0))
+    lb := "\{"
+    if _lk(ll) == lb {
+        ll = _lower_block(ll)
+    }
+    ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    ll = _lfinish_func(ll)
+    // Register as test (bench runner treats these specially)
+    mut new_mod := mod_add_test(ll.module, bench_label)
+    new_mod = mod_add_string(new_mod, bench_label)
+    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg,
+            table: ll.table, file: ll.file, module: new_mod,
+            current_func: ll.current_func,
+            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
+            env_names: ll.env_names, env_slots: ll.env_slots,
+            loop_start: ll.loop_start, loop_end: ll.loop_end,
+            const_names: ll.const_names, const_vals: ll.const_vals,
+            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+            temp_types: ll.temp_types,
+            fn_error_type: ll.fn_error_type, defer_count: ll.defer_count, defer_start_0: ll.defer_start_0, defer_start_1: ll.defer_start_1, defer_start_2: ll.defer_start_2, defer_start_3: ll.defer_start_3, defer_end_0: ll.defer_end_0, defer_end_1: ll.defer_end_1, defer_end_2: ll.defer_end_2, defer_end_3: ll.defer_end_3}
+}
+
+// --- Lower before/after test fixtures ---
+
+fn _lower_fixture(l: Lowerer, kind: str) -> Lowerer {
+    mut ll := _ladv(l)  // skip before/after
+    mut fname := "_before"
+    if kind == "after" { fname = "_after" }
+    ll = _lset_func(ll, new_ir_func(fname, 0, 0))
+    lb := "\{"
+    if _lk(ll) == lb {
+        ll = _lower_block(ll)
+    }
+    ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
 }
 
 fn _i2s_lower(n: i64) -> str {

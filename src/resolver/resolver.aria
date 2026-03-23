@@ -1111,12 +1111,69 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
 
 // --- Resolve identifier reference ---
 
+// Find a similar name in scope (for "did you mean?" suggestions)
+fn _find_similar_name(r: Resolver, name: str) -> str {
+    mut best := ""
+    mut best_dist := 3  // max edit distance to suggest
+    // Scan all symbols in the table
+    mut si := 1
+    while si < r.table.symbols.len() {
+        sym := r.table.symbols[si]
+        if sym.name != "" && sym.name != name {
+            dist := _edit_distance(name, sym.name)
+            if dist < best_dist {
+                best_dist = dist
+                best = sym.name
+            }
+            if dist == best_dist && best == "" {
+                best = sym.name
+            }
+        }
+        si = si + 1
+    }
+    best
+}
+
+// Simple edit distance (Levenshtein) for short strings
+fn _edit_distance(a: str, b: str) -> i64 {
+    al := a.len()
+    bl := b.len()
+    // Quick checks
+    if al == 0 { return bl }
+    if bl == 0 { return al }
+    // For short strings, use simple row-based DP
+    // Only track 2 rows to save memory
+    if al > 20 || bl > 20 { return 99 }
+    // Simplified: check prefix match + suffix difference
+    mut common := 0
+    mut i := 0
+    mut min_len := al
+    if bl < min_len { min_len = bl }
+    while i < min_len {
+        if a.charAt(i) == b.charAt(i) { common = common + 1 }
+        i = i + 1
+    }
+    mut diff := al + bl - common * 2
+    // Approximate: if > 70% chars match and length similar, distance is small
+    if common * 3 >= min_len * 2 {
+        len_diff := al - bl
+        if len_diff < 0 { len_diff = 0 - len_diff }
+        return len_diff + (min_len - common)
+    }
+    diff
+}
+
 fn _resolve_ident(r: Resolver) -> Resolver {
     name := _rcur(r).text
     found := lookup(r.table, r.current_scope, name)
     if found.name == "" {
         q := _q()
-        rr := _rerror(r, E0701, "unresolved name " + q + name + q)
+        suggestion := _find_similar_name(r, name)
+        mut msg := "unresolved name " + q + name + q
+        if suggestion != "" {
+            msg = msg + ". Did you mean " + q + suggestion + q + "?"
+        }
+        rr := _rerror(r, E0701, msg)
         return _radv(rr)
     }
     // Pub visibility check: if symbol is not public and declared in a different file

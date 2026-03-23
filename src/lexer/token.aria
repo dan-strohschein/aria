@@ -64,6 +64,10 @@ type TokenKind =
     | TkSpawn
     | TkScope
     | TkSelect
+    | TkBench
+    | TkBefore
+    | TkAfter
+    | TkMock
     // Operators
     | TkPlus
     | TkMinus
@@ -179,6 +183,10 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkSpawn => "spawn"
     TkScope => "scope"
     TkSelect => "select"
+    TkBench => "bench"
+    TkBefore => "before"
+    TkAfter => "after"
+    TkMock => "mock"
     TkPlus => "+"
     TkMinus => "-"
     TkStar => "*"
@@ -262,6 +270,10 @@ fn lookup_keyword(text: str) -> TokenKind {
     if text == "self" { return TkSelf }
     if text == "Self" { return TkSelfType }
     if text == "spawn" { return TkSpawn }
+    if text == "bench" { return TkBench }
+    if text == "before" { return TkBefore }
+    if text == "after" { return TkAfter }
+    if text == "mock" { return TkMock }
     if text == "scope" { return TkScope }
     if text == "select" { return TkSelect }
     if text == "true" { return TkBoolTrue }

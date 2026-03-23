@@ -155,14 +155,41 @@ fn _name_in_list(name: str, list: [str]) -> bool {
 // Main entry: generate_llvm_ir
 // ============================================================
 
+// Cross-compilation target resolution
+fn _target_triple(target: str) -> str {
+    if target == "darwin-arm64" { return "arm64-apple-macosx14.0.0" }
+    if target == "darwin-amd64" { return "x86_64-apple-macosx14.0.0" }
+    if target == "linux-amd64" { return "x86_64-unknown-linux-gnu" }
+    if target == "linux-arm64" { return "aarch64-unknown-linux-gnu" }
+    if target == "windows-amd64" { return "x86_64-pc-windows-msvc" }
+    if target == "wasm32" { return "wasm32-unknown-unknown" }
+    // Default: native
+    "arm64-apple-macosx14.0.0"
+}
+
+fn _target_datalayout(target: str) -> str {
+    if target == "darwin-arm64" || target == "native" { return "e-m:o-i64:64-i128:128-n32:64-S128" }
+    if target == "darwin-amd64" { return "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128" }
+    if target == "linux-amd64" { return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128" }
+    if target == "linux-arm64" { return "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128" }
+    if target == "windows-amd64" { return "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128" }
+    "e-m:o-i64:64-i128:128-n32:64-S128"
+}
+
 fn generate_llvm_ir(m: IrModule) -> str {
+    _generate_llvm_ir_target(m, "native")
+}
+
+fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     nl := _nl()
     si64 := _struct_i64_i64()
     mut p := [""]
 
-    // Module header
-    p = p.append("target datalayout = \"e-m:o-i64:64-i128:128-n32:64-S128\"" + nl)
-    p = p.append("target triple = \"arm64-apple-macosx14.0.0\"" + nl + nl)
+    // Module header with target-specific layout
+    triple := _target_triple(target)
+    layout := _target_datalayout(target)
+    p = p.append("target datalayout = \"" + layout + "\"" + nl)
+    p = p.append("target triple = \"" + triple + "\"" + nl + nl)
 
     // String constants
     mut si := 1
