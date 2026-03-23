@@ -1,0 +1,47 @@
+// Test: Tier 5 string & literal completeness
+
+entry {
+    // Test 1: Raw strings
+    raw := r"hello\nworld"
+    assert raw.len() == 12  // backslash-n is 2 chars, not newline
+    raw2 := r#"she said "hello""#
+    assert raw2.contains("hello")
+
+    // Test 2: Triple-quoted strings
+    multi := """
+    line one
+    line two
+    """
+    assert multi.contains("line one")
+    assert multi.contains("line two")
+
+    // Test 3: Duration literals
+    timeout := 30s
+    assert timeout == 30000000000  // 30 billion nanoseconds
+    delay := 100ms
+    assert delay == 100000000  // 100 million nanoseconds
+    micro := 50us
+    assert micro == 50000
+
+    // Test 4: Size literals
+    buf_size := 4kb
+    assert buf_size == 4096
+    big := 2mb
+    assert big == 2097152
+    huge := 1gb
+    assert huge == 1073741824
+
+    // Test 5: charCount
+    ascii := "hello"
+    assert ascii.charCount() == 5
+
+    // Test 6: StringBuilder
+    sb := _ariaSbNew()
+    _ariaSbAppend(sb, "hello")
+    _ariaSbAppend(sb, " ")
+    _ariaSbAppend(sb, "world")
+    result := _ariaSbBuild(sb)
+    assert result == "hello world"
+
+    print("string_complete_test passed")
+}

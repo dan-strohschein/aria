@@ -241,6 +241,14 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaCancelChild", SkBuiltin)
     rr = _add_builtin(rr, "_ariaCancelTrigger", SkBuiltin)
     rr = _add_builtin(rr, "_ariaCancelIsTriggered", SkBuiltin)
+    // StringBuilder
+    rr = _add_builtin(rr, "_ariaSbNew", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbWithCapacity", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbAppend", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbAppendChar", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbLen", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbBuild", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSbClear", SkBuiltin)
     // Bool values
     rr = _add_builtin(rr, "true", SkBuiltin)
     rr = _add_builtin(rr, "false", SkBuiltin)

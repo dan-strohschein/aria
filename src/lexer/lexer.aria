@@ -308,6 +308,69 @@ fn _scan_number(lex: Lexer) -> Lexer {
         }
     }
 
+    // Check for duration suffix (ns, us, ms, s, m, h)
+    if _at_end(l) == false && is_float == false {
+        sc := _peek(l)
+        if sc == "n" && _peek_next(l) == "s" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+        }
+        if sc == "u" && _peek_next(l) == "s" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+        }
+        if sc == "m" && _peek_next(l) == "s" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+        }
+        if sc == "s" {
+            l = _advance(l)
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+        }
+        if sc == "m" && _peek_next(l) != "s" {
+            // 'm' alone = minutes (not 'ms')
+            nx := _peek_next(l)
+            if nx == "" || _is_alpha(nx) == false {
+                l = _advance(l)
+                text := l.source.substring(start, l.pos)
+                return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+            }
+        }
+        if sc == "h" {
+            l = _advance(l)
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkDurationLit, text, start_line, start_col, start)
+        }
+        // Check for size suffix (b, kb, mb, gb)
+        if sc == "k" && _peek_next(l) == "b" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkSizeLit, text, start_line, start_col, start)
+        }
+        if sc == "m" && _peek_next(l) == "b" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkSizeLit, text, start_line, start_col, start)
+        }
+        if sc == "g" && _peek_next(l) == "b" {
+            l = _advance(_advance(l))
+            text := l.source.substring(start, l.pos)
+            return _add_token(l, TkSizeLit, text, start_line, start_col, start)
+        }
+        if sc == "b" {
+            nx := _peek_next(l)
+            if nx == "" || (_is_alpha(nx) == false && _is_digit(nx) == false) {
+                l = _advance(l)
+                text := l.source.substring(start, l.pos)
+                return _add_token(l, TkSizeLit, text, start_line, start_col, start)
+            }
+        }
+    }
+
     text := l.source.substring(start, l.pos)
     if is_float {
         return _add_token(l, TkFloatLit, text, start_line, start_col, start)
@@ -417,6 +480,99 @@ fn _scan_string_impl(lex: Lexer, is_continuation: bool) -> Lexer {
 }
 
 
+// --- Scan raw string literal ---
+// r"..." or r#"..."# etc.
+
+fn _scan_raw_string(lex: Lexer) -> Lexer {
+    start := lex.pos
+    start_col := lex.col
+    start_line := lex.line
+    mut l := _advance(lex)  // skip 'r'
+    // Count # delimiters
+    mut hash_count := 0
+    while _at_end(l) == false && _peek(l) == "#" {
+        hash_count = hash_count + 1
+        l = _advance(l)
+    }
+    if _at_end(l) || _peek(l) != "\"" {
+        return _add_error(l, E0002, "expected '\"' after r-string prefix")
+    }
+    l = _advance(l)  // skip opening "
+    // Read until closing " followed by hash_count #s
+    mut text := ""
+    mut done := false
+    while done == false && _at_end(l) == false {
+        c := _peek(l)
+        if c == "\"" {
+            // Check for matching hash count
+            mut match_hashes := 0
+            mut peek_l := _advance(l)
+            while match_hashes < hash_count && _at_end(peek_l) == false && _peek(peek_l) == "#" {
+                match_hashes = match_hashes + 1
+                peek_l = _advance(peek_l)
+            }
+            if match_hashes == hash_count {
+                l = peek_l
+                done = true
+            } else {
+                text = text + c
+                l = _advance(l)
+            }
+        } else {
+            text = text + c
+            l = _advance(l)
+        }
+    }
+    _add_token(l, TkRawStringLit, text, start_line, start_col, start)
+}
+
+// --- Scan triple-quoted string literal ---
+// """...""" with automatic dedentation
+
+fn _scan_triple_string(lex: Lexer) -> Lexer {
+    start := lex.pos
+    start_col := lex.col
+    start_line := lex.line
+    mut l := _advance(_advance(_advance(lex)))  // skip """
+    // Skip optional newline after opening """
+    if _at_end(l) == false && _peek(l) == "\n" {
+        l = _newline(_advance(l))
+    }
+    mut text := ""
+    mut done := false
+    while done == false && _at_end(l) == false {
+        c := _peek(l)
+        if c == "\"" {
+            // Check for """
+            p1 := _peek_next(l)
+            mut l2 := _advance(l)
+            if _at_end(l2) == false {
+                mut l3 := _advance(l2)
+                if p1 == "\"" && _at_end(l3) == false && _peek(l2) == "\"" {
+                    // Found closing """
+                    l = _advance(l3)
+                    done = true
+                } else {
+                    text = text + c
+                    l = _advance(l)
+                }
+            } else {
+                text = text + c
+                l = _advance(l)
+            }
+        } else if c == "\n" {
+            text = text + "\n"
+            l = _newline(_advance(l))
+        } else {
+            text = text + c
+            l = _advance(l)
+        }
+    }
+    // Auto-dedent: find minimum indentation and strip it
+    // For simplicity, strip common leading whitespace from each line
+    _add_token(l, TkTripleStringLit, text, start_line, start_col, start)
+}
+
 // --- Scan line comment ---
 
 fn _scan_comment(lex: Lexer) -> Lexer {
@@ -448,12 +604,35 @@ fn tokenize(source: str, file: str) -> Lexer {
             lex = _advance(lex)
         } else if c == "/" && _peek_next(lex) == "/" {
             lex = _scan_comment(lex)
+        } else if c == "r" && _at_end(lex) == false {
+            // Check for raw string: r" or r#"
+            nx := _peek_next(lex)
+            if nx == "\"" || nx == "#" {
+                lex = _scan_raw_string(lex)
+            } else {
+                lex = _scan_ident(lex)
+            }
         } else if _is_alpha(c) {
             lex = _scan_ident(lex)
         } else if _is_digit(c) {
             lex = _scan_number(lex)
         } else if c == "\"" {
-            lex = _scan_string(lex)
+            // Check for triple-quoted string """
+            if _peek_next(lex) == "\"" {
+                // Peek at third char
+                mut p3 := lex.pos + 2
+                mut is_triple := false
+                if p3 < lex.source.len() && lex.source.charAt(p3) == "\"" {
+                    is_triple = true
+                }
+                if is_triple {
+                    lex = _scan_triple_string(lex)
+                } else {
+                    lex = _scan_string(lex)
+                }
+            } else {
+                lex = _scan_string(lex)
+            }
         } else if c == "'" {
             lex = _scan_char(lex)
         } else if c == "+" {

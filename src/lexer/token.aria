@@ -18,6 +18,10 @@ type TokenKind =
     | TkCharLit
     | TkBoolTrue
     | TkBoolFalse
+    | TkRawStringLit
+    | TkTripleStringLit
+    | TkDurationLit
+    | TkSizeLit
     // String interpolation
     | TkStringStart
     | TkStringMiddle
@@ -132,6 +136,10 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkCharLit => "CHAR"
     TkBoolTrue => "true"
     TkBoolFalse => "false"
+    TkRawStringLit => "RAW_STRING"
+    TkTripleStringLit => "TRIPLE_STRING"
+    TkDurationLit => "DURATION"
+    TkSizeLit => "SIZE"
     TkStringStart => "STRING_START"
     TkStringMiddle => "STRING_MIDDLE"
     TkStringEnd => "STRING_END"
@@ -284,6 +292,10 @@ fn terminates_statement(kind: TokenKind) -> bool {
     if name == "INT" { return true }
     if name == "FLOAT" { return true }
     if name == "STRING" { return true }
+    if name == "RAW_STRING" { return true }
+    if name == "TRIPLE_STRING" { return true }
+    if name == "DURATION" { return true }
+    if name == "SIZE" { return true }
     if name == "true" { return true }
     if name == "false" { return true }
     if name == "STRING_END" { return true }

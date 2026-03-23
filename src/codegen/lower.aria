@@ -2248,6 +2248,32 @@ fn _lower_primary(l: Lowerer) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    // Raw strings and triple-quoted strings: treat as plain string constants
+    if k == "RAW_STRING" || k == "TRIPLE_STRING" {
+        val := _lcur(l).text
+        return _lower_string_const(_ladv(l), val)
+    }
+
+    // Duration literals: convert to nanoseconds (i64)
+    if k == "DURATION" {
+        val := _lcur(l).text
+        dur_ns := _parse_duration(val)
+        nt := _lnew_temp(l)
+        mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, dur_ns, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // Size literals: convert to bytes (i64)
+    if k == "SIZE" {
+        val := _lcur(l).text
+        size_bytes := _parse_size(val)
+        nt := _lnew_temp(l)
+        mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, size_bytes, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
     if k == "STRING_START" {
         return _lower_interpolated_string(l)
     }
@@ -3374,6 +3400,103 @@ fn _lower_primary(l: Lowerer) -> LT {
                 return LT{l: ll, temp: nt.temp}
             }
 
+            // StringBuilder
+            if name == "_ariaSbNew" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_sb_new", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbWithCapacity" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sb_with_capacity", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbAppend" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                s_arg := _lower_expr(ll)
+                ll = s_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Pack: handle, str_ptr, str_len (3 args)
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, s_arg.temp, 0, "", 0))
+                p2 := _lnew_temp(ll)
+                ll = p2.l
+                ll = _lemit(ll, new_inst(OpStore, p2.temp, s_arg.temp + 1, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 3, "_aria_sb_append", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbAppendChar" {
+                ll = _ladv(ll)
+                h_arg := _lower_expr(ll)
+                ll = h_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                c_arg := _lower_expr(ll)
+                ll = c_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, c_arg.temp, 0, "", 0))
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 2, "_aria_sb_append_char", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbLen" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sb_len", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbBuild" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sb_build", 12))
+                ll = _lset_type(ll, nt.temp, 12)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSbClear" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sb_clear", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+
             // Cancel tokens
             if name == "_ariaCancelNew" {
                 ll = _ladv(ll)
@@ -3771,6 +3894,41 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         } else {
             ll = _lemit(ll, new_inst(OpArrayLen, nt.temp, obj, 0, "", 0))
         }
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // String character access methods
+    if method == "charCount" && _lget_type(ll, obj) == 12 {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_char_count", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "chars" && _lget_type(ll, obj) == 12 {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_chars", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "graphemes" && _lget_type(ll, obj) == 12 {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_graphemes", 13))
+        ll = _lset_type(ll, nt.temp, 13)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "bytes" && _lget_type(ll, obj) == 12 {
+        // bytes() returns the raw byte array — for now, same as chars() for ASCII
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_chars", 1))
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
@@ -6017,6 +6175,51 @@ fn _parse_int_literal(val: str) -> i64 {
         i = i + 1
     }
     if neg { num = 0 - num }
+    num
+}
+
+// Parse duration literal to nanoseconds: "30s" -> 30_000_000_000
+fn _parse_duration(val: str) -> i64 {
+    // Extract numeric part and suffix
+    mut num_end := 0
+    while num_end < val.len() {
+        c := val.charAt(num_end)
+        if (c >= "0" && c <= "9") || c == "_" {
+            num_end = num_end + 1
+        } else {
+            break
+        }
+    }
+    num_str := val.substring(0, num_end)
+    suffix := val.substring(num_end, val.len())
+    num := _parse_int_literal(num_str)
+    if suffix == "ns" { return num }
+    if suffix == "us" { return num * 1000 }
+    if suffix == "ms" { return num * 1000000 }
+    if suffix == "s" { return num * 1000000000 }
+    if suffix == "m" { return num * 60000000000 }
+    if suffix == "h" { return num * 3600000000000 }
+    num
+}
+
+// Parse size literal to bytes: "4mb" -> 4_194_304
+fn _parse_size(val: str) -> i64 {
+    mut num_end := 0
+    while num_end < val.len() {
+        c := val.charAt(num_end)
+        if (c >= "0" && c <= "9") || c == "_" {
+            num_end = num_end + 1
+        } else {
+            break
+        }
+    }
+    num_str := val.substring(0, num_end)
+    suffix := val.substring(num_end, val.len())
+    num := _parse_int_literal(num_str)
+    if suffix == "b" { return num }
+    if suffix == "kb" { return num * 1024 }
+    if suffix == "mb" { return num * 1048576 }
+    if suffix == "gb" { return num * 1073741824 }
     num
 }
 

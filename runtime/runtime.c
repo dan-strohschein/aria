@@ -1452,6 +1452,249 @@ long _aria_cancel_check(long handle) {
     return task->cancelled ? 1 : 0;
 }
 
+// --- String: charCount (count UTF-8 codepoints) ---
+
+long _aria_str_char_count(char *ptr, long len) {
+    long count = 0;
+    long i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)ptr[i];
+        if (c < 0x80) { i += 1; }
+        else if ((c & 0xE0) == 0xC0) { i += 2; }
+        else if ((c & 0xF0) == 0xE0) { i += 3; }
+        else { i += 4; }
+        count++;
+    }
+    return count;
+}
+
+// --- String: chars (return array of codepoint integers) ---
+
+long _aria_str_chars(char *ptr, long len) {
+    long arr = _aria_array_new(len < 8 ? 8 : len);
+    // sentinel
+    _aria_array_append(arr, 0);
+    long i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)ptr[i];
+        long codepoint = 0;
+        long bytes = 1;
+        if (c < 0x80) {
+            codepoint = c;
+            bytes = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            codepoint = c & 0x1F;
+            bytes = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            codepoint = c & 0x0F;
+            bytes = 3;
+        } else {
+            codepoint = c & 0x07;
+            bytes = 4;
+        }
+        for (long j = 1; j < bytes && (i + j) < len; j++) {
+            codepoint = (codepoint << 6) | ((unsigned char)ptr[i + j] & 0x3F);
+        }
+        _aria_array_append(arr, codepoint);
+        i += bytes;
+    }
+    return arr;
+}
+
+// --- String: graphemes (simplified — split on codepoint boundaries) ---
+// Full grapheme clustering requires UAX#29. This returns codepoints as single-char strings.
+
+long _aria_str_graphemes(char *ptr, long len) {
+    long arr = _aria_array_new(len < 8 ? 8 : len);
+    // sentinel
+    long *sentinel = (long *)malloc(16);
+    sentinel[0] = (long)"";
+    sentinel[1] = 0;
+    _aria_array_append(arr, (long)sentinel);
+    long i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)ptr[i];
+        long bytes = 1;
+        if (c < 0x80) bytes = 1;
+        else if ((c & 0xE0) == 0xC0) bytes = 2;
+        else if ((c & 0xF0) == 0xE0) bytes = 3;
+        else bytes = 4;
+        if (i + bytes > len) bytes = len - i;
+        char *gc = (char *)malloc((size_t)(bytes + 1));
+        memcpy(gc, ptr + i, (size_t)bytes);
+        gc[bytes] = '\0';
+        long *str_struct = (long *)malloc(16);
+        str_struct[0] = (long)gc;
+        str_struct[1] = bytes;
+        _aria_array_append(arr, (long)str_struct);
+        i += bytes;
+    }
+    return arr;
+}
+
+// --- StringBuilder ---
+
+struct _aria_sb {
+    char *buf;
+    long len;
+    long cap;
+};
+
+long _aria_sb_new(void) {
+    struct _aria_sb *sb = (struct _aria_sb *)malloc(sizeof(struct _aria_sb));
+    sb->cap = 64;
+    sb->buf = (char *)malloc((size_t)sb->cap);
+    sb->len = 0;
+    return (long)sb;
+}
+
+long _aria_sb_with_capacity(long cap) {
+    struct _aria_sb *sb = (struct _aria_sb *)malloc(sizeof(struct _aria_sb));
+    sb->cap = cap < 16 ? 16 : cap;
+    sb->buf = (char *)malloc((size_t)sb->cap);
+    sb->len = 0;
+    return (long)sb;
+}
+
+void _aria_sb_append(long handle, char *ptr, long len) {
+    struct _aria_sb *sb = (struct _aria_sb *)handle;
+    while (sb->len + len > sb->cap) {
+        sb->cap *= 2;
+        sb->buf = (char *)realloc(sb->buf, (size_t)sb->cap);
+    }
+    memcpy(sb->buf + sb->len, ptr, (size_t)len);
+    sb->len += len;
+}
+
+void _aria_sb_append_char(long handle, long codepoint) {
+    char buf[4];
+    long bytes = 0;
+    if (codepoint < 0x80) { buf[0] = (char)codepoint; bytes = 1; }
+    else if (codepoint < 0x800) { buf[0] = (char)(0xC0 | (codepoint >> 6)); buf[1] = (char)(0x80 | (codepoint & 0x3F)); bytes = 2; }
+    else if (codepoint < 0x10000) { buf[0] = (char)(0xE0 | (codepoint >> 12)); buf[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F)); buf[2] = (char)(0x80 | (codepoint & 0x3F)); bytes = 3; }
+    else { buf[0] = (char)(0xF0 | (codepoint >> 18)); buf[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F)); buf[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F)); buf[3] = (char)(0x80 | (codepoint & 0x3F)); bytes = 4; }
+    _aria_sb_append(handle, buf, bytes);
+}
+
+long _aria_sb_len(long handle) {
+    struct _aria_sb *sb = (struct _aria_sb *)handle;
+    return sb->len;
+}
+
+struct _aria_str _aria_sb_build(long handle) {
+    struct _aria_sb *sb = (struct _aria_sb *)handle;
+    char *result = (char *)malloc((size_t)(sb->len + 1));
+    memcpy(result, sb->buf, (size_t)sb->len);
+    result[sb->len] = '\0';
+    struct _aria_str s = {result, sb->len};
+    // Reset builder
+    sb->len = 0;
+    return s;
+}
+
+void _aria_sb_clear(long handle) {
+    struct _aria_sb *sb = (struct _aria_sb *)handle;
+    sb->len = 0;
+}
+
+// --- String: format specifiers ---
+// Simple implementation: handles precision, width, hex, padding
+
+struct _aria_str _aria_format_int(long value, char *spec_ptr, long spec_len) {
+    char buf[128];
+    // Parse spec: [fill][align][sign][#][0][width][.precision][type]
+    // For MVP: support #x (hex), #b (binary), #o (octal), width, 0-padding
+    char fmt_type = 'd';
+    int width = 0;
+    int use_alt = 0;
+    char fill = ' ';
+    for (long i = 0; i < spec_len; i++) {
+        char c = spec_ptr[i];
+        if (c == '#') use_alt = 1;
+        else if (c == '0' && width == 0) fill = '0';
+        else if (c >= '1' && c <= '9') width = width * 10 + (c - '0');
+        else if (c == 'x' || c == 'X' || c == 'b' || c == 'o' || c == 'd') fmt_type = c;
+    }
+    int len = 0;
+    if (fmt_type == 'x') {
+        if (use_alt) len = snprintf(buf, 128, "0x%lx", (unsigned long)value);
+        else len = snprintf(buf, 128, "%lx", (unsigned long)value);
+    } else if (fmt_type == 'X') {
+        if (use_alt) len = snprintf(buf, 128, "0x%lX", (unsigned long)value);
+        else len = snprintf(buf, 128, "%lX", (unsigned long)value);
+    } else if (fmt_type == 'o') {
+        if (use_alt) len = snprintf(buf, 128, "0o%lo", (unsigned long)value);
+        else len = snprintf(buf, 128, "%lo", (unsigned long)value);
+    } else if (fmt_type == 'b') {
+        // Binary formatting
+        char bbuf[66];
+        int bi = 0;
+        unsigned long uv = (unsigned long)value;
+        if (uv == 0) { bbuf[bi++] = '0'; }
+        else { while (uv > 0) { bbuf[bi++] = (uv & 1) ? '1' : '0'; uv >>= 1; } }
+        // Reverse
+        for (int j = 0; j < bi / 2; j++) { char t = bbuf[j]; bbuf[j] = bbuf[bi - 1 - j]; bbuf[bi - 1 - j] = t; }
+        bbuf[bi] = '\0';
+        if (use_alt) len = snprintf(buf, 128, "0b%s", bbuf);
+        else len = snprintf(buf, 128, "%s", bbuf);
+    } else {
+        len = snprintf(buf, 128, "%ld", value);
+    }
+    // Apply width padding
+    if (width > len) {
+        char padded[128];
+        int pad = width - len;
+        for (int j = 0; j < pad; j++) padded[j] = fill;
+        memcpy(padded + pad, buf, (size_t)len);
+        padded[width] = '\0';
+        char *r = (char *)malloc((size_t)(width + 1));
+        memcpy(r, padded, (size_t)(width + 1));
+        struct _aria_str s = {r, width};
+        return s;
+    }
+    char *r = (char *)malloc((size_t)(len + 1));
+    memcpy(r, buf, (size_t)(len + 1));
+    struct _aria_str s = {r, len};
+    return s;
+}
+
+struct _aria_str _aria_format_float(long bits, char *spec_ptr, long spec_len) {
+    double value;
+    memcpy(&value, &bits, sizeof(double));
+    char buf[128];
+    int precision = -1;
+    char fmt_type = 'f';
+    for (long i = 0; i < spec_len; i++) {
+        char c = spec_ptr[i];
+        if (c == '.') {
+            precision = 0;
+            for (long j = i + 1; j < spec_len && spec_ptr[j] >= '0' && spec_ptr[j] <= '9'; j++) {
+                precision = precision * 10 + (spec_ptr[j] - '0');
+            }
+        }
+        if (c == 'e' || c == 'E') fmt_type = c;
+        if (c == '%') fmt_type = '%';
+    }
+    int len = 0;
+    if (fmt_type == '%') {
+        if (precision >= 0) len = snprintf(buf, 128, "%.*f%%", precision, value * 100.0);
+        else len = snprintf(buf, 128, "%.1f%%", value * 100.0);
+    } else if (fmt_type == 'e') {
+        if (precision >= 0) len = snprintf(buf, 128, "%.*e", precision, value);
+        else len = snprintf(buf, 128, "%e", value);
+    } else if (fmt_type == 'E') {
+        if (precision >= 0) len = snprintf(buf, 128, "%.*E", precision, value);
+        else len = snprintf(buf, 128, "%E", value);
+    } else {
+        if (precision >= 0) len = snprintf(buf, 128, "%.*f", precision, value);
+        else len = snprintf(buf, 128, "%g", value);
+    }
+    char *r = (char *)malloc((size_t)(len + 1));
+    memcpy(r, buf, (size_t)(len + 1));
+    struct _aria_str s = {r, len};
+    return s;
+}
+
 // --- Cancellation Token ---
 // Hierarchical: child tokens are triggered when parent is triggered.
 

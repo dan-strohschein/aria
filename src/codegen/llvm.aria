@@ -283,6 +283,21 @@ fn generate_llvm_ir(m: IrModule) -> str {
     p = p.append("declare i64 @_aria_cancel_child(i64)" + nl)
     p = p.append("declare void @_aria_cancel_trigger(i64)" + nl)
     p = p.append("declare i64 @_aria_cancel_is_triggered(i64)" + nl)
+    // String character access
+    p = p.append("declare i64 @_aria_str_char_count(i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_chars(i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_graphemes(i8*, i64)" + nl)
+    // StringBuilder
+    p = p.append("declare i64 @_aria_sb_new()" + nl)
+    p = p.append("declare i64 @_aria_sb_with_capacity(i64)" + nl)
+    p = p.append("declare void @_aria_sb_append(i64, i8*, i64)" + nl)
+    p = p.append("declare void @_aria_sb_append_char(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_sb_len(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_sb_build(i64)" + nl)
+    p = p.append("declare void @_aria_sb_clear(i64)" + nl)
+    // Format specifiers
+    p = p.append("declare " + si64 + " @_aria_format_int(i64, i8*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_format_float(i64, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
     p = p.append(nl)
 
