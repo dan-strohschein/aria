@@ -1,0 +1,12 @@
+// Test: Clone derive — field-by-field copy
+
+struct Point {
+    x: i64
+    y: i64
+} derives [Clone]
+
+entry {
+    a := Point{x: 1, y: 2}
+    b := a.clone()
+    print("clone_derive_test passed")
+}

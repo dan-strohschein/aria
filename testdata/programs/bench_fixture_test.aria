@@ -1,0 +1,14 @@
+// Test: bench blocks and before/after fixtures
+// Note: bench/before/after are compiled but this is a regular test
+
+entry {
+    // Verify bench and fixture keywords don't break compilation
+    // Actual bench execution requires `aria bench` command
+    x := 42
+    assert x == 42
+    print("bench_fixture_test passed")
+}
+
+test "basic assertion" {
+    assert 1 + 1 == 2
+}

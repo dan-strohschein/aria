@@ -1,0 +1,26 @@
+// Test: String interpolation with expressions and method calls
+
+entry {
+    // Test 1: Basic interpolation
+    name := "Aria"
+    greeting := "Hello, {name}!"
+    assert greeting == "Hello, Aria!"
+
+    // Test 2: Expression in interpolation
+    x := 5
+    msg := "value is {x * 2}"
+    assert msg == "value is 10"
+
+    // Test 3: Integer to string in interpolation
+    count := 42
+    result := "count: {count}"
+    assert result == "count: 42"
+
+    // Test 4: Multiple interpolations
+    a := 1
+    b := 2
+    multi := "{a} + {b} = {a + b}"
+    assert multi == "1 + 2 = 3"
+
+    print("interp_methods_test passed")
+}

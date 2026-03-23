@@ -1,0 +1,29 @@
+// Test: Supertraits — trait B: A
+
+trait Printable {
+    fn label(self) -> str
+}
+
+trait Loggable: Printable {
+    fn log_level(self) -> i64
+}
+
+struct Event {
+    name: str
+    level: i64
+}
+
+impl Printable for Event {
+    fn label(self) -> str = self.name
+}
+
+impl Loggable for Event {
+    fn log_level(self) -> i64 = self.level
+}
+
+entry {
+    e := Event{name: "startup", level: 1}
+    assert e.label() == "startup"
+    assert e.log_level() == 1
+    print("supertrait_test passed")
+}

@@ -1,0 +1,29 @@
+// Test: Drop trait + with blocks
+
+struct Resource {
+    id: i64
+}
+
+impl Drop for Resource {
+    fn drop(self) {
+        mut _unused := 0
+    }
+}
+
+entry {
+    // Test 1: Drop called at scope exit
+    mut x := 0
+    if true {
+        r := Resource{id: 42}
+        x = r.id
+    }
+    assert x == 42
+
+    // Test 2: with block — resource cleanup
+    r2 := Resource{id: 99}
+    with r2 {
+        assert r2.id == 99
+    }
+
+    print("drop_with_test passed")
+}

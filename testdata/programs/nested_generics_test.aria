@@ -1,0 +1,31 @@
+// Test: Nested generics and interaction patterns
+
+type Optional =
+    | Some(i64)
+    | None
+
+fn wrap[T](val: T) -> T = val
+
+fn identity[T: Eq](val: T) -> T = val
+
+entry {
+    // Test 1: Generic function with primitive
+    assert wrap(42) == 42
+    assert wrap("hello") == "hello"
+
+    // Test 2: Generic with trait bound
+    assert identity(99) == 99
+
+    // Test 3: Optional inside expressions
+    opt := Some(42)
+    result := match opt {
+        Some(v) => v * 2
+        None => 0
+    }
+    assert result == 84
+
+    // Test 4: Chained generic calls
+    assert wrap(wrap(wrap(5))) == 5
+
+    print("nested_generics_test passed")
+}

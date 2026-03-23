@@ -1,0 +1,12 @@
+// Test: Multi-bound generics T: Eq + Hash
+
+fn needs_eq_hash[T: Eq + Hash](val: T) -> bool = true
+
+fn with_where[T](val: T) -> bool where T: Eq + Hash = true
+
+entry {
+    assert needs_eq_hash(42) == true
+    assert needs_eq_hash("hello") == true
+    assert with_where(99) == true
+    print("multi_bound_test passed")
+}

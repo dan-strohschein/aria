@@ -1,0 +1,20 @@
+// Test: Debug derive — string representation
+
+struct Color {
+    r: i64
+    g: i64
+    b: i64
+} derives [Debug]
+
+entry {
+    c := Color{r: 255, g: 128, b: 0}
+    dbg := c.debug_str()
+    // Should contain field names and values
+    assert dbg.contains("r:")
+    assert dbg.contains("255")
+    assert dbg.contains("g:")
+    assert dbg.contains("128")
+    assert dbg.contains("b:")
+
+    print("debug_derive_test passed")
+}

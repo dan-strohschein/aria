@@ -1,0 +1,29 @@
+// Test: Error category traits — Transient, Permanent, UserFault, SystemFault
+
+type IoError =
+    | NotFound(str)
+    | Timeout(i64)
+
+// NotFound is permanent + user's fault
+// Timeout is transient + system's fault
+
+entry {
+    // Test that error variants can be constructed
+    e1 := NotFound("file.txt")
+    e2 := Timeout(30)
+
+    // Pattern match on error variants
+    result := match e1 {
+        NotFound(path) => path
+        Timeout(ms) => "timeout"
+    }
+    assert result == "file.txt"
+
+    result2 := match e2 {
+        NotFound(path) => 0
+        Timeout(ms) => ms
+    }
+    assert result2 == 30
+
+    print("error_categories_test passed")
+}

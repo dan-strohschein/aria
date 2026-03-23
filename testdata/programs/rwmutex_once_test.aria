@@ -1,0 +1,20 @@
+// Test: RWMutex and Once synchronization primitives
+
+entry {
+    // Test 1: RWMutex basic operations
+    rw := _ariaRWMutexNew()
+    _ariaRWMutexRlock(rw)
+    _ariaRWMutexRunlock(rw)
+    _ariaRWMutexWlock(rw)
+    _ariaRWMutexWunlock(rw)
+
+    // Test 2: Once — executes closure exactly once
+    once := _ariaOnceNew()
+    result := _ariaOnceCall(once, fn() -> i64 { 42 })
+    assert result == 42
+    // Calling again returns same result
+    result2 := _ariaOnceCall(once, fn() -> i64 { 99 })
+    assert result2 == 42  // still 42, not 99
+
+    print("rwmutex_once_test passed")
+}

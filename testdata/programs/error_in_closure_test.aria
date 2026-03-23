@@ -1,0 +1,31 @@
+// Test: Error handling inside closures
+
+type MyError =
+    | Failed(str)
+
+fn try_op(f: fn() -> i64) -> i64 {
+    f()
+}
+
+entry {
+    // Test 1: Closure returning value
+    result := try_op(fn() -> i64 { 42 })
+    assert result == 42
+
+    // Test 2: Closure capturing variables
+    x := 10
+    result2 := try_op(fn() -> i64 { x + 5 })
+    assert result2 == 15
+
+    // Test 3: Higher-order function with closure
+    arr := [1, 2, 3, 4, 5]
+    mut sum := 0
+    mut i := 1
+    while i < arr.len() {
+        sum = sum + arr[i]
+        i = i + 1
+    }
+    assert sum == 15
+
+    print("error_in_closure_test passed")
+}

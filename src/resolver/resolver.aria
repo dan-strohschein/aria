@@ -270,6 +270,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "from", SkBuiltin)
     rr = _add_builtin(rr, "default", SkBuiltin)
     // Memory annotations (used after @)
+    rr = _add_builtin(rr, "_", SkBuiltin)
     rr = _add_builtin(rr, "stack", SkBuiltin)
     rr = _add_builtin(rr, "arena", SkBuiltin)
     rr = _add_builtin(rr, "inline", SkBuiltin)

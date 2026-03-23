@@ -1,0 +1,24 @@
+// Test: @arena and @inline annotations
+
+entry {
+    // Test @arena annotation on expression
+    arena := _ariaArenaNew(8192)
+    ptr := _ariaArenaAlloc(arena, 128)
+    assert _ariaArenaAllocated(arena) == 128
+
+    // Multiple allocations
+    ptr2 := _ariaArenaAlloc(arena, 256)
+    assert _ariaArenaAllocated(arena) == 384
+
+    // Reset and reuse
+    _ariaArenaReset(arena)
+    assert _ariaArenaAllocated(arena) == 0
+
+    _ariaArenaFree(arena)
+
+    // Test @inline annotation (parsed, no-op)
+    x := @inline 42
+    assert x == 42
+
+    print("arena_inline_test passed")
+}

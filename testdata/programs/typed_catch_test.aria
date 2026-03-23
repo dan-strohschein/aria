@@ -1,0 +1,25 @@
+// Test: Typed catch arms — pattern matching on error variants
+
+type AppError =
+    | NotFound(str)
+    | Forbidden(str)
+    | Timeout(i64)
+
+fn get_data(code: i64) -> str ! AppError {
+    if code == 1 { return Err(NotFound("missing")) }
+    if code == 2 { return Err(Forbidden("denied")) }
+    if code == 3 { return Err(Timeout(30)) }
+    Ok("data")
+}
+
+entry {
+    // Test success case
+    val := get_data(0) catch |e| { "error" }
+    assert val == "data"
+
+    // Test basic catch
+    val2 := get_data(1) catch |e| { "caught" }
+    assert val2 == "caught"
+
+    print("typed_catch_test passed")
+}

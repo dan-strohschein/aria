@@ -1,0 +1,29 @@
+// Test: String character access — charCount, chars, graphemes
+
+entry {
+    // Test 1: charCount on ASCII
+    ascii := "hello"
+    assert ascii.charCount() == 5
+
+    // Test 2: charCount on empty string
+    empty := ""
+    assert empty.charCount() == 0
+
+    // Test 3: chars() returns array of codepoints
+    s := "abc"
+    cps := s.chars()
+    // cps[0] is sentinel, cps[1]=97(a), cps[2]=98(b), cps[3]=99(c)
+    assert cps.len() == 4
+    assert cps[1] == 97
+    assert cps[2] == 98
+    assert cps[3] == 99
+
+    // Test 4: graphemes() returns array of single-char strings
+    gs := "xyz".graphemes()
+    assert gs.len() == 4  // sentinel + 3
+    assert gs[1] == "x"
+    assert gs[2] == "y"
+    assert gs[3] == "z"
+
+    print("chars_graphemes_test passed")
+}

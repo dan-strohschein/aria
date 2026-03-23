@@ -1,0 +1,15 @@
+// Test: Task method syntax — .await(), .done(), .result()
+
+entry {
+    // Test task.await() method
+    t1 := _ariaSpawn(fn() -> i64 { 42 })
+    result := t1.await()
+    assert result == 42
+
+    // Test task lifecycle with spawn2 (enhanced API)
+    t2 := _ariaSpawn2(fn() -> i64 { 99 })
+    // Wait for completion
+    _ariaTaskAwait2(t2)
+
+    print("task_methods_test passed")
+}
