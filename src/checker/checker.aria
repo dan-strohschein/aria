@@ -2004,10 +2004,10 @@ fn _pass3_bodies(c: Checker, index: DeclIndex) -> Checker {
                 // extern and fixtures — skip body checking
                 cc = _cset_pos(cc, decl.body_end)
             } else {
-                cc = _check_fn(cc)
+                cc = _check_fn_d(cc, decl)
             }
         } else if kname == "impl" {
-            cc = _check_impl(cc)
+            cc = _check_impl_d(cc, decl)
         } else if kname == "entry" {
             cc = _check_entry(cc)
         } else if kname == "test" {
@@ -2052,18 +2052,17 @@ fn _skip_decl(c: Checker) -> Checker {
 
 // --- Check function ---
 
-fn _check_fn(c: Checker) -> Checker {
-    mut cc := _cadv(c)  // skip fn
-    if _ck2(cc) != "IDENT" { return cc }
-    name := _ccur(cc).text
-    cc = _cadv(cc)
+// DeclInfo-aware function body checker — jumps directly to body_start
+fn _check_fn_d(c: Checker, decl: DeclInfo) -> Checker {
+    name := decl.name
+    mut cc := c
 
     // Look up registered signature
     sig := reg_find_fn(cc.registry, name)
 
     // Skip generic function bodies — they are checked per-specialization
     if fn_is_generic(sig) {
-        return _skip_decl(cc)
+        return _cset_pos(cc, decl.body_end)
     }
 
     // Set function context with effect tracking
@@ -2081,11 +2080,9 @@ fn _check_fn(c: Checker) -> Checker {
         pi = pi + 1
     }
 
-    // Skip to body
+    // Jump directly to body using DeclIndex body_start
+    cc = _cset_pos(cc, decl.body_start)
     lb := "\{"
-    while _ck2(cc) != "=" && _ck2(cc) != lb && _ck2(cc) != "EOF" {
-        cc = _cadv(cc)
-    }
 
     if _ck2(cc) == "=" {
         cc = _cadv(cc)
@@ -2125,7 +2122,8 @@ fn _check_fn(c: Checker) -> Checker {
     cc
 }
 
-fn _check_impl(c: Checker) -> Checker {
+// DeclInfo-aware impl block checker — walks AST method children when available
+fn _check_impl_d(c: Checker, decl: DeclInfo) -> Checker {
     mut cc := _cadv(c)  // skip impl
     // Capture impl type for qualified fn lookup
     mut impl_type := ""
@@ -2140,6 +2138,22 @@ fn _check_impl(c: Checker) -> Checker {
             cc = _cadv(cc)
         }
     }
+
+    // AST path: walk method children from EkImplDecl
+    if decl.node_idx > 0 {
+        impl_node := pool_get(cc.pool, decl.node_idx)
+        mut mi := 0
+        while mi < impl_node.list_count {
+            midx_node := pool_get(cc.pool, impl_node.list_start + mi)
+            method_node := pool_get(cc.pool, midx_node.c0)
+            cc = _check_impl_fn_ast(cc, impl_type, method_node)
+            mi = mi + 1
+        }
+        cc = _cset_pos(cc, decl.body_end)
+        return cc
+    }
+
+    // Legacy token-walk fallback
     lb := "\{"
     while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
     if _ck2(cc) != lb { return cc }
@@ -2162,7 +2176,70 @@ fn _check_impl(c: Checker) -> Checker {
     cc
 }
 
-// Check a function inside an impl block — uses qualified name for sig lookup
+// AST-aware impl method body checker — finds body via token scan within impl bounds
+fn _check_impl_fn_ast(c: Checker, impl_type: str, method_node: Expr) -> Checker {
+    raw_name := method_node.s1
+    name := impl_type + "_" + raw_name
+    mut cc := c
+
+    // Look up registered signature by qualified name
+    sig := reg_find_fn(cc.registry, name)
+
+    // Skip generic method bodies
+    if fn_is_generic(sig) {
+        return cc
+    }
+
+    // No body to check
+    if method_node.b1 == false {
+        return cc
+    }
+
+    // Set function context
+    cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
+
+    // Register params in env
+    mut pi := 1
+    while pi < sig.param_names.len() {
+        cc = _env_add(cc, sig.param_names[pi], sig.param_types[pi], 0)
+        pi = pi + 1
+    }
+
+    // Find method's fn keyword in token stream by scanning forward from current pos
+    // Methods are ordered, so each scan continues where the last left off
+    tlen := cc.tokens.len()
+    mut search_pos := cc.pos
+    lb := "\{"
+    while search_pos < tlen {
+        tk := token_name(cc.tokens[search_pos].kind)
+        if tk == "fn" {
+            next := search_pos + 1
+            if next < tlen {
+                if cc.tokens[next].text == raw_name {
+                    // Found it — skip fn + name, then scan to body
+                    cc = _cset_pos(cc, search_pos + 2)
+                    while _ck2(cc) != "=" && _ck2(cc) != lb && _ck2(cc) != "EOF" {
+                        cc = _cadv(cc)
+                    }
+                    if _ck2(cc) == "=" {
+                        cc = _cadv(cc)
+                        cc = _cskip_nl(cc)
+                        result := _check_expr_full(cc)
+                        cc = result.c
+                    } else if _ck2(cc) == lb {
+                        result := _check_block(cc)
+                        cc = result.c
+                    }
+                    return cc
+                }
+            }
+        }
+        search_pos = search_pos + 1
+    }
+    cc
+}
+
+// Check a function inside an impl block — uses qualified name for sig lookup (legacy)
 fn _check_impl_fn(c: Checker, impl_type: str) -> Checker {
     mut cc := _cadv(c)  // skip fn
     if _ck2(cc) != "IDENT" { return cc }
