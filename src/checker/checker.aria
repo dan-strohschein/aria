@@ -3801,34 +3801,30 @@ fn _check_match(c: Checker) -> CE {
             } else if real_name == "false" {
                 has_false = true
             } else {
-                // Lowercase-starting names are binding patterns (catch-all)
-                // unless followed by @ (named pattern — not a catch-all)
-                first_char := real_name.charAt(0)
-                mut is_named_pat := false
-                np := cc.pos + 1
-                if np < cc.tokens.len() {
-                    if token_name(cc.tokens[np].kind) == "@" {
-                        is_named_pat = true
-                    }
-                }
-                mut is_lower := false
-                if first_char >= "a" {
-                    if first_char <= "z" {
-                        is_lower = true
-                    }
-                }
-                if is_lower {
-                    if is_named_pat == false {
-                        // Lowercase binding pattern — catch-all
-                        mut scan := cc
-                        mut found_guard := false
-                        while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
-                            if _ck2(scan) == "if" { found_guard = true }
-                            scan = _cadv(scan)
+                // Check if name is a known variant — if not, it's a binding (catch-all)
+                mut is_variant_name := false
+                mut si := 1
+                while si < cc.registry.struct_defs.len() {
+                    sdef := cc.registry.struct_defs[si]
+                    if sdef.is_sum {
+                        mut vvi := 1
+                        while vvi < sdef.variant_names.len() {
+                            if sdef.variant_names[vvi] == real_name { is_variant_name = true }
+                            vvi = vvi + 1
                         }
-                        if found_guard == false { has_wildcard = true }
-                        arm_is_guarded = found_guard
                     }
+                    si = si + 1
+                }
+                if is_variant_name == false {
+                    // Binding pattern — catch-all (unless guarded)
+                    mut scan := cc
+                    mut found_guard := false
+                    while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
+                        if _ck2(scan) == "if" { found_guard = true }
+                        scan = _cadv(scan)
+                    }
+                    if found_guard == false { has_wildcard = true }
+                    arm_is_guarded = found_guard
                 }
                 // Track covered variant (only if not guarded)
                 // Also handle or-patterns: A | B => ...

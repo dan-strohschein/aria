@@ -1655,13 +1655,19 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = arr_nt.l
         ll = _lemit(ll, new_inst(OpArrayNew, arr_nt.temp, node.list_count, 0, "", 0))
         mut ai := 0
+        mut arr_elem_type := 0
         while ai < node.list_count {
             idx_node := pool_get(ll.pool, node.list_start + ai)
             elem := _lower_expr_node(ll, idx_node.c0)
             ll = elem.l
             elem_tid := _lget_type(ll, elem.temp)
+            if elem_tid > 0 { arr_elem_type = elem_tid }
             ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, elem.temp, "", elem_tid))
             ai = ai + 1
+        }
+        // Track array type: 13 for [str], or store-based array type for others
+        if arr_elem_type == 12 {
+            ll = _lset_type(ll, arr_nt.temp, 13)
         }
         return LT{l: ll, temp: arr_nt.temp}
     }
@@ -2073,6 +2079,9 @@ fn _lower_assign_node(l: Lowerer, node: Expr) -> LT {
             if _lget_type(ll, result.temp) == 12 {
                 ll = _lemit(ll, new_inst(OpStore, slot + 1, result.temp + 1, 0, "", 0))
             }
+            // Propagate type from RHS to the variable slot
+            rhs_type := _lget_type(ll, result.temp)
+            if rhs_type > 0 { ll = _lset_type(ll, slot, rhs_type) }
         }
     } else if lhs_nk == "FieldAccess" {
         recv := _lower_expr_node(ll, lhs.c0)
@@ -2430,8 +2439,12 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         }
         ll = _lemit(ll, new_inst(OpCall, nt_temp, fa, reg_count, runtime_name, rt))
         if rt == 12 { ll = _lset_type(ll, nt_temp, 12) }
-        if rt > 0 && rt != 12 { ll = _lset_type(ll, nt_temp, rt) }
-        if call_sig.name != "" && call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+        if rt > 0 {
+            if rt != 12 { ll = _lset_type(ll, nt_temp, rt) }
+        }
+        if call_sig.name != "" {
+            if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+        }
         return LT{l: ll, temp: nt_temp}
     }
 
@@ -6516,17 +6529,22 @@ fn _lower_primary(l: Lowerer) -> LT {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpArrayNew, nt.temp, 0, 0, "", 0))
-        ll = _lset_type(ll, nt.temp, 1)
+        mut arr_elem_tid := 0
         while _lk(ll) != "]" && _lk(ll) != "EOF" {
             ll = _lskip_nl(ll)
             elem := _lower_expr(ll)
             ll = elem.l
             elem_tid := _lget_type(ll, elem.temp)
+            if elem_tid > 0 { arr_elem_tid = elem_tid }
             ll = _lemit(ll, new_inst(OpArrayAppend, nt.temp, nt.temp, elem.temp, "", elem_tid))
             ll = _lskip_nl(ll)
             if _lk(ll) == "," { ll = _ladv(ll) }
         }
         if _lk(ll) == "]" { ll = _ladv(ll) }
+        // Track array type: 13 for [str]
+        if arr_elem_tid == 12 {
+            ll = _lset_type(ll, nt.temp, 13)
+        }
         return LT{l: ll, temp: nt.temp}
     }
 
