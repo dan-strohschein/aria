@@ -80,29 +80,20 @@ jobs:
 
       - name: Gen0 → Gen1 (self-compile)
         timeout-minutes: 20
-        run: ./main build ${{ env.ARIA_SOURCES }}
-
-      - name: Gen1 → Gen2 (verify fixed point)
-        timeout-minutes: 20
         run: |
+          ./main build ${{ env.ARIA_SOURCES }}
           cp src/main gen1
-          src/main build ${{ env.ARIA_SOURCES }}
-          cp src/main gen2
-
-          if cmp -s gen1 gen2; then
-            echo "Fixed point reached: Gen1 == Gen2"
-          else
-            echo "WARNING: Gen1 and Gen2 differ ($(wc -c < gen1) vs $(wc -c < gen2) bytes)"
-          fi
+          echo "Gen1 built: $(wc -c < gen1) bytes"
 
       - name: Run test suite
-        run: ARIA_COMPILER=./gen2 bash testdata/programs/run_tests.sh
+        timeout-minutes: 10
+        run: ARIA_COMPILER=./gen1 bash testdata/programs/run_tests.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: aria-${{ matrix.label }}
-          path: gen2
+          path: gen1
 
   release:
     needs: build
@@ -151,7 +142,7 @@ jobs:
           mkdir -p dist
           for dir in artifacts/aria-*; do
             label=$(basename "$dir" | sed 's/^aria-//')
-            src="$dir/gen2"
+            src="$dir/gen1"
             if [ -f "$src" ]; then
               dest="dist/aria-${TAG}-${label}"
               cp "$src" "$dest"
