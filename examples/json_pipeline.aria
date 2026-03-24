@@ -1,0 +1,245 @@
+// CSV Data Pipeline — process structured data with filter/map/fold
+// Run: aria build examples/json_pipeline.aria && ./examples/json_pipeline
+//
+// Demonstrates:
+//   - File I/O with _ariaReadFile/_ariaWriteFile
+//   - String splitting with sentinel offset
+//   - Structs for data modeling
+//   - Array operations (append, iteration)
+//   - Data processing pipeline (filter, transform, aggregate)
+//   - String concatenation for output
+
+fn digit_val(c: str) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn parse_int(s: str) -> i64 {
+    mut result := 0
+    mut i := 0
+    if s.len() > 0 {
+        if s.charAt(0) == "-" { i = 1 }
+    }
+    while i < s.len() {
+        result = result * 10 + digit_val(s.charAt(i))
+        i = i + 1
+    }
+    return result
+}
+
+struct Record {
+    name: str
+    age: i64
+    score: i64
+    active: bool
+}
+
+fn active_label(is_active: bool) -> str {
+    if is_active { return "active" }
+    return "inactive"
+}
+
+fn parse_record(line: str) -> Record {
+    parts := line.split(",")
+    // split sentinel at [0], real data at [1]+
+    if parts.len() < 5 {
+        return Record{name: "", age: 0, score: 0, active: false}
+    }
+    name := parts[1].trim()
+    age := parse_int(parts[2].trim())
+    score := parse_int(parts[3].trim())
+    active := parts[4].trim() == "true"
+    return Record{name: name, age: age, score: score, active: active}
+}
+
+fn format_record(r: Record) -> str {
+    rname := r.name
+    rage := r.age
+    rscore := r.score
+    rlabel := active_label(r.active)
+    return "  " + rname + " (age " + rage.toString() + ", score " + rscore.toString() + ", " + rlabel + ")"
+}
+
+// Filter: keep only active records
+fn filter_active(records: [Record]) -> [Record] {
+    mut result := [Record{name: "", age: 0, score: 0, active: false}]
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            if r.active {
+                result = result.append(r)
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Filter: keep only records with score >= threshold
+fn filter_high_score(records: [Record], threshold: i64) -> [Record] {
+    mut result := [Record{name: "", age: 0, score: 0, active: false}]
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            if r.score >= threshold {
+                result = result.append(r)
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Transform: curve all scores by a percentage
+fn curve_scores(records: [Record], pct: i64) -> [Record] {
+    mut result := [Record{name: "", age: 0, score: 0, active: false}]
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            new_score := r.score + r.score * pct / 100
+            result = result.append(Record{name: r.name, age: r.age, score: new_score, active: r.active})
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Fold: sum all scores
+fn sum_scores(records: [Record]) -> i64 {
+    mut total := 0
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            total = total + r.score
+        }
+        i = i + 1
+    }
+    return total
+}
+
+// Count non-sentinel records
+fn count_records(records: [Record]) -> i64 {
+    mut n := 0
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Find record with highest score
+fn max_score(records: [Record]) -> Record {
+    mut best := Record{name: "none", age: 0, score: 0, active: false}
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            if r.score > best.score {
+                best = r
+            }
+        }
+        i = i + 1
+    }
+    return best
+}
+
+fn print_records(label: str, records: [Record]) {
+    count := count_records(records)
+    println(label + " (" + count.toString() + "):")
+    mut i := 1
+    while i < records.len() {
+        r := records[i]
+        if r.name.len() > 0 {
+            println(format_record(r))
+        }
+        i = i + 1
+    }
+}
+
+entry {
+    // Create sample CSV data
+    data := "Alice,28,92,true\nBob,35,78,true\nCharlie,42,65,false\nDiana,31,88,true\nEve,25,95,true\nFrank,38,72,false\nGrace,29,84,true\nHenry,45,58,false"
+
+    input_file := "/tmp/aria_pipeline_input.csv"
+    _ariaWriteFile(input_file, data)
+    println("Wrote sample data to " + input_file)
+    println("")
+
+    // Read and parse
+    content := _ariaReadFile(input_file)
+    lines := content.split("\n")
+
+    mut records := [Record{name: "", age: 0, score: 0, active: false}]
+    mut li := 1
+    while li < lines.len() {
+        line := lines[li]
+        if line.len() > 0 {
+            records = records.append(parse_record(line))
+        }
+        li = li + 1
+    }
+
+    // Report
+    total := count_records(records)
+    println("=== Data Pipeline Report ===")
+    println("")
+    println("Total records: " + total.toString())
+    println("")
+
+    // Active users
+    active := filter_active(records)
+    print_records("Active users", active)
+    println("")
+
+    // High scorers
+    high := filter_high_score(records, 80)
+    print_records("High scorers (score >= 80)", high)
+    println("")
+
+    // Statistics
+    println("Statistics:")
+    total_score := sum_scores(records)
+    avg := if total > 0 { total_score / total } else { 0 }
+    println("  Total score: " + total_score.toString())
+    println("  Average score: " + avg.toString())
+    best := max_score(records)
+    bname := best.name
+    bscore := best.score
+    println("  Top scorer: " + bname + " (" + bscore.toString() + ")")
+    println("")
+
+    // Pipeline: curve by 10%, then filter active with score >= 80
+    println("After 10% curve, active users scoring 80+:")
+    curved := curve_scores(records, 10)
+    curved_active := filter_active(curved)
+    curved_high := filter_high_score(curved_active, 80)
+    mut ti := 1
+    while ti < curved_high.len() {
+        r := curved_high[ti]
+        if r.name.len() > 0 {
+            println(format_record(r))
+        }
+        ti = ti + 1
+    }
+
+    // Write report
+    output_file := "/tmp/aria_pipeline_report.txt"
+    _ariaWriteFile(output_file, "Pipeline complete. " + total.toString() + " records processed.\n")
+    println("")
+    println("Report saved to " + output_file)
+}

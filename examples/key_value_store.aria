@@ -1,0 +1,228 @@
+// Key-Value Store — a persistent dictionary with file backing
+// Run: aria build examples/key_value_store.aria && ./examples/key_value_store
+//
+// Demonstrates:
+//   - Map operations (set, get, has, len)
+//   - File I/O for persistence (_ariaReadFile, _ariaWriteFile)
+//   - String splitting with sentinel offset (index 1+)
+//   - String concatenation for serialization
+//   - Integer parsing from strings
+//   - All Map method calls extracted to variables before interpolation
+
+fn digit_val(c: str) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn parse_int(s: str) -> i64 {
+    mut result := 0
+    mut i := 0
+    mut neg := false
+    if s.len() > 0 {
+        if s.charAt(0) == "-" {
+            neg = true
+            i = 1
+        }
+    }
+    while i < s.len() {
+        result = result * 10 + digit_val(s.charAt(i))
+        i = i + 1
+    }
+    if neg { return 0 - result }
+    return result
+}
+
+struct KVStore {
+    path: str
+}
+
+fn kv_new(path: str) -> KVStore {
+    return KVStore{path: path}
+}
+
+// Load all key-value pairs from disk
+// Format: one "key=value" per line
+fn kv_load(store: KVStore, keys_out: [str]) -> Map {
+    m := Map()
+    sp := store.path
+    content := _ariaReadFile(sp)
+    if content.len() == 0 { return m }
+
+    lines := content.split("\n")
+    // split has sentinel at index 0, real data at 1+
+    mut idx := 1
+    while idx < lines.len() {
+        line := lines[idx]
+        if line.len() > 0 {
+            if line.contains("=") {
+                eq_pos := line.indexOf("=")
+                if eq_pos > 0 {
+                    key := line.substring(0, eq_pos)
+                    val_str := line.substring(eq_pos + 1, line.len())
+                    m.set(key, parse_int(val_str))
+                }
+            }
+        }
+        idx = idx + 1
+    }
+    return m
+}
+
+// Save all key-value pairs to disk
+fn kv_save(store: KVStore, data: Map, keys: [str]) {
+    mut output := ""
+    mut i := 1  // skip sentinel
+    while i < keys.len() {
+        k := keys[i]
+        if k.len() > 0 {
+            v := data.get(k)
+            vs := v.toString()
+            output = output + k + "=" + vs + "\n"
+        }
+        i = i + 1
+    }
+    sp := store.path
+    _ariaWriteFile(sp, output)
+}
+
+fn print_all(data: Map, keys: [str]) {
+    mut count := 0
+    mut i := 1  // skip sentinel
+    while i < keys.len() {
+        k := keys[i]
+        if k.len() > 0 {
+            v := data.get(k)
+            vs := v.toString()
+            println("  " + k + " = " + vs)
+            count = count + 1
+        }
+        i = i + 1
+    }
+    if count == 0 {
+        println("  (empty)")
+    }
+}
+
+fn has_key(keys: [str], target: str) -> bool {
+    mut i := 1
+    while i < keys.len() {
+        if keys[i] == target { return true }
+        i = i + 1
+    }
+    return false
+}
+
+entry {
+    store_path := "/tmp/aria_kvstore.dat"
+    store := kv_new(store_path)
+
+    println("=== Aria Key-Value Store ===")
+    println("")
+
+    // Start fresh
+    _ariaWriteFile(store_path, "")
+
+    // Create and populate
+    data := Map()
+    mut keys := [""]  // sentinel at [0]
+
+    // SET operations
+    println("--- SET ---")
+    data.set("port", 8080)
+    keys = keys.append("port")
+    println("  SET port = 8080")
+
+    data.set("max_connections", 100)
+    keys = keys.append("max_connections")
+    println("  SET max_connections = 100")
+
+    data.set("timeout_ms", 5000)
+    keys = keys.append("timeout_ms")
+    println("  SET timeout_ms = 5000")
+
+    data.set("debug", 1)
+    keys = keys.append("debug")
+    println("  SET debug = 1")
+
+    data.set("log_level", 3)
+    keys = keys.append("log_level")
+    println("  SET log_level = 3")
+
+    // Save to disk
+    kv_save(store, data, keys)
+    dlen := data.len()
+    dlen_s := dlen.toString()
+    println("")
+    println("Saved " + dlen_s + " entries to " + store_path)
+
+    // GET operations
+    println("")
+    println("--- GET ---")
+    port_val := data.get("port")
+    println("  port = " + port_val.toString())
+
+    timeout_val := data.get("timeout_ms")
+    println("  timeout_ms = " + timeout_val.toString())
+
+    missing_val := data.get("missing_key")
+    println("  missing_key = " + missing_val.toString() + " (default 0)")
+
+    // HAS operations
+    println("")
+    println("--- HAS ---")
+    has_port := data.has("port")
+    has_missing := data.has("missing")
+    println("  has 'port': " + has_port.toString())
+    println("  has 'missing': " + has_missing.toString())
+
+    // UPDATE
+    println("")
+    println("--- UPDATE ---")
+    data.set("timeout_ms", 10000)
+    println("  SET timeout_ms = 10000")
+    data.set("debug", 0)
+    println("  SET debug = 0")
+
+    // Show all
+    println("")
+    println("--- ALL ENTRIES ---")
+    print_all(data, keys)
+
+    // Save updated data
+    kv_save(store, data, keys)
+
+    // Reload from disk to verify persistence
+    println("")
+    println("--- RELOAD FROM DISK ---")
+    loaded := kv_load(store, keys)
+    loaded_len := loaded.len()
+    println("  Loaded " + loaded_len.toString() + " entries")
+
+    lport := loaded.get("port")
+    println("  port = " + lport.toString())
+
+    ltimeout := loaded.get("timeout_ms")
+    println("  timeout_ms = " + ltimeout.toString())
+
+    ldebug := loaded.get("debug")
+    println("  debug = " + ldebug.toString())
+
+    // Verify key values survived round-trip
+    lport2 := loaded.get("port")
+    assert lport2 == 8080
+
+    ldebug2 := loaded.get("debug")
+    assert ldebug2 == 0
+
+    println("")
+    println("Persistence checks passed!")
+}

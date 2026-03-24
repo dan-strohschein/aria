@@ -1,0 +1,271 @@
+// Todo CLI — a command-line task manager
+// Run: aria build examples/todo_cli.aria && ./examples/todo_cli help
+//
+// Demonstrates:
+//   - Structs and sum types
+//   - Pattern matching
+//   - Array operations and iteration
+//   - String methods and interpolation
+//   - Mutable state
+//   - File I/O for persistence
+//   - Command-line argument parsing
+
+fn digit_val(c: str) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn parse_int(s: str) -> i64 {
+    mut result := 0
+    mut i := 0
+    mut neg := false
+    if s.len() > 0 && s.charAt(0) == "-" {
+        neg = true
+        i = 1
+    }
+    while i < s.len() {
+        result = result * 10 + digit_val(s.charAt(i))
+        i = i + 1
+    }
+    if neg { return 0 - result }
+    result
+}
+
+type Priority =
+    | High
+    | Medium
+    | Low
+
+fn priority_label(p: Priority) -> str = match p {
+    High => "HIGH"
+    Medium => "MED"
+    Low => "LOW"
+    _ => "???"
+}
+
+fn priority_key(p: Priority) -> str = match p {
+    High => "high"
+    Medium => "medium"
+    Low => "low"
+    _ => "low"
+}
+
+fn priority_from_str(s: str) -> Priority {
+    if s == "high" { return High }
+    if s == "medium" { return Medium }
+    return Low
+}
+
+struct Todo {
+    id: i64
+    title: str
+    done: bool
+    priority: Priority
+}
+
+fn done_marker(b: bool) -> str {
+    if b { return "x" }
+    return " "
+}
+
+fn done_flag(b: bool) -> str {
+    if b { return "1" }
+    return "0"
+}
+
+fn format_todo(t: Todo) -> str {
+    status := done_marker(t.done)
+    tid := t.id
+    ttitle := t.title
+    pstr := priority_label(t.priority)
+    "[" + status + "] #" + tid.toString() + " [" + pstr + "] " + ttitle
+}
+
+fn serialize(t: Todo) -> str {
+    ds := done_flag(t.done)
+    tid := t.id
+    ttitle := t.title
+    pstr := priority_key(t.priority)
+    tid.toString() + "|" + ttitle + "|" + ds + "|" + pstr
+}
+
+fn deserialize(line: str) -> Todo {
+    parts := line.split("|")
+    // parts[0] is sentinel (empty), real data starts at [1]
+    if parts.len() < 5 {
+        return Todo{id: 0, title: "invalid", done: false, priority: Low}
+    }
+    id := parse_int(parts[1])
+    title := parts[2]
+    done := parts[3] == "1"
+    prio := priority_from_str(parts[4])
+    Todo{id: id, title: title, done: done, priority: prio}
+}
+
+fn save_todos(todos: [Todo], path: str) {
+    mut data := ""
+    for t in todos {
+        if t.id > 0 {
+            data = data + serialize(t) + "\n"
+        }
+    }
+    _ariaWriteFile(path, data)
+}
+
+fn load_todos(path: str) -> [Todo] {
+    content := _ariaReadFile(path)
+    if content.len() == 0 {
+        return [Todo{id: 0, title: "", done: false, priority: Low}]
+    }
+    lines := content.split("\n")
+    mut todos := [Todo{id: 0, title: "", done: false, priority: Low}]
+    for line in lines {
+        if line.len() > 0 {
+            todos = todos.append(deserialize(line))
+        }
+    }
+    todos
+}
+
+fn next_id(todos: [Todo]) -> i64 {
+    mut max := 0
+    for t in todos {
+        if t.id > max { max = t.id }
+    }
+    max + 1
+}
+
+fn print_help() {
+    println("Usage: todo <command> [args]")
+    println("")
+    println("Commands:")
+    println("  list              Show all todos")
+    println("  add <title>       Add a new todo")
+    println("  done <id>         Mark a todo as completed")
+    println("  remove <id>       Remove a todo")
+    println("  stats             Show summary statistics")
+    println("  help              Show this help message")
+}
+
+fn cmd_list(todos: [Todo]) {
+    mut count := 0
+    for t in todos {
+        if t.id > 0 {
+            println(format_todo(t))
+            count = count + 1
+        }
+    }
+    if count == 0 {
+        println("No todos yet. Add one with: todo add \"my task\"")
+    }
+}
+
+fn cmd_stats(todos: [Todo]) {
+    mut total := 0
+    mut done := 0
+    mut high := 0
+    mut medium := 0
+    mut low := 0
+    for t in todos {
+        if t.id > 0 {
+            total = total + 1
+            if t.done { done = done + 1 }
+            ps := priority_key(t.priority)
+            if ps == "high" { high = high + 1 }
+            if ps == "medium" { medium = medium + 1 }
+            if ps == "low" { low = low + 1 }
+        }
+    }
+    pending := total - done
+    println("--- Todo Stats ---")
+    println("Total:    " + total.toString())
+    println("Done:     " + done.toString())
+    println("Pending:  " + pending.toString())
+    println("High:     " + high.toString())
+    println("Medium:   " + medium.toString())
+    println("Low:      " + low.toString())
+}
+
+entry {
+    data_file := "todos.dat"
+    todos := load_todos(data_file)
+    args := _ariaArgs()
+
+    // args[0] is sentinel, args[1] is binary name, args[2+] are user args
+    if args.len() < 3 {
+        print_help()
+        return
+    }
+
+    cmd := args[2]
+
+    if cmd == "list" { cmd_list(todos) }
+    if cmd == "add" {
+        if args.len() < 4 {
+            println("Usage: todo add <title>")
+            return
+        }
+        title := args[3]
+        id := next_id(todos)
+        new_todo := Todo{id: id, title: title, done: false, priority: Medium}
+        new_todos := todos.append(new_todo)
+        save_todos(new_todos, data_file)
+        println("Added: " + format_todo(new_todo))
+    }
+    if cmd == "done" {
+        if args.len() < 4 {
+            println("Usage: todo done <id>")
+            return
+        }
+        target_id := parse_int(args[3])
+        mut found := false
+        mut updated := [Todo{id: 0, title: "", done: false, priority: Low}]
+        for t in todos {
+            if t.id == target_id {
+                updated = updated.append(Todo{id: t.id, title: t.title, done: true, priority: t.priority})
+                found = true
+            } else {
+                updated = updated.append(t)
+            }
+        }
+        if found {
+            save_todos(updated, data_file)
+            println("Marked #" + target_id.toString() + " as done")
+        } else {
+            println("Todo #" + target_id.toString() + " not found")
+        }
+    }
+    if cmd == "remove" {
+        if args.len() < 4 {
+            println("Usage: todo remove <id>")
+            return
+        }
+        target_id := parse_int(args[3])
+        mut found := false
+        mut filtered := [Todo{id: 0, title: "", done: false, priority: Low}]
+        for t in todos {
+            if t.id == target_id {
+                found = true
+            } else {
+                filtered = filtered.append(t)
+            }
+        }
+        if found {
+            save_todos(filtered, data_file)
+            println("Removed #" + target_id.toString())
+        } else {
+            println("Todo #" + target_id.toString() + " not found")
+        }
+    }
+    if cmd == "stats" { cmd_stats(todos) }
+    if cmd == "help" { print_help() }
+}

@@ -1,0 +1,265 @@
+// Concurrent File Processor — parallel word counting across directories
+// Run: aria build examples/file_processor.aria && ./examples/file_processor
+//
+// Demonstrates:
+//   - Concurrency with _ariaSpawn and _ariaTaskAwait
+//   - Channels with _ariaChanNew, _ariaChanSend, _ariaChanRecv
+//   - Mutex with _ariaMutexNew, _ariaMutexLock, _ariaMutexUnlock
+//   - File I/O (_ariaReadFile, _ariaWriteFile, _ariaListDir, _ariaIsDir)
+//   - String processing (split, trim, toLower)
+//   - Map for word frequency counting
+//   - Struct fields extracted before string interpolation
+//   - Helper functions instead of if/else ternary
+
+struct FileResult {
+    path: str
+    lines: i64
+    words: i64
+    chars: i64
+}
+
+fn format_result(r: FileResult) -> str {
+    rpath := r.path
+    rlines := r.lines.toString()
+    rwords := r.words.toString()
+    rchars := r.chars.toString()
+    return "  " + rlines + "\t" + rwords + "\t" + rchars + "\t" + rpath
+}
+
+fn count_words_in_string(text: str) -> i64 {
+    if text.len() == 0 { return 0 }
+    words := text.split(" ")
+    mut count := 0
+    // split sentinel at [0], real data at [1]+
+    mut i := 1
+    while i < words.len() {
+        w := words[i]
+        trimmed := w.trim()
+        if trimmed.len() > 0 {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn process_file(path: str) -> FileResult {
+    content := _ariaReadFile(path)
+    if content.len() == 0 {
+        return FileResult{path: path, lines: 0, words: 0, chars: 0}
+    }
+
+    lines := content.split("\n")
+    mut line_count := 0
+    mut word_count := 0
+    // split sentinel at [0], real lines at [1]+
+    mut i := 1
+    while i < lines.len() {
+        line := lines[i]
+        if line.len() > 0 {
+            line_count = line_count + 1
+            word_count = word_count + count_words_in_string(line)
+        }
+        i = i + 1
+    }
+
+    return FileResult{
+        path: path,
+        lines: line_count,
+        words: word_count,
+        chars: content.len()
+    }
+}
+
+// Strip trailing punctuation from a word
+fn strip_punctuation(word: str) -> str {
+    if word.len() == 0 { return word }
+    last := word.charAt(word.len() - 1)
+    mut needs_strip := false
+    if last == "." { needs_strip = true }
+    if last == "," { needs_strip = true }
+    if last == "!" { needs_strip = true }
+    if last == "?" { needs_strip = true }
+    if needs_strip {
+        return word.substring(0, word.len() - 1)
+    }
+    return word
+}
+
+// Build word frequency map from text
+fn word_frequencies(text: str) -> Map {
+    freq := Map()
+    lines := text.split("\n")
+    mut li := 1
+    while li < lines.len() {
+        line := lines[li]
+        words := line.split(" ")
+        mut wi := 1
+        while wi < words.len() {
+            w := words[wi]
+            raw := w.trim()
+            word := strip_punctuation(raw)
+            if word.len() > 0 {
+                current := freq.get(word)
+                freq.set(word, current + 1)
+            }
+            wi = wi + 1
+        }
+        li = li + 1
+    }
+    return freq
+}
+
+// Collect text files recursively from a directory
+fn should_skip(name: str) -> bool {
+    if name == "." { return true }
+    if name == ".." { return true }
+    if name.len() == 0 { return true }
+    return false
+}
+
+fn is_text_file(name: str) -> bool {
+    if name.endsWith(".aria") { return true }
+    if name.endsWith(".txt") { return true }
+    if name.endsWith(".md") { return true }
+    return false
+}
+
+fn collect_files(dir: str) -> [str] {
+    mut files := [""]
+    entries := _ariaListDir(dir)
+    mut ei := 1
+    while ei < entries.len() {
+        name := entries[ei]
+        if should_skip(name) == false {
+            fp := dir + "/" + name
+            is_dir := _ariaIsDir(fp)
+            if is_dir {
+                sub := collect_files(fp)
+                mut si := 1
+                while si < sub.len() {
+                    sf := sub[si]
+                    if sf.len() > 0 {
+                        files = files.append(sf)
+                    }
+                    si = si + 1
+                }
+            }
+            if is_dir == false {
+                if is_text_file(name) {
+                    files = files.append(fp)
+                }
+            }
+        }
+        ei = ei + 1
+    }
+    return files
+}
+
+entry {
+    println("=== Aria Concurrent File Processor ===")
+    println("")
+
+    // Create sample files to process
+    sample_dir := "/tmp/aria_processor_test"
+    _ariaExec("mkdir -p " + sample_dir)
+
+    _ariaWriteFile(sample_dir + "/readme.txt",
+        "Welcome to the Aria programming language.\nAria is designed for clarity and performance.\nThe type system catches bugs at compile time.\nSum types and pattern matching are first-class features.")
+
+    _ariaWriteFile(sample_dir + "/notes.txt",
+        "TODO: implement generics\nTODO: add trait bounds checking\nDONE: lexer is complete\nDONE: parser handles all expressions\nIN PROGRESS: type checker improvements")
+
+    _ariaWriteFile(sample_dir + "/hello.aria",
+        "// Hello World in Aria\nprintln Hello World")
+
+    _ariaWriteFile(sample_dir + "/data.txt",
+        "The quick brown fox jumps over the lazy dog.\nThe fox was very quick and the dog was very lazy.\nAria makes programming fun and safe.\nTypes prevent bugs before they happen.")
+
+    // Collect all files
+    files := collect_files(sample_dir)
+    mut file_count := 0
+    mut fi := 1
+    while fi < files.len() {
+        f := files[fi]
+        if f.len() > 0 { file_count = file_count + 1 }
+        fi = fi + 1
+    }
+    fc_s := file_count.toString()
+    println("Found " + fc_s + " files to process")
+    println("")
+
+    // Process files concurrently using spawn + channels
+    result_ch := _ariaChanNew(20)
+    mtx := _ariaMutexNew()
+
+    // Spawn a worker for each file
+    mut tasks := [0]  // sentinel
+    mut spawned := 0
+    mut si := 1
+    while si < files.len() {
+        path := files[si]
+        if path.len() > 0 {
+            t := _ariaSpawn(fn() -> i64 {
+                r := process_file(path)
+                // Encode result as a single i64:
+                // lines * 1000000 + words * 1000 + (chars mod 1000)
+                encoded := r.lines * 1000000 + r.words * 1000 + r.chars % 1000
+                _ariaChanSend(result_ch, encoded)
+                return 0
+            })
+            tasks = tasks.append(t)
+            spawned = spawned + 1
+        }
+        si = si + 1
+    }
+
+    // Collect results from channel
+    mut chan_total := 0
+    mut ci := 0
+    while ci < spawned {
+        val := _ariaChanRecv(result_ch)
+        chan_total = chan_total + val
+        ci = ci + 1
+    }
+
+    // Wait for all tasks to complete
+    mut ti := 1
+    while ti < tasks.len() {
+        _ariaTaskAwait(tasks[ti])
+        ti = ti + 1
+    }
+
+    // Also process sequentially for detailed output
+    mut total_lines := 0
+    mut total_words := 0
+    mut total_chars := 0
+
+    println("Lines\tWords\tChars\tFile")
+    println("-----\t-----\t-----\t----")
+    mut pi := 1
+    while pi < files.len() {
+        f := files[pi]
+        if f.len() > 0 {
+            r := process_file(f)
+            println(format_result(r))
+            total_lines = total_lines + r.lines
+            total_words = total_words + r.words
+            total_chars = total_chars + r.chars
+        }
+        pi = pi + 1
+    }
+
+    tl_s := total_lines.toString()
+    tw_s := total_words.toString()
+    tc_s := total_chars.toString()
+    println("-----\t-----\t-----\t----")
+    println("  " + tl_s + "\t" + tw_s + "\t" + tc_s + "\tTOTAL")
+
+    // Cleanup
+    _ariaExec("rm -rf " + sample_dir)
+
+    spawned_s := spawned.toString()
+    println("")
+    println("Done! Processed " + fc_s + " files with " + spawned_s + " concurrent workers.")
+}

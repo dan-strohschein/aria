@@ -1,0 +1,227 @@
+// Database CRUD — PostgreSQL operations with error handling
+// Run: aria run examples/database.aria
+//
+// Demonstrates:
+//   - FFI via PostgreSQL runtime functions
+//   - Error handling with Result-style patterns
+//   - Structs for domain modeling
+//   - String interpolation for queries
+//   - Resource cleanup patterns
+//   - Real-world database patterns
+//
+// Requires: PostgreSQL running locally
+//   createdb aria_example
+//   (or set PGDATABASE=your_db)
+
+fn digit_val(c: str) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn parse_int(s: str) -> i64 {
+    mut result := 0
+    mut i := 0
+    mut neg := false
+    if s.len() > 0 && s.charAt(0) == "-" {
+        neg = true
+        i = 1
+    }
+    while i < s.len() {
+        result = result * 10 + digit_val(s.charAt(i))
+        i = i + 1
+    }
+    if neg { return 0 - result }
+    result
+}
+
+struct User {
+    id: i64
+    name: str
+    email: str
+    age: i64
+}
+
+fn format_user(u: User) -> str {
+    uid := u.id
+    uname := u.name
+    uemail := u.email
+    uage := u.age
+    "User #" + uid.toString() + ": " + uname + " <" + uemail + "> age " + uage.toString()
+}
+
+// Connect to database, returning handle or -1
+fn connect(connstr: str) -> i64 {
+    conn := _ariaPgConnect(connstr)
+    status := _ariaPgStatus(conn)
+    if status != 0 {
+        err := _ariaPgError(conn)
+        println("Connection failed: {err}")
+        return 0 - 1
+    }
+    conn
+}
+
+// Execute a query, printing errors if any
+fn exec_query(conn: i64, sql: str) -> bool {
+    result := _ariaPgExec(conn, sql)
+    status := _ariaPgResultStatus(result)
+    if status != 1 && status != 2 {  // PGRES_COMMAND_OK=1, PGRES_TUPLES_OK=2
+        err := _ariaPgResultError(result)
+        println("Query failed: {err}")
+        println("  SQL: {sql}")
+        _ariaPgClear(result)
+        return false
+    }
+    _ariaPgClear(result)
+    true
+}
+
+fn create_table(conn: i64) -> bool {
+    sql := "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, age INTEGER NOT NULL DEFAULT 0)"
+    exec_query(conn, sql)
+}
+
+fn insert_user(conn: i64, name: str, email: str, age: i64) -> bool {
+    sql := "INSERT INTO users (name, email, age) VALUES ('{name}', '{email}', {age}) ON CONFLICT (email) DO NOTHING"
+    exec_query(conn, sql)
+}
+
+fn list_users(conn: i64) -> [User] {
+    mut users := [User{id: 0, name: "", email: "", age: 0}]
+    sql := "SELECT id, name, email, age FROM users ORDER BY id"
+    result := _ariaPgExec(conn, sql)
+    status := _ariaPgResultStatus(result)
+
+    if status != 2 {  // Not PGRES_TUPLES_OK
+        err := _ariaPgResultError(result)
+        println("Query failed: {err}")
+        _ariaPgClear(result)
+        return users
+    }
+
+    nrows := _ariaPgNrows(result)
+    mut i := 0
+    while i < nrows {
+        id := parse_int(_ariaPgGetValue(result, i, 0))
+        name := _ariaPgGetValue(result, i, 1)
+        email := _ariaPgGetValue(result, i, 2)
+        age := parse_int(_ariaPgGetValue(result, i, 3))
+        users = users.append(User{id: id, name: name, email: email, age: age})
+        i = i + 1
+    }
+    _ariaPgClear(result)
+    users
+}
+
+fn find_user_by_email(conn: i64, email: str) -> User {
+    sql := "SELECT id, name, email, age FROM users WHERE email = '{email}' LIMIT 1"
+    result := _ariaPgExec(conn, sql)
+    status := _ariaPgResultStatus(result)
+
+    if status != 2 || _ariaPgNrows(result) == 0 {
+        _ariaPgClear(result)
+        return User{id: 0, name: "", email: "", age: 0}
+    }
+
+    id := parse_int(_ariaPgGetValue(result, 0, 0))
+    name := _ariaPgGetValue(result, 0, 1)
+    found_email := _ariaPgGetValue(result, 0, 2)
+    age := parse_int(_ariaPgGetValue(result, 0, 3))
+    _ariaPgClear(result)
+    User{id: id, name: name, email: found_email, age: age}
+}
+
+fn update_user_age(conn: i64, email: str, new_age: i64) -> bool {
+    sql := "UPDATE users SET age = {new_age} WHERE email = '{email}'"
+    exec_query(conn, sql)
+}
+
+fn delete_user(conn: i64, email: str) -> bool {
+    sql := "DELETE FROM users WHERE email = '{email}'"
+    exec_query(conn, sql)
+}
+
+fn count_users(conn: i64) -> i64 {
+    sql := "SELECT COUNT(*) FROM users"
+    result := _ariaPgExec(conn, sql)
+    status := _ariaPgResultStatus(result)
+    if status != 2 {
+        _ariaPgClear(result)
+        return 0
+    }
+    count := parse_int(_ariaPgGetValue(result, 0, 0))
+    _ariaPgClear(result)
+    count
+}
+
+entry {
+    println("=== Aria Database Example ===\n")
+
+    // Connect
+    connstr := "dbname=aria_example"
+    conn := connect(connstr)
+    if conn < 0 {
+        println("Could not connect to PostgreSQL.")
+        println("Make sure PostgreSQL is running and 'aria_example' database exists:")
+        println("  createdb aria_example")
+        return
+    }
+    println("Connected to database\n")
+
+    // Create table
+    if create_table(conn) {
+        println("Table 'users' ready")
+    }
+
+    // Insert users
+    println("\n--- INSERT ---")
+    insert_user(conn, "Alice", "alice@example.com", 28)
+    insert_user(conn, "Bob", "bob@example.com", 35)
+    insert_user(conn, "Charlie", "charlie@example.com", 42)
+    println("Inserted 3 users")
+
+    // List all users
+    println("\n--- SELECT ALL ---")
+    users := list_users(conn)
+    for u in users {
+        if u.id > 0 {
+            println(format_user(u))
+        }
+    }
+    println("Total: {count_users(conn)} users")
+
+    // Find specific user
+    println("\n--- FIND BY EMAIL ---")
+    bob := find_user_by_email(conn, "bob@example.com")
+    if bob.id > 0 {
+        println("Found: {format_user(bob)}")
+    } else {
+        println("User not found")
+    }
+
+    // Update
+    println("\n--- UPDATE ---")
+    update_user_age(conn, "bob@example.com", 36)
+    bob2 := find_user_by_email(conn, "bob@example.com")
+    println("Updated Bob: {format_user(bob2)}")
+
+    // Delete
+    println("\n--- DELETE ---")
+    delete_user(conn, "charlie@example.com")
+    println("Deleted Charlie")
+    println("Remaining: {count_users(conn)} users")
+
+    // Cleanup
+    exec_query(conn, "DROP TABLE users")
+    _ariaPgClose(conn)
+    println("\nDone. Cleaned up and disconnected.")
+}

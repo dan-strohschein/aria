@@ -1,0 +1,427 @@
+// Calculator — a recursive descent expression evaluator
+// Run: aria build examples/calculator.aria && ./examples/calculator
+//
+// Demonstrates:
+//   - Recursive descent parsing with operator precedence
+//   - Structs with impl blocks for state management
+//   - Sum types and match expressions for token classification
+//   - String character processing
+//   - Passing state through parameters (no module-level mutable globals)
+
+// --- Token types ---
+
+type TokenKind =
+    | TkNum
+    | TkPlus
+    | TkMinus
+    | TkStar
+    | TkSlash
+    | TkLParen
+    | TkRParen
+    | TkEnd
+
+struct Token {
+    kind: TokenKind
+    value: i64
+}
+
+// --- Expression pool (parallel arrays packed in a struct) ---
+
+struct ExprPool {
+    kinds: [i64]
+    lefts: [i64]
+    rights: [i64]
+    count: i64
+}
+
+fn pool_new() -> ExprPool {
+    ExprPool{kinds: [0], lefts: [0], rights: [0], count: 0}
+}
+
+fn pool_add(p: ExprPool, kind: i64, left: i64, right: i64) -> ExprPool {
+    ExprPool{
+        kinds: p.kinds.append(kind),
+        lefts: p.lefts.append(left),
+        rights: p.rights.append(right),
+        count: p.count + 1
+    }
+}
+
+fn pool_index(p: ExprPool) -> i64 {
+    return p.count
+}
+
+// --- Helpers ---
+
+fn is_digit(c: str) -> bool {
+    if c == "0" { return true }
+    if c == "1" { return true }
+    if c == "2" { return true }
+    if c == "3" { return true }
+    if c == "4" { return true }
+    if c == "5" { return true }
+    if c == "6" { return true }
+    if c == "7" { return true }
+    if c == "8" { return true }
+    if c == "9" { return true }
+    return false
+}
+
+fn char_to_digit(c: str) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+// --- Tokenizer ---
+
+fn tokenize(input: str) -> [Token] {
+    mut tokens := [Token{kind: TkEnd, value: 0}]  // sentinel
+    mut pos := 0
+    len := input.len()
+
+    while pos < len {
+        ch := input.charAt(pos)
+
+        // Skip whitespace
+        if ch == " " {
+            pos = pos + 1
+        }
+
+        if ch != " " {
+            if is_digit(ch) {
+                // Parse multi-digit number
+                mut num := 0
+                while pos < len {
+                    c := input.charAt(pos)
+                    if is_digit(c) == false { break }
+                    num = num * 10 + char_to_digit(c)
+                    pos = pos + 1
+                }
+                tokens = tokens.append(Token{kind: TkNum, value: num})
+            }
+
+            if is_digit(ch) == false {
+                if ch == "+" {
+                    tokens = tokens.append(Token{kind: TkPlus, value: 0})
+                }
+                if ch == "-" {
+                    tokens = tokens.append(Token{kind: TkMinus, value: 0})
+                }
+                if ch == "*" {
+                    tokens = tokens.append(Token{kind: TkStar, value: 0})
+                }
+                if ch == "/" {
+                    tokens = tokens.append(Token{kind: TkSlash, value: 0})
+                }
+                if ch == "(" {
+                    tokens = tokens.append(Token{kind: TkLParen, value: 0})
+                }
+                if ch == ")" {
+                    tokens = tokens.append(Token{kind: TkRParen, value: 0})
+                }
+                pos = pos + 1
+            }
+        }
+    }
+
+    tokens = tokens.append(Token{kind: TkEnd, value: 0})
+    return tokens
+}
+
+// --- Parser state ---
+
+struct Parser {
+    tokens: [Token]
+    pos: i64
+    pool: ExprPool
+}
+
+struct ParseResult {
+    value: i64
+    parser: Parser
+}
+
+fn is_kind_num(k: TokenKind) -> bool {
+    match k {
+        TkNum => true
+        _ => false
+    }
+}
+
+fn is_kind_lparen(k: TokenKind) -> bool {
+    match k {
+        TkLParen => true
+        _ => false
+    }
+}
+
+fn is_kind_plus(k: TokenKind) -> bool {
+    match k {
+        TkPlus => true
+        _ => false
+    }
+}
+
+fn is_kind_minus(k: TokenKind) -> bool {
+    match k {
+        TkMinus => true
+        _ => false
+    }
+}
+
+fn is_kind_star(k: TokenKind) -> bool {
+    match k {
+        TkStar => true
+        _ => false
+    }
+}
+
+fn is_kind_slash(k: TokenKind) -> bool {
+    match k {
+        TkSlash => true
+        _ => false
+    }
+}
+
+// --- Recursive descent parser ---
+// Grammar:
+//   expr   -> term (('+' | '-') term)*
+//   term   -> factor (('*' | '/') factor)*
+//   factor -> NUMBER | '(' expr ')'
+
+fn parse_factor(p: Parser) -> ParseResult {
+    kind := p.tokens[p.pos].kind
+    val := p.tokens[p.pos].value
+
+    if is_kind_num(kind) {
+        new_pool := pool_add(p.pool, 0, val, 0)
+        idx := pool_index(new_pool)
+        return ParseResult{
+            value: idx,
+            parser: Parser{tokens: p.tokens, pos: p.pos + 1, pool: new_pool}
+        }
+    }
+
+    if is_kind_lparen(kind) {
+        inner := parse_expr(Parser{tokens: p.tokens, pos: p.pos + 1, pool: p.pool})
+        // skip closing paren
+        return ParseResult{
+            value: inner.value,
+            parser: Parser{tokens: inner.parser.tokens, pos: inner.parser.pos + 1, pool: inner.parser.pool}
+        }
+    }
+
+    // Fallback: treat as zero
+    new_pool := pool_add(p.pool, 0, 0, 0)
+    idx := pool_index(new_pool)
+    return ParseResult{
+        value: idx,
+        parser: Parser{tokens: p.tokens, pos: p.pos, pool: new_pool}
+    }
+}
+
+fn parse_term(p: Parser) -> ParseResult {
+    mut result := parse_factor(p)
+
+    mut running := true
+    while running {
+        kind := result.parser.tokens[result.parser.pos].kind
+
+        if is_kind_star(kind) {
+            right := parse_factor(Parser{tokens: result.parser.tokens, pos: result.parser.pos + 1, pool: result.parser.pool})
+            new_pool := pool_add(right.parser.pool, 3, result.value, right.value)
+            idx := pool_index(new_pool)
+            result = ParseResult{
+                value: idx,
+                parser: Parser{tokens: right.parser.tokens, pos: right.parser.pos, pool: new_pool}
+            }
+        }
+
+        if is_kind_star(kind) == false {
+            if is_kind_slash(kind) {
+                right := parse_factor(Parser{tokens: result.parser.tokens, pos: result.parser.pos + 1, pool: result.parser.pool})
+                new_pool := pool_add(right.parser.pool, 4, result.value, right.value)
+                idx := pool_index(new_pool)
+                result = ParseResult{
+                    value: idx,
+                    parser: Parser{tokens: right.parser.tokens, pos: right.parser.pos, pool: new_pool}
+                }
+            }
+
+            if is_kind_slash(kind) == false {
+                running = false
+            }
+        }
+    }
+
+    return result
+}
+
+fn parse_expr(p: Parser) -> ParseResult {
+    mut result := parse_term(p)
+
+    mut running := true
+    while running {
+        kind := result.parser.tokens[result.parser.pos].kind
+
+        if is_kind_plus(kind) {
+            right := parse_term(Parser{tokens: result.parser.tokens, pos: result.parser.pos + 1, pool: result.parser.pool})
+            new_pool := pool_add(right.parser.pool, 1, result.value, right.value)
+            idx := pool_index(new_pool)
+            result = ParseResult{
+                value: idx,
+                parser: Parser{tokens: right.parser.tokens, pos: right.parser.pos, pool: new_pool}
+            }
+        }
+
+        if is_kind_plus(kind) == false {
+            if is_kind_minus(kind) {
+                right := parse_term(Parser{tokens: result.parser.tokens, pos: result.parser.pos + 1, pool: result.parser.pool})
+                new_pool := pool_add(right.parser.pool, 2, result.value, right.value)
+                idx := pool_index(new_pool)
+                result = ParseResult{
+                    value: idx,
+                    parser: Parser{tokens: right.parser.tokens, pos: right.parser.pos, pool: new_pool}
+                }
+            }
+
+            if is_kind_minus(kind) == false {
+                running = false
+            }
+        }
+    }
+
+    return result
+}
+
+// --- Evaluator ---
+// kind: 0=Num, 1=Add, 2=Sub, 3=Mul, 4=Div
+
+fn eval(pool: ExprPool, idx: i64) -> i64 {
+    kind := pool.kinds[idx]
+    left := pool.lefts[idx]
+    right := pool.rights[idx]
+
+    if kind == 0 { return left }
+    if kind == 1 { return eval(pool, left) + eval(pool, right) }
+    if kind == 2 { return eval(pool, left) - eval(pool, right) }
+    if kind == 3 { return eval(pool, left) * eval(pool, right) }
+    if kind == 4 {
+        divisor := eval(pool, right)
+        if divisor == 0 {
+            println("Error: division by zero")
+            return 0
+        }
+        return eval(pool, left) / divisor
+    }
+    return 0
+}
+
+// --- Pretty-print the expression tree ---
+
+fn tree_str(pool: ExprPool, idx: i64) -> str {
+    kind := pool.kinds[idx]
+    left := pool.lefts[idx]
+    right := pool.rights[idx]
+
+    if kind == 0 { return left.toString() }
+
+    mut op := "?"
+    if kind == 1 { op = "+" }
+    if kind == 2 { op = "-" }
+    if kind == 3 { op = "*" }
+    if kind == 4 { op = "/" }
+
+    return "(" + tree_str(pool, left) + " " + op + " " + tree_str(pool, right) + ")"
+}
+
+// --- Top-level evaluate function ---
+
+fn calculate(expr: str) -> i64 {
+    tokens := tokenize(expr)
+    p := Parser{tokens: tokens, pos: 1, pool: pool_new()}  // pos=1 skips sentinel
+    result := parse_expr(p)
+    return eval(result.parser.pool, result.value)
+}
+
+// --- Main ---
+
+entry {
+    println("=== Aria Calculator ===")
+    println("")
+
+    // Test basic arithmetic
+    println("Basic arithmetic:")
+    r1 := calculate("2 + 3")
+    println("  2 + 3 = " + r1.toString())
+    assert r1 == 5
+
+    r2 := calculate("10 - 4")
+    println("  10 - 4 = " + r2.toString())
+    assert r2 == 6
+
+    r3 := calculate("3 * 7")
+    println("  3 * 7 = " + r3.toString())
+    assert r3 == 21
+
+    r4 := calculate("20 / 4")
+    println("  20 / 4 = " + r4.toString())
+    assert r4 == 5
+
+    // Test operator precedence
+    println("")
+    println("Precedence:")
+    r5 := calculate("2 + 3 * 4")
+    println("  2 + 3 * 4 = " + r5.toString())
+    assert r5 == 14
+
+    r6 := calculate("10 - 2 * 3")
+    println("  10 - 2 * 3 = " + r6.toString())
+    assert r6 == 4
+
+    r7 := calculate("2 * 3 + 4 * 5")
+    println("  2 * 3 + 4 * 5 = " + r7.toString())
+    assert r7 == 26
+
+    // Test parentheses
+    println("")
+    println("Parentheses:")
+    r8 := calculate("(2 + 3) * 4")
+    println("  (2 + 3) * 4 = " + r8.toString())
+    assert r8 == 20
+
+    r9 := calculate("((1 + 2) * (3 + 4))")
+    println("  ((1 + 2) * (3 + 4)) = " + r9.toString())
+    assert r9 == 21
+
+    r10 := calculate("(10 - 2) * (3 + 1)")
+    println("  (10 - 2) * (3 + 1) = " + r10.toString())
+    assert r10 == 32
+
+    // Show parse tree
+    println("")
+    println("Parse tree for '2 + 3 * 4':")
+    tokens := tokenize("2 + 3 * 4")
+    p := Parser{tokens: tokens, pos: 1, pool: pool_new()}
+    result := parse_expr(p)
+    tree := tree_str(result.parser.pool, result.value)
+    println("  " + tree)
+
+    // More tests
+    r11 := calculate("100 / 5 / 4")
+    println("")
+    println("  100 / 5 / 4 = " + r11.toString())
+    assert r11 == 5
+
+    println("")
+    println("All calculator tests passed!")
+}

@@ -1,0 +1,118 @@
+// Chat Server — a multi-client TCP chat room
+// Run: aria run examples/chat_server.aria
+//
+// Demonstrates:
+//   - TCP networking (_ariaTcp* functions)
+//   - Concurrency with spawn and channels
+//   - Mutex for shared state
+//   - String processing and interpolation
+//   - Structured concurrency patterns
+//   - Real-world server architecture
+
+fn broadcast(clients: [i64], sender_fd: i64, message: str, mtx: i64) {
+    _ariaMutexLock(mtx)
+    mut i := 0
+    while i < clients.len() {
+        fd := clients[i]
+        if fd > 0 && fd != sender_fd {
+            _ariaTcpWrite(fd, message)
+        }
+        i = i + 1
+    }
+    _ariaMutexUnlock(mtx)
+}
+
+fn handle_client(fd: i64, client_id: i64, msg_ch: i64) -> i64 {
+    // Announce arrival
+    _ariaChanSend(msg_ch, client_id * 1000000 + 1)  // code: join
+
+    // Read messages until disconnect
+    mut running := true
+    while running {
+        data := _ariaTcpRead(fd, 4096)
+        if data.len() == 0 {
+            running = false
+        } else {
+            // Send data back to main loop via channel
+            // In a real app we'd send the message string; here we echo
+            trimmed := data.trim()
+            if trimmed.len() > 0 {
+                response := "[Client {client_id}] {trimmed}\n"
+                _ariaTcpWrite(fd, response)
+            }
+        }
+    }
+
+    // Announce departure
+    _ariaChanSend(msg_ch, client_id * 1000000 + 2)  // code: leave
+    _ariaTcpClose(fd)
+    0
+}
+
+entry {
+    port := 19090
+    server := _ariaTcpSocket()
+    assert server >= 0
+
+    br := _ariaTcpBind(server, "127.0.0.1", port)
+    if br != 0 {
+        println("Failed to bind to port {port}")
+        return
+    }
+
+    lr := _ariaTcpListen(server, 10)
+    assert lr == 0
+    println("Chat server listening on 127.0.0.1:{port}")
+    println("Connect with: nc 127.0.0.1 {port}")
+
+    // Message channel for client events
+    msg_ch := _ariaChanNew(100)
+    mtx := _ariaMutexNew()
+
+    // Track connected clients
+    mut client_count := 0
+    mut max_clients := 3  // Accept 3 clients then shut down (for demo)
+
+    // Spawn a background client to test the server
+    _ariaSpawn(fn() -> i64 {
+        // Give server time to start accepting
+        _ariaExec("sleep 0.2")
+
+        // Connect and send a message
+        _ariaExec("echo 'hello from test client' | nc -w1 127.0.0.1 19090")
+        0
+    })
+
+    // Accept loop
+    mut running := true
+    while running && client_count < max_clients {
+        // Set accept timeout so we don't block forever
+        _ariaTcpSetTimeout(server, 0, 2000)  // 2 second timeout
+
+        client_fd := _ariaTcpAccept(server)
+        if client_fd >= 0 {
+            client_count = client_count + 1
+            peer := _ariaTcpPeerAddr(client_fd)
+            println("Client {client_count} connected from {peer}")
+
+            // Send welcome message
+            welcome := "Welcome to Aria Chat! You are client #{client_count}\n"
+            _ariaTcpWrite(client_fd, welcome)
+
+            // Spawn handler for this client
+            cid := client_count
+            _ariaSpawn(fn() -> i64 {
+                handle_client(client_fd, cid, msg_ch)
+            })
+        } else {
+            // Timeout or error — check if we should keep going
+            if client_count > 0 {
+                running = false
+            }
+        }
+    }
+
+    // Cleanup
+    _ariaTcpClose(server)
+    println("Chat server shut down after {client_count} connections")
+}
