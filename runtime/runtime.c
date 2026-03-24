@@ -1,14 +1,27 @@
 // Aria Runtime — C implementation
-// Replaces hand-assembled ARM64 runtime functions.
+// Cross-platform: macOS, Linux, Windows
 // Linked with LLVM IR output by clang.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <direct.h>
+#include <windows.h>
+#define read _read
+#define write _write
+#define open _open
+#define close _close
+#define stat _stat
+#define O_RDONLY _O_RDONLY
+#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#endif
 
 // --- String struct (used by many functions) ---
 struct _aria_str {
@@ -684,31 +697,44 @@ long _aria_array_slice(long arr_ptr, long start) {
 // --- Filesystem ---
 
 long _aria_list_dir(char *path_ptr, long path_len) {
-    // Null-terminate the path
     char *path = (char *)malloc((size_t)(path_len + 1));
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
     long arr = _aria_array_new(16);
-    // Sentinel: empty string struct (same pattern as _aria_str_split)
     long *sentinel_str = (long *)malloc(16);
     sentinel_str[0] = (long)"";
     sentinel_str[1] = 0;
     _aria_array_append(arr, (long)sentinel_str);
 
+#ifdef _WIN32
+    char search[MAX_PATH];
+    snprintf(search, MAX_PATH, "%s\\*", path);
+    free(path);
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA(search, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return arr;
+    do {
+        if (fd.cFileName[0] == '.' && (fd.cFileName[1] == '\0' ||
+            (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0'))) continue;
+        long name_len = (long)strlen(fd.cFileName);
+        char *name = (char *)malloc((size_t)(name_len + 1));
+        memcpy(name, fd.cFileName, (size_t)name_len);
+        name[name_len] = '\0';
+        long *str_struct = (long *)malloc(16);
+        str_struct[0] = (long)name;
+        str_struct[1] = name_len;
+        _aria_array_append(arr, (long)str_struct);
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+#else
     DIR *dir = opendir(path);
     free(path);
-    if (!dir) {
-        return arr;
-    }
-
+    if (!dir) return arr;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        // Skip "." and ".."
         if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' ||
-            (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
-            continue;
-        }
+            (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) continue;
         long name_len = (long)strlen(entry->d_name);
         char *name = (char *)malloc((size_t)(name_len + 1));
         memcpy(name, entry->d_name, (size_t)name_len);
@@ -719,6 +745,7 @@ long _aria_list_dir(char *path_ptr, long path_len) {
         _aria_array_append(arr, (long)str_struct);
     }
     closedir(dir);
+#endif
     return arr;
 }
 
@@ -1087,9 +1114,17 @@ struct _aria_str _aria_getenv(char *name_ptr, long name_len) {
 
 // --- TCP Networking ---
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#define close closesocket
+typedef int socklen_t;
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 #include <errno.h>
 
 // Create a TCP socket. Returns fd or -1 on error.
@@ -1098,7 +1133,11 @@ long _aria_tcp_socket(void) {
     if (fd < 0) return -1;
     // Enable SO_REUSEADDR to avoid "address already in use"
     int opt = 1;
+#ifdef _WIN32
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#else
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
     return (long)fd;
 }
 
@@ -1200,7 +1239,9 @@ long _aria_tcp_set_timeout(long fd, long kind, long ms) {
 }
 
 // --- PostgreSQL (libpq) ---
+// Only compiled when ARIA_HAS_LIBPQ is defined (optional dependency)
 
+#ifdef ARIA_HAS_LIBPQ
 #include <libpq-fe.h>
 
 // Connect to PostgreSQL. Returns connection handle (cast PGconn* to long).
@@ -1370,7 +1411,128 @@ void _aria_pg_clear(long result) {
     if (result != 0) PQclear((PGresult *)result);
 }
 
-// --- Concurrency (pthreads) ---
+#else  // !ARIA_HAS_LIBPQ — provide stubs so linker doesn't fail
+long _aria_pg_connect(char *s, long l) { return 0; }
+void _aria_pg_close(long c) {}
+long _aria_pg_status(long c) { return -1; }
+struct _aria_str _aria_pg_error(long c) { struct _aria_str s = {"no libpq", 8}; return s; }
+long _aria_pg_exec(long c, char *q, long ql) { return 0; }
+long _aria_pg_exec_params(long c, char *q, long ql, long p) { return 0; }
+long _aria_pg_result_status(long r) { return -1; }
+struct _aria_str _aria_pg_result_error(long r) { struct _aria_str s = {"no libpq", 8}; return s; }
+long _aria_pg_nrows(long r) { return 0; }
+long _aria_pg_ncols(long r) { return 0; }
+struct _aria_str _aria_pg_field_name(long r, long c) { struct _aria_str s = {"", 0}; return s; }
+struct _aria_str _aria_pg_get_value(long r, long row, long col) { struct _aria_str s = {"", 0}; return s; }
+long _aria_pg_is_null(long r, long row, long col) { return 1; }
+void _aria_pg_clear(long r) {}
+#endif  // ARIA_HAS_LIBPQ
+
+// --- Concurrency ---
+
+#ifdef _WIN32
+#include <process.h>
+
+struct _aria_spawn_arg {
+    long (*fn_ptr)(long);
+    long env_ptr;
+};
+
+static unsigned __stdcall _aria_spawn_trampoline(void *arg) {
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)arg;
+    long result = sa->fn_ptr(sa->env_ptr);
+    free(sa);
+    return (unsigned)result;
+}
+
+long _aria_spawn(long fn_ptr, long env_ptr) {
+    struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)malloc(sizeof(struct _aria_spawn_arg));
+    sa->fn_ptr = (long (*)(long))fn_ptr;
+    sa->env_ptr = env_ptr;
+    uintptr_t th = _beginthreadex(NULL, 0, _aria_spawn_trampoline, sa, 0, NULL);
+    if (th == 0) { free(sa); return -1; }
+    return (long)th;
+}
+
+long _aria_task_await(long handle) {
+    if (handle <= 0) return -1;
+    WaitForSingleObject((HANDLE)handle, INFINITE);
+    DWORD result = 0;
+    GetExitCodeThread((HANDLE)handle, &result);
+    CloseHandle((HANDLE)handle);
+    return (long)result;
+}
+
+// Windows channel using CRITICAL_SECTION + CONDITION_VARIABLE
+struct _aria_chan {
+    CRITICAL_SECTION cs;
+    CONDITION_VARIABLE cv_send;
+    CONDITION_VARIABLE cv_recv;
+    long *buf;
+    long capacity;
+    long head;
+    long tail;
+    long count;
+    int closed;
+};
+
+long _aria_chan_new(long capacity) {
+    if (capacity < 1) capacity = 1;
+    struct _aria_chan *ch = (struct _aria_chan *)calloc(1, sizeof(struct _aria_chan));
+    InitializeCriticalSection(&ch->cs);
+    InitializeConditionVariable(&ch->cv_send);
+    InitializeConditionVariable(&ch->cv_recv);
+    ch->buf = (long *)calloc((size_t)capacity, sizeof(long));
+    ch->capacity = capacity;
+    return (long)ch;
+}
+
+long _aria_chan_send(long handle, long value) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    EnterCriticalSection(&ch->cs);
+    while (ch->count == ch->capacity && !ch->closed)
+        SleepConditionVariableCS(&ch->cv_send, &ch->cs, INFINITE);
+    if (ch->closed) { LeaveCriticalSection(&ch->cs); return -1; }
+    ch->buf[ch->tail] = value;
+    ch->tail = (ch->tail + 1) % ch->capacity;
+    ch->count++;
+    WakeConditionVariable(&ch->cv_recv);
+    LeaveCriticalSection(&ch->cs);
+    return 0;
+}
+
+long _aria_chan_recv(long handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    EnterCriticalSection(&ch->cs);
+    while (ch->count == 0 && !ch->closed)
+        SleepConditionVariableCS(&ch->cv_recv, &ch->cs, INFINITE);
+    if (ch->count == 0 && ch->closed) { LeaveCriticalSection(&ch->cs); return 0; }
+    long val = ch->buf[ch->head];
+    ch->head = (ch->head + 1) % ch->capacity;
+    ch->count--;
+    WakeConditionVariable(&ch->cv_send);
+    LeaveCriticalSection(&ch->cs);
+    return val;
+}
+
+void _aria_chan_close(long handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    EnterCriticalSection(&ch->cs);
+    ch->closed = 1;
+    WakeAllConditionVariable(&ch->cv_send);
+    WakeAllConditionVariable(&ch->cv_recv);
+    LeaveCriticalSection(&ch->cs);
+}
+
+long _aria_mutex_new(void) {
+    CRITICAL_SECTION *cs = (CRITICAL_SECTION *)malloc(sizeof(CRITICAL_SECTION));
+    InitializeCriticalSection(cs);
+    return (long)cs;
+}
+void _aria_mutex_lock(long handle) { EnterCriticalSection((CRITICAL_SECTION *)handle); }
+void _aria_mutex_unlock(long handle) { LeaveCriticalSection((CRITICAL_SECTION *)handle); }
+
+#else  // POSIX
 
 #include <pthread.h>
 
@@ -2033,6 +2195,8 @@ long _aria_cancel_is_triggered(long handle) {
     }
     return 0;
 }
+
+#endif  // _WIN32 / POSIX concurrency
 
 // --- Entry point ---
 

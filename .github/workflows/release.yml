@@ -102,6 +102,12 @@ jobs:
           build_target darwin  amd64 darwin-amd64
           build_target linux   amd64 linux-amd64
           build_target linux   arm64 linux-arm64
+          build_target windows amd64 windows-amd64
+
+          # Rename Windows binary to .exe
+          if [ -f "dist/aria-${TAG}-windows-amd64" ]; then
+            mv "dist/aria-${TAG}-windows-amd64" "dist/aria-${TAG}-windows-amd64.exe"
+          fi
 
           echo ""
           echo "=== Release artifacts ==="
@@ -162,6 +168,7 @@ jobs:
           | `aria-${TAG}-darwin-amd64` | macOS | Intel x86_64 |
           | `aria-${TAG}-linux-amd64` | Linux | x86_64 |
           | `aria-${TAG}-linux-arm64` | Linux | ARM64 / AArch64 |
+          | `aria-${TAG}-windows-amd64.exe` | Windows | x86_64 |
 
           ### What's in This Release
 
