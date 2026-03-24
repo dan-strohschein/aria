@@ -47,6 +47,8 @@ jobs:
             label: darwin-arm64
           - os: ubuntu-latest
             label: linux-amd64
+          - os: windows-latest
+            label: windows-amd64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -69,23 +71,46 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang
 
+      - name: Set up clang (Windows)
+        if: runner.os == 'Windows'
+        run: choco install llvm -y
+
       - name: Build bootstrap compiler
+        shell: bash
         run: |
           cd aria-compiler-go
           sed -i.bak 's/^go .*/go 1.23/' go.mod
-          go build -o ../bootstrap-aria ./cmd/aria
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go build -o ../bootstrap-aria.exe ./cmd/aria
+          else
+            go build -o ../bootstrap-aria ./cmd/aria
+          fi
 
       - name: Bootstrap → Gen0
-        run: ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
+          else
+            ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
+          fi
 
       - name: Gen0 → Gen1 (self-compile)
         timeout-minutes: 20
+        shell: bash
         run: |
-          ./main build ${{ env.ARIA_SOURCES }}
-          cp src/main gen1
-          echo "Gen1 built: $(wc -c < gen1) bytes"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./main.exe build ${{ env.ARIA_SOURCES }}
+            cp src/main.exe gen1.exe
+            echo "Gen1 built: $(wc -c < gen1.exe) bytes"
+          else
+            ./main build ${{ env.ARIA_SOURCES }}
+            cp src/main gen1
+            echo "Gen1 built: $(wc -c < gen1) bytes"
+          fi
 
       - name: Run test suite
+        if: runner.os != 'Windows'
         timeout-minutes: 10
         run: ARIA_COMPILER=./gen1 bash testdata/programs/run_tests.sh
 
@@ -93,7 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aria-${{ matrix.label }}
-          path: gen1
+          path: ${{ runner.os == 'Windows' && 'gen1.exe' || 'gen1' }}
 
   release:
     needs: build
@@ -142,10 +167,13 @@ jobs:
           mkdir -p dist
           for dir in artifacts/aria-*; do
             label=$(basename "$dir" | sed 's/^aria-//')
-            src="$dir/gen1"
-            if [ -f "$src" ]; then
+            if [ -f "$dir/gen1.exe" ]; then
+              dest="dist/aria-${TAG}-${label}.exe"
+              cp "$dir/gen1.exe" "$dest"
+              echo "Prepared: $dest ($(wc -c < "$dest") bytes)"
+            elif [ -f "$dir/gen1" ]; then
               dest="dist/aria-${TAG}-${label}"
-              cp "$src" "$dest"
+              cp "$dir/gen1" "$dest"
               chmod +x "$dest"
               echo "Prepared: $dest ($(wc -c < "$dest") bytes)"
             fi
@@ -172,23 +200,28 @@ jobs:
             --title "Aria ${TAG}" \
             --notes "## Aria Compiler ${TAG}
 
-          Self-hosting Aria compiler. Each binary was produced by the compiler compiling itself (Gen2, verified fixed point).
+          Self-hosting Aria compiler. Each binary was produced by the compiler compiling itself.
 
           ### Quick Start
           \`\`\`bash
+          # macOS / Linux
           chmod +x aria-*
           sudo mv aria-* /usr/local/bin/aria
           aria build hello.aria && ./hello
+
+          # Windows
+          aria-v...-windows-amd64.exe build hello.aria
+          hello.exe
           \`\`\`
 
           ### Requires
-          - **clang** (macOS: xcode-select --install, Ubuntu: sudo apt install clang)
+          - **clang** (macOS: xcode-select --install, Ubuntu: sudo apt install clang, Windows: choco install llvm)
 
           ### Binaries
           | File | Platform |
           |------|----------|
           | aria-${TAG}-darwin-arm64 | macOS Apple Silicon |
-          | aria-${TAG}-darwin-amd64 | macOS Intel |
-          | aria-${TAG}-linux-amd64 | Linux x86_64 |" \
+          | aria-${TAG}-linux-amd64 | Linux x86_64 |
+          | aria-${TAG}-windows-amd64.exe | Windows x86_64 |" \
             $PRERELEASE_FLAG \
             dist/*
