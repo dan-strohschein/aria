@@ -2,6 +2,10 @@
 // Cross-platform: macOS, Linux, Windows
 // Linked with LLVM IR output by clang.
 
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +22,6 @@ typedef long aria_int;
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#define _CRT_SECURE_NO_WARNINGS
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -30,7 +33,7 @@ typedef long aria_int;
 #define write _write
 #define open _open
 #define close _close
-#define fstat _fstat
+#define fstat _fstat64i32
 #define O_WRONLY _O_WRONLY
 #define O_CREAT _O_CREAT
 #define O_TRUNC _O_TRUNC
