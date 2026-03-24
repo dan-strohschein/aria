@@ -371,7 +371,7 @@ Aria is designed for AI-assisted development. Three files enable any AI to gener
 
 ## License
 
-See repository for license details.
+MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 

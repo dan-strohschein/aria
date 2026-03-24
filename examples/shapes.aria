@@ -1,0 +1,33 @@
+// Sum types and pattern matching in Aria
+// Run: aria run examples/shapes.aria
+
+type Shape =
+    | Circle(i64)
+    | Rectangle(i64, i64)
+    | Triangle(i64, i64)
+
+fn area(s: Shape) -> i64 = match s {
+    Circle(r) => 3 * r * r
+    Rectangle(w, h) => w * h
+    Triangle(b, h) => b * h / 2
+    _ => 0
+}
+
+fn describe(s: Shape) -> str = match s {
+    Circle(r) => "circle with radius {r}"
+    Rectangle(w, h) => "{w} x {h} rectangle"
+    Triangle(b, h) => "triangle (base={b}, height={h})"
+    _ => "unknown shape"
+}
+
+entry {
+    shapes := [Circle(5), Rectangle(3, 4), Triangle(6, 8)]
+
+    mut i := 0
+    loop {
+        if i >= 3 { break }
+        s := shapes[i]
+        println("A {describe(s)} has area {area(s)}")
+        i = i + 1
+    }
+}

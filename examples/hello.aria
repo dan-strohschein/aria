@@ -1,0 +1,8 @@
+// Hello World in Aria
+// Run: aria run examples/hello.aria
+
+entry {
+    name := "World"
+    println("Hello, {name}!")
+    println("Welcome to Aria.")
+}

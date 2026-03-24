@@ -1,2 +1,60 @@
-Gaps1.md
+# Build artifacts
+*.ll
+*.o
+*.exe
+main
+src/main
+src/src
+src/src.ll
+src/main.ll
+src/aria_generated
+
+# Test binaries (compiled test programs)
+testdata/programs/*_test
+testdata/programs/*_test.ll
+testdata/programs/str_simple
+testdata/programs/str_simple.ll
+testdata/programs/hello
+testdata/programs/hello.ll
+testdata/programs/multi_a
+testdata/programs/multi_a.ll
+testdata/programs/multi_file_lib
+testdata/programs/multi_file_lib.ll
+testdata/programs/comprehensive_test_test_runner
+testdata/programs/comprehensive_test_test_runner.ll
+testdata/programs/test_framework_test_test_runner
+testdata/programs/test_framework_test_test_runner.ll
+
+# Root-level test binaries
+*_test
+!testdata/
+str_simple
+test_a
+dm1
+diagnostic
+
+# Compiled example binaries
+examples/hello
+examples/fibonacci
+examples/shapes
+
+# Compiled lib artifacts
+lib/*.ll
+lib/db/db
+lib/http/http
+lib/json/json
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Plan files (local working notes)
 plan.md
+Gaps1.md
+goal1.md
+launch-plan.md
+examples.md
