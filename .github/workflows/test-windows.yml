@@ -62,6 +62,8 @@ jobs:
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
           ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
+          # Bootstrap outputs 'main' (no .exe) — rename for Windows
+          if [ -f main ] && [ ! -f main.exe ]; then mv main main.exe; fi
           ls -la main.exe
           echo "Gen0 built"
 
@@ -71,6 +73,8 @@ jobs:
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
           ./main.exe build ${{ env.ARIA_SOURCES }}
+          # Output is src/main (no .exe) — rename
+          if [ -f src/main ] && [ ! -f src/main.exe ]; then mv src/main src/main.exe; fi
           cp src/main.exe gen1.exe
           echo "Gen1 built: $(wc -c < gen1.exe) bytes"
 
@@ -78,11 +82,14 @@ jobs:
         shell: bash
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
-          echo 'mod test
+          cat > smoke_test.aria << 'EOF'
+          mod test
           fn add(a: i64, b: i64) -> i64 = a + b
-          entry { println(add(40, 2).toStr()) }' > /tmp/smoke.aria
-          ./gen1.exe build /tmp/smoke.aria
-          /tmp/smoke.exe
+          entry { println(add(40, 2).toStr()) }
+          EOF
+          ./gen1.exe build smoke_test.aria
+          if [ -f smoke_test ] && [ ! -f smoke_test.exe ]; then mv smoke_test smoke_test.exe; fi
+          ./smoke_test.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
