@@ -42,10 +42,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             label: darwin-arm64
-          - os: macos-13
-            label: darwin-amd64
           - os: ubuntu-latest
             label: linux-amd64
     runs-on: ${{ matrix.os }}
