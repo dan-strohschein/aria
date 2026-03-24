@@ -3775,11 +3775,15 @@ fn _check_match(c: Checker) -> CE {
             // Check for named pattern: name @ Pattern — skip name and @ to get real pattern
             mut real_name := pat_name
             atp := cc.pos + 1
-            if atp < cc.tokens.len() && token_name(cc.tokens[atp].kind) == "@" {
-                // Skip past name and @ to find real pattern
-                atp2 := atp + 1
-                if atp2 < cc.tokens.len() && token_name(cc.tokens[atp2].kind) == "IDENT" {
-                    real_name = cc.tokens[atp2].text
+            if atp < cc.tokens.len() {
+                if token_name(cc.tokens[atp].kind) == "@" {
+                    // Skip past name and @ to find real pattern
+                    atp2 := atp + 1
+                    if atp2 < cc.tokens.len() {
+                        if token_name(cc.tokens[atp2].kind) == "IDENT" {
+                            real_name = cc.tokens[atp2].text
+                        }
+                    }
                 }
             }
             if pat_name == "_" {
@@ -3802,19 +3806,29 @@ fn _check_match(c: Checker) -> CE {
                 first_char := real_name.charAt(0)
                 mut is_named_pat := false
                 np := cc.pos + 1
-                if np < cc.tokens.len() && token_name(cc.tokens[np].kind) == "@" {
-                    is_named_pat = true
-                }
-                if first_char >= "a" && first_char <= "z" && is_named_pat == false {
-                    // Check if guarded
-                    mut scan := cc
-                    mut found_guard := false
-                    while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
-                        if _ck2(scan) == "if" { found_guard = true }
-                        scan = _cadv(scan)
+                if np < cc.tokens.len() {
+                    if token_name(cc.tokens[np].kind) == "@" {
+                        is_named_pat = true
                     }
-                    if found_guard == false { has_wildcard = true }
-                    arm_is_guarded = found_guard
+                }
+                mut is_lower := false
+                if first_char >= "a" {
+                    if first_char <= "z" {
+                        is_lower = true
+                    }
+                }
+                if is_lower {
+                    if is_named_pat == false {
+                        // Lowercase binding pattern — catch-all
+                        mut scan := cc
+                        mut found_guard := false
+                        while _ck2(scan) != "=>" && _ck2(scan) != "EOF" {
+                            if _ck2(scan) == "if" { found_guard = true }
+                            scan = _cadv(scan)
+                        }
+                        if found_guard == false { has_wildcard = true }
+                        arm_is_guarded = found_guard
+                    }
                 }
                 // Track covered variant (only if not guarded)
                 // Also handle or-patterns: A | B => ...
@@ -3858,29 +3872,34 @@ fn _check_match(c: Checker) -> CE {
 
         // Sum type exhaustiveness
         if kind_name == "Named" {
-            def := reg_find_struct(cc.registry, info.name)
-            if def.is_sum && def.variant_names.len() > 1 {
-                mut vi := 1
-                mut first_missing := ""
-                while vi < def.variant_names.len() {
-                    vname := def.variant_names[vi]
-                    mut found := false
-                    mut ci := 1
-                    while ci < covered.len() {
-                        if covered[ci] == vname { found = true }
-                        ci = ci + 1
+            iname := type_info_name(info)
+            def := reg_find_struct(cc.registry, iname)
+            if def.is_sum {
+                if def.variant_names.len() > 1 {
+                    mut vi := 1
+                    mut first_missing := ""
+                    while vi < def.variant_names.len() {
+                        vname := def.variant_names[vi]
+                        mut found := false
+                        mut ci := 1
+                        while ci < covered.len() {
+                            if covered[ci] == vname { found = true }
+                            ci = ci + 1
+                        }
+                        if found == false {
+                            if first_missing == "" {
+                                first_missing = vname
+                            }
+                        }
+                        vi = vi + 1
                     }
-                    if found == false && first_missing == "" {
-                        first_missing = vname
+                    if first_missing != "" {
+                        cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + first_missing + "' not covered")
                     }
-                    vi = vi + 1
-                }
-                if first_missing != "" {
-                    cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + first_missing + "' not covered")
                 }
             }
             // Optional exhaustiveness (Some/None)
-            if info.name == "Optional" || info.name == "Option" {
+            if iname == "Optional" || iname == "Option" {
                 mut has_some := false
                 mut has_none := false
                 mut oi := 1
@@ -3896,7 +3915,7 @@ fn _check_match(c: Checker) -> CE {
                 }
             }
             // Result exhaustiveness (Ok/Err)
-            if info.name == "Result" {
+            if iname == "Result" {
                 mut has_ok := false
                 mut has_err := false
                 mut ri := 1

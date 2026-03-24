@@ -87,6 +87,11 @@ fn _sentinel_type() -> TypeInfo =
 fn _mk_prim(kind: TypeKind) -> TypeInfo =
     TypeInfo{kind: kind, name: type_kind_name(kind), type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
 
+// Accessor helpers to avoid _field_index_any ambiguity for common field names
+fn type_info_name(ti: TypeInfo) -> str = ti.name
+fn type_info_kind(ti: TypeInfo) -> TypeKind = ti.kind
+fn type_info_type_id(ti: TypeInfo) -> i64 = ti.type_id
+
 fn mk_array_type(elem_id: i64) -> TypeInfo =
     TypeInfo{kind: TyArray, name: "", type_id: elem_id, type_id2: 0, param_start: 0, param_count: 0}
 
