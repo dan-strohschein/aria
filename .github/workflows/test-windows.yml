@@ -62,10 +62,13 @@ jobs:
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
           ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
-          # Bootstrap outputs 'main' (no .exe) — rename for Windows
-          if [ -f main ] && [ ! -f main.exe ]; then mv main main.exe; fi
-          ls -la main.exe
-          echo "Gen0 built"
+          echo "=== Looking for output binary ==="
+          ls -la main* src/main* 2>/dev/null || true
+          file main 2>/dev/null || true
+          # The Go bootstrap names output 'main' — it's actually a Windows PE executable
+          # Go's internal go build adds .exe, so the output should run as-is
+          mv main main.exe 2>/dev/null || true
+          echo "Gen0 ready"
 
       - name: Gen0 → Gen1 (self-compile)
         shell: bash
@@ -73,9 +76,11 @@ jobs:
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
           ./main.exe build ${{ env.ARIA_SOURCES }}
-          # Output is src/main (no .exe) — rename
-          if [ -f src/main ] && [ ! -f src/main.exe ]; then mv src/main src/main.exe; fi
-          cp src/main.exe gen1.exe
+          echo "=== Looking for Gen1 ==="
+          ls -la src/main* 2>/dev/null || true
+          mv src/main src/main.exe 2>/dev/null || true
+          cp src/main.exe gen1.exe 2>/dev/null || cp src/main gen1.exe 2>/dev/null || true
+          ls -la gen1.exe
           echo "Gen1 built: $(wc -c < gen1.exe) bytes"
 
       - name: Smoke test Gen1
@@ -88,7 +93,8 @@ jobs:
           entry { println(add(40, 2).toStr()) }
           EOF
           ./gen1.exe build smoke_test.aria
-          if [ -f smoke_test ] && [ ! -f smoke_test.exe ]; then mv smoke_test smoke_test.exe; fi
+          ls -la smoke_test* 2>/dev/null || true
+          mv smoke_test smoke_test.exe 2>/dev/null || true
           ./smoke_test.exe
 
       - name: Upload artifact
