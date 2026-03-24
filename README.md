@@ -17,7 +17,8 @@ Human-oriented languages are full of ambiguity, implicit behavior, and ceremony 
 - **Effect tracking** — `with [Io, Fs, Net]` makes side effects visible to the AI reasoning about code.
 - **GC with opt-out** — garbage collected by default; `@stack`, `@arena`, `Pool[T]` when the AI needs control.
 - **FFI** — `extern fn` calls C functions directly for system-level work.
-- **158 test programs** covering every language feature.
+- **161 test programs** covering every language feature (156 single-file pass, 5 multi-file pass when built together).
+- **Standard library** — JSON parser, HTTP server, PostgreSQL client in `lib/`.
 
 ## Quick Example
 
@@ -141,6 +142,31 @@ timeout := 30s             // nanoseconds
 buffer := 4kb              // bytes
 ```
 
+### Collections
+
+```aria
+// Arrays
+nums := [1, 2, 3, 4, 5]
+doubled := [x * 2 for x in nums]          // list comprehension
+evens := [x for x in nums where x % 2 == 0]  // with filter
+
+// Maps (FNV hash table)
+m := Map()
+m.set("key", 42)
+val := m.get("key")
+if m.has("key") { println("found") }
+
+// Sets (FNV hash set)
+s := Set()
+s.add("hello")
+s.add("world")
+assert s.contains("hello")
+assert s.len() == 2
+
+// Tuples
+pair := (1, "hello")
+```
+
 ### Error Handling
 
 ```aria
@@ -210,7 +236,7 @@ for msg in ch {
 spawn.detach fn() -> i64 { background_work() }
 ```
 
-### Traits and Generics
+### Traits, Generics, and Dynamic Dispatch
 
 ```aria
 trait Display {
@@ -231,6 +257,15 @@ struct Pair[A, B] {
     first: A
     second: B
 } derives [Eq, Clone, Debug]
+
+// Dynamic dispatch via trait objects
+fn describe(obj: dyn Display) {
+    println(obj.display())
+}
+
+entry {
+    describe(dyn Display(Point{x: 1, y: 2}))
+}
 ```
 
 ### FFI (Foreign Function Interface)
@@ -282,25 +317,27 @@ with conn := connect(url)? {
 ### Compilation Pipeline
 
 ```
-Source (.aria) --> Lexer --> Resolver --> Checker --> Lowerer --> LLVM IR --> clang --> Native Binary
+Source (.aria) --> Lexer --> Parser (AST) --> Resolver --> Checker --> Lowerer --> LLVM IR --> clang --> Native Binary
 ```
 
 | Stage | Directory | Purpose |
 |-------|-----------|---------|
 | Diagnostics | `src/diagnostic/` | Error codes, rendering, JSON output |
 | Lexer | `src/lexer/` | Tokenization (keywords, literals, interpolation) |
+| Parser | `src/parser/` | Pratt parser, AST construction, NodePool |
 | Resolver | `src/resolver/` | Name resolution, scope hierarchy, imports |
 | Checker | `src/checker/` | Type inference, trait bounds, generics, effects, exhaustiveness |
-| Codegen | `src/codegen/` | IR lowering, LLVM IR generation, clang invocation |
-| Runtime | `runtime/` | C runtime (GC, strings, arrays, maps, channels, networking) |
+| Codegen | `src/codegen/` | AST-walking IR lowering, LLVM IR generation, clang invocation |
+| Runtime | `runtime/` | C runtime (GC, strings, arrays, maps, sets, channels, networking) |
+| Stdlib | `lib/` | JSON parser, HTTP server, PostgreSQL client |
 | CLI | `src/main.aria` | Command dispatch, directory expansion, argument parsing |
 
 ### Project Stats
 
-- **27 source files** across 7 modules
-- **158 test programs** in `testdata/programs/`
-- **~15,000 lines** of Aria source
-- **~1,700 lines** of C runtime
+- **27 source files** across 7 modules + 3 stdlib libraries
+- **161 test programs** in `testdata/programs/`
+- **~27,000 lines** of Aria source
+- **~2,000 lines** of C runtime
 - **Self-compiling** — the compiler builds itself
 
 ## Cross-Compilation
