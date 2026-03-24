@@ -1,3 +1,5 @@
+// test-files: multi_file_lib.aria multi_file_main.aria
+// test-expect: multi_file_test passed
 mod multi_file
 
 // Tests multi-file compilation: structs, sum types, and functions from another file

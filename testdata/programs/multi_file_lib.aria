@@ -1,3 +1,4 @@
+// test-support: true
 mod multi_file
 
 // Shared struct across files

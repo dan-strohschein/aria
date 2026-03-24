@@ -1,5 +1,7 @@
+// test-files: multi_a.aria multi_b.aria
 mod multi
 
 entry {
     assert add(20, 22) == 42
+    println("multi_ab passed")
 }

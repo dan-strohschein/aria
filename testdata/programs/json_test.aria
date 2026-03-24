@@ -1,3 +1,5 @@
+// test-files: ../lib/json.aria json_test.aria
+// test-requires: json
 // Test JSON library
 entry {
     // Parse primitives

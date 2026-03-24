@@ -1,3 +1,5 @@
+// test-files: ../lib/http.aria ../lib/json.aria http_server_test.aria
+// test-requires: http
 // Integration test: HTTP server with JSON responses
 // Starts server, sends a request via curl, verifies response
 
