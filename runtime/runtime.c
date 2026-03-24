@@ -5,11 +5,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+
+// On Windows, 'long' is 32-bit even on 64-bit systems.
+// Aria uses i64 (mapped to LLVM i64) for all values including pointers.
+// Use a platform-appropriate 64-bit integer type.
+#ifdef _WIN32
+typedef long long aria_int;
+#else
+typedef long aria_int;
+#endif
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 #include <io.h>
 #include <direct.h>
-#include <windows.h>
 #define read _read
 #define write _write
 #define open _open
@@ -1120,8 +1133,7 @@ struct _aria_str _aria_getenv(char *name_ptr, long name_len) {
 // --- TCP Networking ---
 
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+// winsock2.h and ws2tcpip.h already included at top of file
 #pragma comment(lib, "ws2_32.lib")
 #define close closesocket
 typedef int socklen_t;
