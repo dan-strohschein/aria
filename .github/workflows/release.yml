@@ -39,6 +39,7 @@ env:
 
 jobs:
   build:
+    timeout-minutes: 60
     strategy:
       matrix:
         include:
@@ -78,9 +79,11 @@ jobs:
         run: ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
 
       - name: Gen0 → Gen1 (self-compile)
+        timeout-minutes: 20
         run: ./main build ${{ env.ARIA_SOURCES }}
 
       - name: Gen1 → Gen2 (verify fixed point)
+        timeout-minutes: 20
         run: |
           cp src/main gen1
           src/main build ${{ env.ARIA_SOURCES }}
