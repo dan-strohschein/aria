@@ -71,7 +71,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang
 
-      - name: Set up clang (Windows)
+      - name: Install clang (Windows)
         if: runner.os == 'Windows'
         run: choco install llvm -y
 
@@ -90,7 +90,9 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="/c/Program Files/LLVM/bin:$PATH"
             ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
+            mv main main.exe 2>/dev/null || true
           else
             ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
           fi
@@ -100,7 +102,9 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="/c/Program Files/LLVM/bin:$PATH"
             ./main.exe build ${{ env.ARIA_SOURCES }}
+            mv src/main src/main.exe 2>/dev/null || true
             cp src/main.exe gen1.exe
             echo "Gen1 built: $(wc -c < gen1.exe) bytes"
           else
@@ -109,7 +113,17 @@ jobs:
             echo "Gen1 built: $(wc -c < gen1) bytes"
           fi
 
-      - name: Run test suite
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          printf 'mod test\nentry {\n    println("hello from aria")\n}\n' > smoke_test.aria
+          ./gen1.exe build smoke_test.aria
+          mv smoke_test smoke_test.exe 2>/dev/null || true
+          ./smoke_test.exe
+
+      - name: Run test suite (Unix)
         if: runner.os != 'Windows'
         timeout-minutes: 10
         run: ARIA_COMPILER=./gen1 bash testdata/programs/run_tests.sh
