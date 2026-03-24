@@ -1,0 +1,31 @@
+// Test: mutex — concurrent counter with channel aggregation
+
+entry {
+    mtx := _ariaMutexNew()
+    result_ch := _ariaChanNew(10)
+
+    // Spawn threads that each compute a local sum and send it
+    t1 := _ariaSpawn(fn() -> i64 {
+        _ariaMutexLock(mtx)
+        _ariaMutexUnlock(mtx)
+        _ariaChanSend(result_ch, 100)
+        100
+    })
+
+    t2 := _ariaSpawn(fn() -> i64 {
+        _ariaMutexLock(mtx)
+        _ariaMutexUnlock(mtx)
+        _ariaChanSend(result_ch, 100)
+        100
+    })
+
+    v1 := _ariaChanRecv(result_ch)
+    v2 := _ariaChanRecv(result_ch)
+    _ariaTaskAwait(t1)
+    _ariaTaskAwait(t2)
+
+    total := v1 + v2
+    assert total == 200
+
+    println("mutex_test: all passed")
+}

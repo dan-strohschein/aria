@@ -1,0 +1,16 @@
+// Test with statement (resource block)
+entry {
+    println("before")
+    // Use if-block which is known to work, to compare
+    z := 99
+    if z > 0 {
+        println("in if")
+    }
+    println("after if")
+
+    // Test defer-like pattern instead (known to work)
+    with y := 42 {
+        println("in with")
+    }
+    println("with_stmt_test passed")
+}

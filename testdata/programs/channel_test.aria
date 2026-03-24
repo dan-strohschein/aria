@@ -1,0 +1,48 @@
+// Test: channels — producer/consumer pattern
+
+entry {
+    // Basic send/recv
+    ch := _ariaChanNew(4)
+    _ariaChanSend(ch, 42)
+    _ariaChanSend(ch, 99)
+    v1 := _ariaChanRecv(ch)
+    v2 := _ariaChanRecv(ch)
+    assert v1 == 42
+    assert v2 == 99
+
+    // Producer/consumer across threads
+    ch2 := _ariaChanNew(10)
+    producer := _ariaSpawn(fn() -> i64 {
+        mut i := 0
+        while i < 5 {
+            _ariaChanSend(ch2, i * 10)
+            i = i + 1
+        }
+        _ariaChanClose(ch2)
+        0
+    })
+
+    mut sum := 0
+    mut count := 0
+    // Consumer reads until channel is closed and empty
+    mut done := 0
+    while done == 0 {
+        val := _ariaChanRecv(ch2)
+        if val == 0 && count >= 5 {
+            done = 1
+        } else {
+            sum = sum + val
+            count = count + 1
+        }
+    }
+    _ariaTaskAwait(producer)
+    // 0 + 10 + 20 + 30 + 40 = 100
+    assert sum == 100
+
+    // Mutex test
+    mtx := _ariaMutexNew()
+    _ariaMutexLock(mtx)
+    _ariaMutexUnlock(mtx)
+
+    println("channel_test: all passed")
+}

@@ -1,0 +1,42 @@
+// Test tuple creation, field access, and function args/returns
+
+fn make_pair(a: i64, b: i64) -> (i64, i64) {
+    (a, b)
+}
+
+fn first(pair: (i64, i64)) -> i64 {
+    pair.0
+}
+
+fn second(pair: (i64, i64)) -> i64 {
+    pair.1
+}
+
+fn swap(pair: (i64, i64)) -> (i64, i64) {
+    (pair.1, pair.0)
+}
+
+entry {
+    // Tuple creation and field access
+    p := (10, 20)
+    assert p.0 == 10
+    assert p.1 == 20
+
+    // Tuple from function
+    q := make_pair(3, 7)
+    assert first(q) == 3
+    assert second(q) == 7
+
+    // Tuple swap
+    s := swap(q)
+    assert s.0 == 7
+    assert s.1 == 3
+
+    // Three-element tuple
+    t := (1, 2, 3)
+    assert t.0 == 1
+    assert t.1 == 2
+    assert t.2 == 3
+
+    println("tuple_type_test passed")
+}

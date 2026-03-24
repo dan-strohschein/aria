@@ -40,9 +40,9 @@ examples/shapes
 
 # Compiled lib artifacts
 lib/*.ll
-lib/db/db
-lib/http/http
-lib/json/json
+lib/db
+lib/http
+lib/json
 
 # macOS
 .DS_Store

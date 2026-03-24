@@ -1,0 +1,30 @@
+// Test record update syntax: .{field: val}
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+fn make_point(px: i64, py: i64) -> Point =
+    Point{x: px, y: py}
+
+fn move_right(p: Point, dx: i64) -> Point {
+    nx := p.x + dx
+    p.{x: nx}
+}
+
+entry {
+    // Basic record update
+    p := Point{x: 1, y: 2}
+    nx := 10
+    q := p.{x: nx}
+    assert q.x == 10
+    assert q.y == 2
+
+    // Record update in function
+    p2 := move_right(p, 5)
+    assert p2.x == 6
+    assert p2.y == 2
+
+    println("record_update_test passed")
+}

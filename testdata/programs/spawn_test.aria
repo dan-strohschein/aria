@@ -1,0 +1,33 @@
+// Test: spawn + await + capture across threads
+
+fn compute(x: i64) -> i64 = x * x
+
+entry {
+    // Basic spawn and await
+    t1 := _ariaSpawn(fn() -> i64 { 42 })
+    r1 := _ariaTaskAwait(t1)
+    assert r1 == 42
+
+    // Spawn with captured variable
+    val := 10
+    t2 := _ariaSpawn(fn() -> i64 { val * 3 })
+    r2 := _ariaTaskAwait(t2)
+    assert r2 == 30
+
+    // Multiple spawns
+    t3 := _ariaSpawn(fn() -> i64 { compute(5) })
+    t4 := _ariaSpawn(fn() -> i64 { compute(6) })
+    r3 := _ariaTaskAwait(t3)
+    r4 := _ariaTaskAwait(t4)
+    assert r3 == 25
+    assert r4 == 36
+
+    // Spawn with multiple captures
+    a := 100
+    b := 200
+    t5 := _ariaSpawn(fn() -> i64 { a + b })
+    r5 := _ariaTaskAwait(t5)
+    assert r5 == 300
+
+    println("spawn_test: all passed")
+}
