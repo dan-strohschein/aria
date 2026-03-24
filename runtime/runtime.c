@@ -560,13 +560,13 @@ long _aria_str_split(char *ptr, long len, char *delim_ptr, long delim_len) {
     long *sentinel_str = (long *)malloc(16);
     sentinel_str[0] = (long)"";
     sentinel_str[1] = 0;
-    _aria_array_append(arr, (long)sentinel_str);
+    arr = _aria_array_append(arr,(long)sentinel_str);
 
     if (delim_len == 0) {
         long *str_struct = (long *)malloc(16);
         str_struct[0] = (long)ptr;
         str_struct[1] = len;
-        _aria_array_append(arr, (long)str_struct);
+        arr = _aria_array_append(arr,(long)str_struct);
         return arr;
     }
 
@@ -581,7 +581,7 @@ long _aria_str_split(char *ptr, long len, char *delim_ptr, long delim_len) {
             long *str_struct = (long *)malloc(16);
             str_struct[0] = (long)sub;
             str_struct[1] = sub_len;
-            _aria_array_append(arr, (long)str_struct);
+            arr = _aria_array_append(arr,(long)str_struct);
             i += delim_len;
             start = i;
         } else {
@@ -595,7 +595,7 @@ long _aria_str_split(char *ptr, long len, char *delim_ptr, long delim_len) {
     long *str_struct = (long *)malloc(16);
     str_struct[0] = (long)sub;
     str_struct[1] = sub_len;
-    _aria_array_append(arr, (long)str_struct);
+    arr = _aria_array_append(arr,(long)str_struct);
     return arr;
 }
 
@@ -642,8 +642,14 @@ long _aria_array_len(long arr_ptr) {
 
 long _aria_array_get(long arr_ptr, long index) {
     long *header = (long *)arr_ptr;
+    long length = header[0];
+    if (index < 0 || index >= length) {
+        fprintf(stderr, "FATAL array_get: index=%ld len=%ld arr=%p\n", index, length, (void *)arr_ptr);
+        exit(98);
+    }
     long *data = (long *)header[2];
-    return data[index];
+    long val = data[index];
+    return val;
 }
 
 void _aria_array_set(long arr_ptr, long index, long value) {
@@ -652,28 +658,27 @@ void _aria_array_set(long arr_ptr, long index, long value) {
     data[index] = value;
 }
 
-// Debug guard for array_append
-static int _aapp_dbg = 0;
+// Array append with value semantics: always returns a NEW array.
+// Aria code assumes arrays are immutable values — appending to a copy
+// must not mutate the original.
 long _aria_array_append(long arr_ptr, long value) {
     long *header = (long *)arr_ptr;
     long length = header[0];
-    long capacity = header[1];
 
-    if (length >= capacity) {
-        // Grow: double capacity
-        long new_cap = capacity < 8 ? 8 : capacity * 2;
-        long *new_data = (long *)calloc((size_t)(new_cap), 8);
-        long *old_data = (long *)header[2];
+    // Always create a new array (copy-on-write semantics)
+    long new_cap = length + 1;
+    if (new_cap < 8) new_cap = 8;
+    long *new_header = (long *)calloc(3, 8);
+    long *new_data = (long *)calloc((size_t)new_cap, 8);
+    long *old_data = (long *)header[2];
+    if (length > 0) {
         memcpy(new_data, old_data, (size_t)(length * 8));
-        free(old_data);
-        header[1] = new_cap;
-        header[2] = (long)new_data;
     }
-
-    long *data = (long *)header[2];
-    data[length] = value;
-    header[0] = length + 1;
-    return arr_ptr;
+    new_data[length] = value;
+    new_header[0] = length + 1;
+    new_header[1] = new_cap;
+    new_header[2] = (long)new_data;
+    return (long)new_header;
 }
 
 long _aria_array_slice(long arr_ptr, long start) {
@@ -705,7 +710,7 @@ long _aria_list_dir(char *path_ptr, long path_len) {
     long *sentinel_str = (long *)malloc(16);
     sentinel_str[0] = (long)"";
     sentinel_str[1] = 0;
-    _aria_array_append(arr, (long)sentinel_str);
+    arr = _aria_array_append(arr,(long)sentinel_str);
 
 #ifdef _WIN32
     char search[MAX_PATH];
@@ -724,7 +729,7 @@ long _aria_list_dir(char *path_ptr, long path_len) {
         long *str_struct = (long *)malloc(16);
         str_struct[0] = (long)name;
         str_struct[1] = name_len;
-        _aria_array_append(arr, (long)str_struct);
+        arr = _aria_array_append(arr,(long)str_struct);
     } while (FindNextFileA(hFind, &fd));
     FindClose(hFind);
 #else
@@ -742,7 +747,7 @@ long _aria_list_dir(char *path_ptr, long path_len) {
         long *str_struct = (long *)malloc(16);
         str_struct[0] = (long)name;
         str_struct[1] = name_len;
-        _aria_array_append(arr, (long)str_struct);
+        arr = _aria_array_append(arr,(long)str_struct);
     }
     closedir(dir);
 #endif
@@ -899,14 +904,14 @@ long _aria_map_keys(long map_ptr) {
     char *states = (char *)header[4];
 
     long arr = _aria_array_new(header[0] * 2 + 2);
-    _aria_array_append(arr, 0);  // sentinel
+    arr = _aria_array_append(arr,0);  // sentinel
     for (long i = 0; i < capacity; i++) {
         if (states[i] == 1) {
             // Pack key as string: append ptr then len
             long *str_struct = (long *)malloc(16);
             str_struct[0] = keys[i * 2];      // ptr
             str_struct[1] = keys[i * 2 + 1];  // len
-            _aria_array_append(arr, (long)str_struct);
+            arr = _aria_array_append(arr,(long)str_struct);
         }
     }
     return arr;
@@ -1022,13 +1027,13 @@ long _aria_set_values(long set_ptr) {
     char *states = (char *)header[3];
 
     long arr = _aria_array_new(header[0] * 2 + 2);
-    _aria_array_append(arr, 0);  // sentinel
+    arr = _aria_array_append(arr,0);  // sentinel
     for (long i = 0; i < capacity; i++) {
         if (states[i] == 1) {
             long *str_struct = (long *)malloc(16);
             str_struct[0] = keys[i * 2];
             str_struct[1] = keys[i * 2 + 1];
-            _aria_array_append(arr, (long)str_struct);
+            arr = _aria_array_append(arr,(long)str_struct);
         }
     }
     return arr;
@@ -1053,7 +1058,7 @@ void _aria_args_init(int argc, char **argv) {
     long arr = _aria_array_new(argc * 2 + 2);
 
     // Sentinel element (index 0) - empty string (use append to update length)
-    _aria_array_append(arr, 0);  // sentinel
+    arr = _aria_array_append(arr,0);  // sentinel
 
     // For each argv entry, store two elements: ptr and len
     // Actually, looking at how the bootstrap handles _ariaArgs:
@@ -1074,7 +1079,7 @@ void _aria_args_init(int argc, char **argv) {
         str_struct[1] = slen;
 
         // Append the pointer to the struct as the element
-        _aria_array_append(arr, (long)str_struct);
+        arr = _aria_array_append(arr,(long)str_struct);
     }
 
     _aria_args_array = arr;
@@ -1937,7 +1942,7 @@ long _aria_str_char_count(char *ptr, long len) {
 long _aria_str_chars(char *ptr, long len) {
     long arr = _aria_array_new(len < 8 ? 8 : len);
     // sentinel
-    _aria_array_append(arr, 0);
+    arr = _aria_array_append(arr,0);
     long i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)ptr[i];
@@ -1959,7 +1964,7 @@ long _aria_str_chars(char *ptr, long len) {
         for (long j = 1; j < bytes && (i + j) < len; j++) {
             codepoint = (codepoint << 6) | ((unsigned char)ptr[i + j] & 0x3F);
         }
-        _aria_array_append(arr, codepoint);
+        arr = _aria_array_append(arr,codepoint);
         i += bytes;
     }
     return arr;
@@ -1974,7 +1979,7 @@ long _aria_str_graphemes(char *ptr, long len) {
     long *sentinel = (long *)malloc(16);
     sentinel[0] = (long)"";
     sentinel[1] = 0;
-    _aria_array_append(arr, (long)sentinel);
+    arr = _aria_array_append(arr,(long)sentinel);
     long i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)ptr[i];
@@ -1990,7 +1995,7 @@ long _aria_str_graphemes(char *ptr, long len) {
         long *str_struct = (long *)malloc(16);
         str_struct[0] = (long)gc;
         str_struct[1] = bytes;
-        _aria_array_append(arr, (long)str_struct);
+        arr = _aria_array_append(arr,(long)str_struct);
         i += bytes;
     }
     return arr;

@@ -412,7 +412,7 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
     // Bounds check: temp should never exceed a few thousand in any function
     if temp < 0 { return l }
-    if temp > 5000 { return l }
+    if temp > 50000 { return l }
     // Grow temp_types if needed
     mut types := l.temp_types
     while types.len() <= temp + 1 {

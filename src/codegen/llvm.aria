@@ -379,6 +379,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
         f := m.funcs[fi]
         if f.name != "" {
             defined_names = defined_names.append(f.name)
+            if f.name == "main" { defined_names = defined_names.append("_aria_main") }
             fn_parts := _gen_function(m, f)
             mut fpi := 1
             while fpi < fn_parts.len() {
@@ -416,18 +417,36 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     lb := _lb()
     rb := _rb()
     if m.entry_func != "" {
+        mut entry_call := m.entry_func
+        if entry_call == "main" { entry_call = "_aria_main" }
         p = p.append("; Entry wrapper" + nl)
         p = p.append("define void @_aria_entry() " + lb + nl)
         p = p.append("entry:" + nl)
-        p = p.append("  call void @" + m.entry_func + "()" + nl)
+        p = p.append("  call void @" + entry_call + "()" + nl)
         p = p.append("  ret void" + nl)
         p = p.append(rb + nl + nl)
     } else {
-        // Stub entry for test-only files (no entry block)
-        p = p.append("define void @_aria_entry() " + lb + nl)
-        p = p.append("entry:" + nl)
-        p = p.append("  ret void" + nl)
-        p = p.append(rb + nl + nl)
+        // Check if there's a fn main() — call it via _aria_main
+        mut has_main := false
+        mut hmi := 1
+        while hmi < m.funcs.len() {
+            if m.funcs[hmi].name == "main" { has_main = true }
+            hmi = hmi + 1
+        }
+        if has_main {
+            p = p.append("; Entry wrapper (fn main)" + nl)
+            p = p.append("define void @_aria_entry() " + lb + nl)
+            p = p.append("entry:" + nl)
+            p = p.append("  call i64 @_aria_main()" + nl)
+            p = p.append("  ret void" + nl)
+            p = p.append(rb + nl + nl)
+        } else {
+            // Stub entry for test-only files (no entry block)
+            p = p.append("define void @_aria_entry() " + lb + nl)
+            p = p.append("entry:" + nl)
+            p = p.append("  ret void" + nl)
+            p = p.append(rb + nl + nl)
+        }
     }
 
     _join(p)
@@ -482,7 +501,10 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         cni = cni + 1
     }
     // For now, cold is a no-op in LLVM (would need: #0 attributes = { cold })
-    p = p.append("define " + ret_type + " @" + f.name + "(" + params + ") " + lb + nl)
+    // Rename "main" to "_aria_main" to avoid conflict with runtime's main()
+    mut emit_name := f.name
+    if f.name == "main" { emit_name = "_aria_main" }
+    p = p.append("define " + ret_type + " @" + emit_name + "(" + params + ") " + lb + nl)
     p = p.append("entry:" + nl)
 
     // Allocate all temps — only count fields that are temp references
@@ -1512,7 +1534,9 @@ fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
 // ============================================================
 
 fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen {
-    name := inst.s1
+    orig_name := inst.s1
+    mut name := orig_name
+    if name == "main" { name = "_aria_main" }
     mut gg := g
 
     if name == "_aria_println_str" || name == "_aria_print_str" || name == "_aria_eprintln_str" {
@@ -2132,7 +2156,7 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     si64 := _struct_i64_i64()
 
-    target_func := mod_find_func(m, name)
+    target_func := mod_find_func(m, orig_name)
     if target_func.name != "" && target_func.return_type == 12 {
         res := "%call_r_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + si64 + " @" + name + "(" + args + ")")

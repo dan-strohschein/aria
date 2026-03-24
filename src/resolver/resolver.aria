@@ -125,9 +125,11 @@ fn _add_sym_warn_shadow(r: Resolver, name: str, kind: SymbolKind, span: Span, is
     // Check if name already exists in any ancestor scope
     existing := lookup(r.table, r.current_scope, name)
     mut rr := r
-    if existing.name != "" && sk_eq(existing.kind, SkBuiltin) == false {
-        q := _q()
-        rr = _rwarning(rr, W0004, "variable " + q + name + q + " shadows previous declaration")
+    if existing.name != "" {
+        if sk_eq(existing.kind, SkBuiltin) == false {
+            q := _q()
+            rr = _rwarning(rr, W0004, "variable " + q + name + q + " shadows previous declaration")
+        }
     }
     sym := new_symbol(name, kind, span, rr.current_scope, is_mut, false)
     _rset_table(rr, add_symbol(rr.table, sym))
@@ -1292,14 +1294,16 @@ fn _find_similar_name(r: Resolver, name: str) -> str {
     mut si := 1
     while si < r.table.symbols.len() {
         sym := r.table.symbols[si]
-        if sym.name != "" && sym.name != name {
-            dist := _edit_distance(name, sym.name)
-            if dist < best_dist {
-                best_dist = dist
-                best = sym.name
-            }
-            if dist == best_dist && best == "" {
-                best = sym.name
+        if sym.name != "" {
+            if sym.name != name {
+                dist := _edit_distance(name, sym.name)
+                if dist < best_dist {
+                    best_dist = dist
+                    best = sym.name
+                }
+                if dist == best_dist && best == "" {
+                    best = sym.name
+                }
             }
         }
         si = si + 1
@@ -1349,11 +1353,18 @@ fn _resolve_ident(r: Resolver) -> Resolver {
         rr := _rerror(r, E0701, msg)
         return _radv(rr)
     }
-    // Pub visibility check: if symbol is not public and declared in a different file
-    if found.is_public == false && found.span.file != "" && found.span.file != "<builtin>" && found.span.file != r.file {
-        q := _q()
-        rr := _rerror(r, E0704, "symbol " + q + name + q + " is private to module " + q + found.span.file + q)
-        return _radv(rr)
+    // Pub visibility check
+    if found.is_public == false {
+        ffile := _span_file(found.span)
+        if ffile != "" {
+            if ffile != "<builtin>" {
+                if ffile != r.file {
+                    q := _q()
+                    rr := _rerror(r, E0704, "symbol " + q + name + q + " is private to module " + q + ffile + q)
+                    return _radv(rr)
+                }
+            }
+        }
     }
     _radv(r)
 }
@@ -1373,9 +1384,17 @@ fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
         if espan.file == "" { espan = Span{file: r.file, line: span.line, col: span.col, offset: span.offset, length: span.length} }
         return _rset_diag(r, bag_add_error(r.diagnostics, E0701, msg, espan))
     }
-    if found.is_public == false && found.span.file != "" && found.span.file != "<builtin>" && found.span.file != r.file {
-        q := _q()
-        return _rset_diag(r, bag_add_error(r.diagnostics, E0704, "symbol " + q + name + q + " is private to module " + q + found.span.file + q, span))
+    // Pub visibility check
+    if found.is_public == false {
+        ffile := _span_file(found.span)
+        if ffile != "" {
+            if ffile != "<builtin>" {
+                if ffile != r.file {
+                    q := _q()
+                    return _rset_diag(r, bag_add_error(r.diagnostics, E0704, "symbol " + q + name + q + " is private to module " + q + ffile + q, span))
+                }
+            }
+        }
     }
     r
 }
@@ -1665,8 +1684,10 @@ fn _resolve_pattern_bindings(r: Resolver, idx: i64) -> Resolver {
         if name == "_" { return r }
         // Check if it's a known variant/type — don't bind those
         existing := lookup(r.table, r.current_scope, name)
-        if existing.name != "" && (sk_eq(existing.kind, SkVariant) || sk_eq(existing.kind, SkType) || sk_eq(existing.kind, SkBuiltin)) {
-            return r
+        if existing.name != "" {
+            if sk_eq(existing.kind, SkVariant) || sk_eq(existing.kind, SkType) || sk_eq(existing.kind, SkBuiltin) {
+                return r
+            }
         }
         // It's a binding pattern
         return _add_sym_warn_shadow(r, name, SkVariable, node.span, false)
@@ -1754,7 +1775,11 @@ fn _resolve_match(r: Resolver) -> Resolver {
             if pat_name != "_" {
                 // Check if this is a variant name
                 existing := lookup(rr.table, rr.current_scope, pat_name)
-                if existing.name == "" || sk_eq(existing.kind, SkVariant) == false {
+                mut is_variant := false
+                if existing.name != "" {
+                    is_variant = sk_eq(existing.kind, SkVariant)
+                }
+                if is_variant == false {
                     // Not a variant — it's a binding pattern: bind subject to this name
                     span := _rspan(rr)
                     rr = _add_sym_warn_shadow(rr, pat_name, SkVariable, span, false)

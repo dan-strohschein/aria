@@ -37,8 +37,11 @@ fn symbol_kind_name(k: SymbolKind) -> str = match k {
     SkNone => "None"
 }
 
-fn sk_eq(a: SymbolKind, b: SymbolKind) -> bool =
-    symbol_kind_name(a) == symbol_kind_name(b)
+fn sk_eq(a: SymbolKind, b: SymbolKind) -> bool {
+    na := symbol_kind_name(a)
+    nb := symbol_kind_name(b)
+    na == nb
+}
 
 // --- Symbol ---
 
@@ -140,8 +143,10 @@ fn lookup_local(table: SymbolTable, scope_id: i64, name: str) -> Symbol {
     mut i := 1  // skip sentinel
     while i < table.symbols.len() {
         sym := table.symbols[i]
-        if sym.scope_id == scope_id && sym.name == name {
-            return sym
+        if sym.scope_id == scope_id {
+            if sym.name == name {
+                return sym
+            }
         }
         i = i + 1
     }
