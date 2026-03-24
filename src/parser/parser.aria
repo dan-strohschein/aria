@@ -95,7 +95,15 @@ fn _is_upper_start(name: str) -> bool {
         if is_lower { return true }
         i = i + 1
     }
-    // Single uppercase letter (like T) or all-caps — not a struct name
+    // Check for underscores — SCREAMING_SNAKE_CASE has underscores, short PascalCase (PR, CE, LT) does not
+    mut j := 0
+    while j < nlen {
+        if name.charAt(j) == "_" { return false }
+        j = j + 1
+    }
+    // All-caps with no underscore and len >= 2 is a short PascalCase type name (PR, CE, LT, IO)
+    if nlen >= 2 { return true }
+    // Single letter (T) — generic type param, not a struct name
     false
 }
 

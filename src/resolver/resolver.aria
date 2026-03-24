@@ -1369,7 +1369,9 @@ fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
         if suggestion != "" {
             msg = msg + ". Did you mean " + q + suggestion + q + "?"
         }
-        return _rset_diag(r, bag_add_error(r.diagnostics, E0701, msg, span))
+        mut espan := span
+        if espan.file == "" { espan = Span{file: r.file, line: span.line, col: span.col, offset: span.offset, length: span.length} }
+        return _rset_diag(r, bag_add_error(r.diagnostics, E0701, msg, espan))
     }
     if found.is_public == false && found.span.file != "" && found.span.file != "<builtin>" && found.span.file != r.file {
         q := _q()
