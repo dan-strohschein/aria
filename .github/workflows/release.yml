@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g. 0.2.0). Leave empty to auto-increment patch from latest tag.'
+        description: 'Version (e.g. 0.1.0). Leave empty to auto-increment patch.'
         required: false
         default: ''
       prerelease:
@@ -16,20 +16,46 @@ on:
 permissions:
   contents: write
 
+env:
+  # File order matters: diagnostic.aria must come before lexer.aria
+  # to ensure correct struct field resolution (see _field_index_any)
+  ARIA_SOURCES: >-
+    src/main.aria
+    src/diagnostic/diagnostic.aria
+    src/lexer/token.aria
+    src/lexer/lexer.aria
+    src/parser/ast.aria
+    src/parser/parser.aria
+    src/parser/precedence.aria
+    src/resolver/scope.aria
+    src/resolver/resolver.aria
+    src/checker/types.aria
+    src/checker/traits.aria
+    src/checker/checker.aria
+    src/codegen/ir.aria
+    src/codegen/lower.aria
+    src/codegen/llvm.aria
+    src/codegen/codegen.aria
+
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            label: darwin-arm64
+          - os: macos-13
+            label: darwin-amd64
+          - os: ubuntu-latest
+            label: linux-amd64
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout aria (self-hosting compiler)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Checkout bootstrap compiler
-        # Requires BOOTSTRAP_PAT secret (Personal Access Token with repo scope)
-        # if aria-compiler-go is a private repository.
-        # To create: GitHub Settings > Developer Settings > Personal Access Tokens > Generate
-        # Then add as repo secret: aria repo > Settings > Secrets > Actions > BOOTSTRAP_PAT
         uses: actions/checkout@v4
         with:
           repository: dan-strohschein/aria-compiler-go
@@ -40,6 +66,52 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+
+      - name: Install clang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Build bootstrap compiler
+        run: |
+          cd aria-compiler-go
+          sed -i.bak 's/^go .*/go 1.23/' go.mod
+          go build -o ../bootstrap-aria ./cmd/aria
+
+      - name: Bootstrap → Gen0
+        run: ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
+
+      - name: Gen0 → Gen1 (self-compile)
+        run: ./main build ${{ env.ARIA_SOURCES }}
+
+      - name: Gen1 → Gen2 (verify fixed point)
+        run: |
+          cp src/main gen1
+          src/main build ${{ env.ARIA_SOURCES }}
+          cp src/main gen2
+
+          if cmp -s gen1 gen2; then
+            echo "Fixed point reached: Gen1 == Gen2"
+          else
+            echo "WARNING: Gen1 and Gen2 differ ($(wc -c < gen1) vs $(wc -c < gen2) bytes)"
+          fi
+
+      - name: Run test suite
+        run: ARIA_COMPILER=./gen2 bash testdata/programs/run_tests.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aria-${{ matrix.label }}
+          path: gen2
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Determine version
         id: version
@@ -59,141 +131,47 @@ jobs:
               VERSION="${MAJOR}.${MINOR}.${PATCH}"
             fi
           fi
-          TAG="v${VERSION}-beta"
+          if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
+            TAG="v${VERSION}-beta"
+          else
+            TAG="v${VERSION}"
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}, Tag: ${TAG}"
 
-      - name: Stamp version in source
-        run: |
-          sed -i "s/const COMPILER_VERSION: str = \".*\"/const COMPILER_VERSION: str = \"${{ steps.version.outputs.version }}-beta\"/" src/main.aria
-          grep COMPILER_VERSION src/main.aria
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-      - name: Build bootstrap compiler
-        env:
-          GOTOOLCHAIN: local
-          GOFLAGS: ""
-        run: |
-          # Override go.mod's go directive (1.25.5 is pre-release, not on CI)
-          cd aria-compiler-go
-          sed -i 's/^go .*/go 1.23/' go.mod
-          go build -o ../bootstrap-aria ./cmd/aria
-
-      - name: Build for all platforms
-        env:
-          GOTOOLCHAIN: local
+      - name: Prepare release binaries
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           mkdir -p dist
-
-          # The bootstrap transpiles Aria -> Go, then calls `go build`.
-          # GOOS/GOARCH env vars propagate to the internal `go build` call,
-          # enabling cross-compilation from a single runner.
-
-          build_target() {
-            local GOOS=$1 GOARCH=$2 LABEL=$3
-            echo "=== Building aria-${TAG}-${LABEL} ==="
-            rm -f main
-            GOOS=$GOOS GOARCH=$GOARCH ./bootstrap-aria build \
-              src/main.aria src/lexer/token.aria src/lexer/lexer.aria \
-              src/parser/ast.aria src/parser/parser.aria src/parser/precedence.aria \
-              src/resolver/scope.aria src/resolver/resolver.aria \
-              src/checker/types.aria src/checker/traits.aria src/checker/checker.aria \
-              src/codegen/ir.aria src/codegen/lower.aria src/codegen/llvm.aria \
-              src/codegen/codegen.aria src/diagnostic/diagnostic.aria 2>&1
-            if [ -f "main" ]; then
-              mv main "dist/aria-${TAG}-${LABEL}"
-              echo "  OK: dist/aria-${TAG}-${LABEL}"
-            else
-              echo "  FAILED: no output for ${LABEL}"
-              return 1
+          for dir in artifacts/aria-*; do
+            label=$(basename "$dir" | sed 's/^aria-//')
+            src="$dir/gen2"
+            if [ -f "$src" ]; then
+              dest="dist/aria-${TAG}-${label}"
+              cp "$src" "$dest"
+              chmod +x "$dest"
+              echo "Prepared: $dest ($(wc -c < "$dest") bytes)"
             fi
-          }
-
-          build_target darwin  arm64 darwin-arm64
-          build_target darwin  amd64 darwin-amd64
-          build_target linux   amd64 linux-amd64
-          build_target linux   arm64 linux-arm64
-          build_target windows amd64 windows-amd64
-
-          # Rename Windows binary to .exe
-          if [ -f "dist/aria-${TAG}-windows-amd64" ]; then
-            mv "dist/aria-${TAG}-windows-amd64" "dist/aria-${TAG}-windows-amd64.exe"
-          fi
-
-          echo ""
-          echo "=== Release artifacts ==="
-          ls -lh dist/
-
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum aria-* > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          done
+          cd dist && sha256sum aria-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create tag and release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.version }}"
 
-          # Create annotated tag
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
-          # Build release notes
-          cat > /tmp/release-notes.md << 'NOTES'
-          ## Aria Compiler ${TAG}
-
-          Self-hosting Aria compiler — compiles Aria source to native executables via LLVM IR.
-
-          ### Quick Start
-
-          ```bash
-          # Download for your platform, then:
-          chmod +x aria-*
-          sudo mv aria-* /usr/local/bin/aria
-
-          # Verify
-          aria --version
-
-          # Compile a program
-          aria build hello.aria
-          ./hello
-          ```
-
-          ### Prerequisites
-
-          - **clang** — needed to compile generated LLVM IR to native code
-            - macOS: `xcode-select --install`
-            - Ubuntu/Debian: `sudo apt install clang`
-            - Fedora: `sudo dnf install clang`
-
-          ### Platform Binaries
-
-          | File | OS | Architecture |
-          |------|----|-------------|
-          | `aria-${TAG}-darwin-arm64` | macOS | Apple Silicon (M1/M2/M3/M4) |
-          | `aria-${TAG}-darwin-amd64` | macOS | Intel x86_64 |
-          | `aria-${TAG}-linux-amd64` | Linux | x86_64 |
-          | `aria-${TAG}-linux-arm64` | Linux | ARM64 / AArch64 |
-          | `aria-${TAG}-windows-amd64.exe` | Windows | x86_64 |
-
-          ### What's in This Release
-
-          - Self-hosting compiler (compiles its own 27,000-line source)
-          - 161 test programs, 156 pass single-file
-          - Full language support: generics, traits, pattern matching, error handling, effects, closures, Map, Set, list comprehensions
-          - LLVM IR backend targeting macOS and Linux
-          NOTES
-
-          # Substitute version into notes
-          sed -i "s/\${TAG}/${TAG}/g" /tmp/release-notes.md
-
-          # Create release
           PRERELEASE_FLAG=""
           if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
@@ -201,6 +179,25 @@ jobs:
 
           gh release create "$TAG" \
             --title "Aria ${TAG}" \
-            --notes-file /tmp/release-notes.md \
+            --notes "## Aria Compiler ${TAG}
+
+          Self-hosting Aria compiler. Each binary was produced by the compiler compiling itself (Gen2, verified fixed point).
+
+          ### Quick Start
+          \`\`\`bash
+          chmod +x aria-*
+          sudo mv aria-* /usr/local/bin/aria
+          aria build hello.aria && ./hello
+          \`\`\`
+
+          ### Requires
+          - **clang** (macOS: xcode-select --install, Ubuntu: sudo apt install clang)
+
+          ### Binaries
+          | File | Platform |
+          |------|----------|
+          | aria-${TAG}-darwin-arm64 | macOS Apple Silicon |
+          | aria-${TAG}-darwin-amd64 | macOS Intel |
+          | aria-${TAG}-linux-amd64 | Linux x86_64 |" \
             $PRERELEASE_FLAG \
             dist/*
