@@ -39,7 +39,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: 'stable'
 
       - name: Determine version
         id: version
@@ -70,11 +70,18 @@ jobs:
           grep COMPILER_VERSION src/main.aria
 
       - name: Build bootstrap compiler
+        env:
+          GOTOOLCHAIN: local
+          GOFLAGS: ""
         run: |
+          # Override go.mod's go directive (1.25.5 is pre-release, not on CI)
           cd aria-compiler-go
+          sed -i 's/^go .*/go 1.23/' go.mod
           go build -o ../bootstrap-aria ./cmd/aria
 
       - name: Build for all platforms
+        env:
+          GOTOOLCHAIN: local
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           mkdir -p dist
