@@ -1,0 +1,91 @@
+name: Test Windows Build
+
+on:
+  workflow_dispatch:
+
+env:
+  ARIA_SOURCES: >-
+    src/main.aria
+    src/diagnostic/diagnostic.aria
+    src/lexer/token.aria
+    src/lexer/lexer.aria
+    src/parser/ast.aria
+    src/parser/parser.aria
+    src/parser/precedence.aria
+    src/resolver/scope.aria
+    src/resolver/resolver.aria
+    src/checker/types.aria
+    src/checker/traits.aria
+    src/checker/checker.aria
+    src/codegen/ir.aria
+    src/codegen/lower.aria
+    src/codegen/llvm.aria
+    src/codegen/codegen.aria
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout bootstrap compiler
+        uses: actions/checkout@v4
+        with:
+          repository: dan-strohschein/aria-compiler-go
+          path: aria-compiler-go
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install LLVM/clang
+        run: choco install llvm -y
+
+      - name: Verify clang
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          clang --version
+
+      - name: Build bootstrap compiler
+        shell: bash
+        run: |
+          cd aria-compiler-go
+          sed -i.bak 's/^go .*/go 1.23/' go.mod
+          go build -o ../bootstrap-aria.exe ./cmd/aria
+
+      - name: Bootstrap → Gen0
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
+          ls -la main.exe
+          echo "Gen0 built"
+
+      - name: Gen0 → Gen1 (self-compile)
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          ./main.exe build ${{ env.ARIA_SOURCES }}
+          cp src/main.exe gen1.exe
+          echo "Gen1 built: $(wc -c < gen1.exe) bytes"
+
+      - name: Smoke test Gen1
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          echo 'mod test
+          fn add(a: i64, b: i64) -> i64 = a + b
+          entry { println(add(40, 2).toStr()) }' > /tmp/smoke.aria
+          ./gen1.exe build /tmp/smoke.aria
+          /tmp/smoke.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aria-windows-amd64
+          path: gen1.exe
