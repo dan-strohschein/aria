@@ -54,14 +54,8 @@ fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> Dia
     ll_path := output_path + ".ll"
     _ariaWriteFile(ll_path, ll_text)
 
-    // Compile with clang — platform-aware flags
-    // PostgreSQL and socket libs are only linked if available
-    mut platform_flags := ""
-    pq_test := _ariaExec("pkg-config --exists libpq 2>/dev/null")
-    if pq_test == 0 {
-        platform_flags = "-lpq -I/opt/homebrew/opt/libpq/include -L/opt/homebrew/opt/libpq/lib"
-    }
-    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module " + platform_flags + " 2>&1"
+    // Compile with clang
+    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module 2>&1"
     exit_code := _ariaExec(cmd)
 
     if exit_code != 0 {

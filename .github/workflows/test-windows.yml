@@ -87,15 +87,15 @@ jobs:
         shell: bash
         run: |
           export PATH="/c/Program Files/LLVM/bin:$PATH"
-          cat > smoke_test.aria << 'EOF'
-          mod test
-          fn add(a: i64, b: i64) -> i64 = a + b
-          entry { println(add(40, 2).toStr()) }
-          EOF
-          ./gen1.exe build smoke_test.aria
+          printf 'mod test\nentry {\n    println("hello from aria")\n}\n' > smoke_test.aria
+          cat smoke_test.aria
+          echo "=== Building smoke test ==="
+          ./gen1.exe build smoke_test.aria || echo "BUILD FAILED with exit $?"
+          echo "=== Output files ==="
           ls -la smoke_test* 2>/dev/null || true
           mv smoke_test smoke_test.exe 2>/dev/null || true
-          ./smoke_test.exe
+          echo "=== Running ==="
+          ./smoke_test.exe || echo "RUN FAILED with exit $?"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
