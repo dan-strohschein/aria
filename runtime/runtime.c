@@ -18,23 +18,32 @@ typedef long aria_int;
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#define _CRT_SECURE_NO_WARNINGS
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <io.h>
 #include <direct.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #define read _read
 #define write _write
 #define open _open
 #define close _close
-#define stat _stat
-#define O_RDONLY _O_RDONLY
+#define fstat _fstat
+#define O_WRONLY _O_WRONLY
+#define O_CREAT _O_CREAT
+#define O_TRUNC _O_TRUNC
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 typedef int ssize_t;
+// Format specifier for aria_int (long long on Windows)
+#define ARIA_FMT "%lld"
 #else
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#define ARIA_FMT "%ld"
 #endif
 
 // --- String struct (used by many functions) ---
@@ -332,7 +341,7 @@ void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_a
 
 struct _aria_str _aria_int_to_str(aria_int value) {
     char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%ld", value);
+    int len = snprintf(buf, sizeof(buf), ARIA_FMT, value);
     char *result = (char *)malloc((size_t)(len + 1));
     memcpy(result, buf, (size_t)(len + 1));
     struct _aria_str s = {result, (aria_int)len};
@@ -420,7 +429,7 @@ struct _aria_str _aria_str_charAt(char *ptr, aria_int len, aria_int index) {
         return s;
     }
     if (ptr == NULL) {
-        fprintf(stderr, "FATAL charAt: ptr=NULL len=%ld idx=%ld\n", len, index);
+        fprintf(stderr, "FATAL charAt: ptr=NULL len=" ARIA_FMT " idx=" ARIA_FMT "\n", len, index);
         exit(97);
     }
     char *result = (char *)malloc(2);
@@ -658,7 +667,7 @@ aria_int _aria_array_get(aria_int arr_ptr, aria_int index) {
     aria_int *header = (aria_int *)arr_ptr;
     aria_int length = header[0];
     if (index < 0 || index >= length) {
-        fprintf(stderr, "FATAL array_get: index=%ld len=%ld arr=%p\n", index, length, (void *)arr_ptr);
+        fprintf(stderr, "FATAL array_get: index=" ARIA_FMT " len=" ARIA_FMT " arr=%p\n", index, length, (void *)arr_ptr);
         exit(98);
     }
     aria_int *data = (aria_int *)header[2];
@@ -786,8 +795,8 @@ aria_int _aria_is_dir(char *path_ptr, aria_int path_len) {
 // Header: [size, capacity, keys_ptr, values_ptr, states_ptr]
 // states: 0=empty, 1=occupied, 2=deleted
 
-static unsigned long _fnv_hash_str(char *ptr, aria_int len) {
-    unsigned long h = 14695981039346656037ULL;
+static uint64_t _fnv_hash_str(char *ptr, aria_int len) {
+    uint64_t h = 14695981039346656037ULL;
     for (aria_int i = 0; i < len; i++) {
         h ^= (unsigned char)ptr[i];
         h *= 1099511628211ULL;
@@ -1253,7 +1262,7 @@ aria_int _aria_tcp_set_timeout(aria_int fd, aria_int kind, aria_int ms) {
     tv.tv_sec = ms / 1000;
     tv.tv_usec = (ms % 1000) * 1000;
     int opt = (kind == 0) ? SO_RCVTIMEO : SO_SNDTIMEO;
-    if (setsockopt((int)fd, SOL_SOCKET, opt, &tv, sizeof(tv)) < 0) return -1;
+    if (setsockopt((int)fd, SOL_SOCKET, opt, (const char *)&tv, sizeof(tv)) < 0) return -1;
     return 0;
 }
 
@@ -2121,7 +2130,7 @@ struct _aria_str _aria_format_int(aria_int value, char *spec_ptr, aria_int spec_
         if (use_alt) len = snprintf(buf, 128, "0b%s", bbuf);
         else len = snprintf(buf, 128, "%s", bbuf);
     } else {
-        len = snprintf(buf, 128, "%ld", value);
+        len = snprintf(buf, 128, ARIA_FMT, value);
     }
     // Apply width padding
     if (width > len) {
