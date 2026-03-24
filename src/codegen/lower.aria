@@ -7391,20 +7391,32 @@ fn _field_index(reg: TypeRegistry, struct_name: str, field_name: str) -> i64 {
 // Search all struct defs for a field name and return its memory-level slot index
 // WARNING: Ambiguous if multiple structs have same field name. Prefer _field_index with known struct.
 fn _field_index_any(reg: TypeRegistry, field_name: str) -> i64 {
+    // When multiple structs have the same field name, prefer the smallest struct
+    // (leaf structs like Span, FieldInfo, Symbol over containers like Resolver, Lowerer)
+    mut best_name := ""
+    mut best_size := 999
     mut si := 1
     while si < reg.struct_defs.len() {
         def := reg.struct_defs[si]
-        if def.name != "" && def.is_sum == false {
-            mut fi := 1
-            while fi < def.fields.len() {
-                if def.fields[fi].name == field_name {
-                    // Use type-aware _field_index for correct memory layout
-                    return _field_index(reg, def.name, field_name)
+        if def.name != "" {
+            if def.is_sum == false {
+                mut fi := 1
+                while fi < def.fields.len() {
+                    if def.fields[fi].name == field_name {
+                        sz := def.fields.len() - 1
+                        if best_name == "" || sz < best_size {
+                            best_name = def.name
+                            best_size = sz
+                        }
+                    }
+                    fi = fi + 1
                 }
-                fi = fi + 1
             }
         }
         si = si + 1
+    }
+    if best_name != "" {
+        return _field_index(reg, best_name, field_name)
     }
     0
 }
@@ -7429,6 +7441,19 @@ fn _struct_type_id(reg: TypeRegistry, struct_name: str) -> i64 {
     0
 }
 
+fn _field_type_id_from_name(reg: TypeRegistry, struct_name: str, field_name: str) -> i64 {
+    def := reg_find_struct(reg, struct_name)
+    if def.name == "" { return 0 }
+    mut i := 1
+    while i < def.fields.len() {
+        if def.fields[i].name == field_name {
+            return def.fields[i].type_id
+        }
+        i = i + 1
+    }
+    0
+}
+
 fn _field_type_id(l: Lowerer, struct_name: str, field_name: str) -> i64 {
     def := reg_find_struct(l.registry, struct_name)
     if def.name == "" { return 0 }
@@ -7443,21 +7468,32 @@ fn _field_type_id(l: Lowerer, struct_name: str, field_name: str) -> i64 {
 }
 
 // Search all struct defs for a field name and return its type_id
-// WARNING: Ambiguous if multiple structs have same field name. Prefer _field_type_id with known struct.
+// Prefers smallest struct when field name is ambiguous across structs
 fn _field_type_id_any(reg: TypeRegistry, field_name: str) -> i64 {
+    mut best_name := ""
+    mut best_size := 999
     mut si := 1
     while si < reg.struct_defs.len() {
         def := reg.struct_defs[si]
-        if def.name != "" && def.is_sum == false {
-            mut fi := 1
-            while fi < def.fields.len() {
-                if def.fields[fi].name == field_name {
-                    return def.fields[fi].type_id
+        if def.name != "" {
+            if def.is_sum == false {
+                mut fi := 1
+                while fi < def.fields.len() {
+                    if def.fields[fi].name == field_name {
+                        sz := def.fields.len() - 1
+                        if best_name == "" || sz < best_size {
+                            best_name = def.name
+                            best_size = sz
+                        }
+                    }
+                    fi = fi + 1
                 }
-                fi = fi + 1
             }
         }
         si = si + 1
+    }
+    if best_name != "" {
+        return _field_type_id_from_name(reg, best_name, field_name)
     }
     0
 }
