@@ -1286,6 +1286,15 @@ fn _parse_stmt(p: Parser) -> PR {
     if k == "return" { return _parse_return(p) }
     if k == "break" { return PR{p: _adv(p), e: mk_break(_pspan(p))} }
     if k == "continue" { return PR{p: _adv(p), e: mk_continue(_pspan(p))} }
+    if k == "yield" {
+        span := _pspan(p)
+        mut pp := _adv(p)
+        val := _parse_expr(pp, 0)
+        val_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        return PR{p: pp, e: Expr{kind: EkYield, s1: "", s2: "", b1: true, b2: false,
+                                  c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
     if k == "for" { return _parse_for(p) }
     if k == "while" { return _parse_while(p) }
     if k == "loop" { return _parse_loop(p) }
@@ -1903,8 +1912,50 @@ fn _parse_array(p: Parser) -> PR {
     span := _pspan(p)
     mut pp := _adv(p)
     pp = _skip_nl(pp)
+    // Empty array
+    if _ck(pp) == "]" {
+        pp = _adv(pp)
+        return PR{p: pp, e: Expr{kind: EkArray, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
+    // Parse first expression
+    first := _parse_expr(pp, 0)
+    first_idx := _pidx(first.p)
+    pp = _padd(first.p, first.e)
+    pp = _skip_nl(pp)
+    // List comprehension: [expr for x in iter] or [expr for x in iter where cond]
+    if _ck(pp) == "for" {
+        pp = _adv(pp)
+        mut var_name := ""
+        if _ck(pp) == "IDENT" {
+            var_name = _cur(pp).text
+            pp = _adv(pp)
+        }
+        if _ck(pp) == "in" { pp = _adv(pp) }
+        iter := _parse_expr(pp, 0)
+        iter_idx := _pidx(iter.p)
+        pp = _padd(iter.p, iter.e)
+        pp = _skip_nl(pp)
+        mut where_idx := 0
+        mut has_where := false
+        if _ck(pp) == "where" || _ck(pp) == "if" {
+            pp = _adv(pp)
+            wexpr := _parse_expr(pp, 0)
+            where_idx = _pidx(wexpr.p)
+            pp = _padd(wexpr.p, wexpr.e)
+            has_where = true
+        }
+        pp = _skip_nl(pp)
+        pp = _expect(pp, "]")
+        return PR{p: pp, e: Expr{kind: EkListComp, s1: var_name, s2: "", b1: has_where, b2: false,
+                                  c0: first_idx, c1: iter_idx, c2: where_idx,
+                                  list_start: 0, list_count: 0, span: span}}
+    }
+    // Regular array: collect remaining elements
     mut arr_elem_indices := [0]
-    mut count := 0
+    arr_elem_indices = arr_elem_indices.append(first_idx)
+    mut count := 1
+    if _ck(pp) == "," { pp = _adv(pp) }
     while _ck(pp) != "]" && _ck(pp) != "EOF" {
         pp = _skip_nl(pp)
         r := _parse_expr(pp, 0)

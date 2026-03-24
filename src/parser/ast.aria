@@ -54,6 +54,8 @@ type ExprKind =
     | EkParam
     | EkField
     | EkVariant
+    | EkListComp
+    | EkYield
     | EkNone
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
@@ -100,6 +102,8 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkParam => "Param"
     EkField => "Field"
     EkVariant => "Variant"
+    EkListComp => "ListComp"
+    EkYield => "Yield"
     EkNone => "None"
 }
 

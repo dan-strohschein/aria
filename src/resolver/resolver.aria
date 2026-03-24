@@ -1607,6 +1607,22 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
         return _pop_scope(rr, parent_scope)
     }
 
+    if nk == "ListComp" {
+        // s1=var_name, c0=mapping expr, c1=iterator, c2=where (if b1)
+        parent_scope := r.current_scope
+        mut rr := _push_scope(r, ScBlock, "listcomp")
+        rr = _resolve_expr_node(rr, node.c1)
+        rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, false)
+        rr = _resolve_expr_node(rr, node.c0)
+        if node.b1 { rr = _resolve_expr_node(rr, node.c2) }
+        return _pop_scope(rr, parent_scope)
+    }
+
+    if nk == "Yield" {
+        if node.b1 { return _resolve_expr_node(r, node.c0) }
+        return r
+    }
+
     // Fallback — skip unknown kinds
     r
 }

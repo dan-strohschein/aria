@@ -1761,6 +1761,97 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         return LT{l: ll, temp: start.temp}
     }
 
+    // --- ListComp ---
+
+    if nk == "ListComp" {
+        // s1=var_name, c0=mapping_expr, c1=iterator, c2=where_expr (if b1)
+        // Desugar to: result = []; for x in iter { if cond { result.append(expr) } }
+        arr_nt := _lnew_temp(ll)
+        ll = arr_nt.l
+        ll = _lemit(ll, new_inst(OpArrayNew, arr_nt.temp, 0, 0, "", 0))
+        // Lower iterator
+        iter := _lower_expr_node(ll, node.c1)
+        ll = iter.l
+        iter_type := _lget_type(ll, iter.temp)
+        // Get array length
+        len_nt := _lnew_temp(ll)
+        ll = len_nt.l
+        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, iter.temp, 0, "", 0))
+        idx_nt := _lnew_temp(ll)
+        ll = idx_nt.l
+        ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
+        loop_lbl := _lnew_label(ll)
+        ll = loop_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+        cond_nt := _lnew_temp(ll)
+        ll = cond_nt.l
+        ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
+        // Load element and bind loop variable
+        if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+            elem_nt := _lnew_str_temp(ll)
+            ll = elem_nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
+            ll = _lset_type(ll, elem_nt.temp, 12)
+            ll = _lenv_add(ll, node.s1, elem_nt.temp)
+        } else {
+            elem_nt := _lnew_temp(ll)
+            ll = elem_nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+            elem_type := _array_elem_type(ll.store, iter_type)
+            if elem_type > 0 { ll = _lset_type(ll, elem_nt.temp, elem_type) }
+            ll = _lenv_add(ll, node.s1, elem_nt.temp)
+        }
+        // Optional where/if filter
+        if node.b1 {
+            skip_lbl := _lnew_label(ll)
+            ll = skip_lbl.l
+            wcond := _lower_expr_node(ll, node.c2)
+            ll = wcond.l
+            ll = _lemit(ll, new_inst(OpBranchFalse, 0, wcond.temp, skip_lbl.temp, "", 0))
+            // Lower mapping expression and append
+            mval := _lower_expr_node(ll, node.c0)
+            ll = mval.l
+            ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, mval.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, skip_lbl.temp, 0, "", 0))
+        } else {
+            // No filter — always append
+            mval := _lower_expr_node(ll, node.c0)
+            ll = mval.l
+            ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, mval.temp, "", 0))
+        }
+        // Increment and loop
+        one_nt := _lnew_temp(ll)
+        ll = one_nt.l
+        ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+        inc_nt := _lnew_temp(ll)
+        ll = inc_nt.l
+        ll = _lemit(ll, new_inst(OpAdd, inc_nt.temp, idx_nt.temp, one_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, idx_nt.temp, inc_nt.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: arr_nt.temp}
+    }
+
+    // --- Yield ---
+
+    if nk == "Yield" {
+        // yield expr — used in catch blocks to provide the catch value
+        // Falls back to token-walking for proper catch context integration
+        if node.b1 {
+            tp := _find_tok_pos(ll, node.span.offset)
+            ll = _lset_pos(ll, tp)
+            // yield is treated like a return-from-catch: lower the expression
+            ll = _ladv(ll)  // skip "yield"
+            result := _lower_expr(ll)
+            ll = result.l
+            return LT{l: ll, temp: result.temp}
+        }
+        return LT{l: ll, temp: -1}
+    }
+
     // --- Propagate (?) ---
 
     if nk == "Propagate" {
@@ -3167,6 +3258,12 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
             ll = _lemit(ll, new_inst(OpJump, 0, l.loop_start, 0, "", 0))
         }
         return ll
+    }
+    if k == "yield" {
+        // yield expr — in catch blocks, the yielded value becomes the catch result
+        mut ll := _ladv(l)
+        result := _lower_expr(ll)
+        return result.l
     }
     if k == "for" { return _lower_for(l) }
     if k == "while" { return _lower_while(l) }
@@ -6296,9 +6393,125 @@ fn _lower_primary(l: Lowerer) -> LT {
     }
 
     if k == "[" {
-        // Array literal — do NOT type as [str] since [""] sentinels are used for all array types
         mut ll := _ladv(l)
         ll = _lskip_nl(ll)
+        // Empty array
+        if _lk(ll) == "]" {
+            ll = _ladv(ll)
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpArrayNew, nt.temp, 0, 0, "", 0))
+            return LT{l: ll, temp: nt.temp}
+        }
+        // Peek ahead for list comprehension: save position, skip expr, check for "for"
+        mut is_listcomp := false
+        mut peek_pos := ll.pos
+        mut depth := 0
+        while peek_pos < ll.tokens.len() {
+            pk := token_name(ll.tokens[peek_pos].kind)
+            if pk == "[" || pk == "(" { depth = depth + 1 }
+            if pk == "]" {
+                if depth == 0 { peek_pos = ll.tokens.len() } else { depth = depth - 1 }
+            }
+            if pk == ")" { if depth > 0 { depth = depth - 1 } }
+            if pk == "for" && depth == 0 { is_listcomp = true }
+            peek_pos = peek_pos + 1
+        }
+        if is_listcomp {
+            // List comprehension: [expr for x in iter] or [expr for x in iter where cond]
+            // Save the mapping expression start position (don't lower yet)
+            map_expr_pos := ll.pos
+            // Skip past the mapping expression to find "for"
+            mut skip_depth := 0
+            while _lk(ll) != "for" || skip_depth > 0 {
+                sk := _lk(ll)
+                if sk == "(" || sk == "[" { skip_depth = skip_depth + 1 }
+                if sk == ")" || sk == "]" { if skip_depth > 0 { skip_depth = skip_depth - 1 } }
+                if sk == "EOF" { return LT{l: ll, temp: 0} }
+                ll = _ladv(ll)
+            }
+            ll = _ladv(ll)  // skip "for"
+            mut lc_var := ""
+            if _lk(ll) == "IDENT" {
+                lc_var = _lcur(ll).text
+                ll = _ladv(ll)
+            }
+            if _lk(ll) == "in" { ll = _ladv(ll) }
+            // Lower iterator
+            iter := _lower_expr(ll)
+            ll = iter.l
+            ll = _lskip_nl(ll)
+            // Check for where/if filter
+            mut has_where := false
+            mut where_pos := 0
+            if _lk(ll) == "where" || _lk(ll) == "if" {
+                has_where = true
+                ll = _ladv(ll)
+                where_pos = ll.pos
+                while _lk(ll) != "]" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            }
+            if _lk(ll) == "]" { ll = _ladv(ll) }
+            end_pos := ll.pos
+            // Result array
+            arr_nt := _lnew_temp(ll)
+            ll = arr_nt.l
+            ll = _lemit(ll, new_inst(OpArrayNew, arr_nt.temp, 0, 0, "", 0))
+            // Loop setup
+            len_nt := _lnew_temp(ll)
+            ll = len_nt.l
+            ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, iter.temp, 0, "", 0))
+            idx_nt := _lnew_temp(ll)
+            ll = idx_nt.l
+            ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
+            loop_lbl := _lnew_label(ll)
+            ll = loop_lbl.l
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+            cond_nt := _lnew_temp(ll)
+            ll = cond_nt.l
+            ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
+            // Load element and bind loop variable
+            elem_nt := _lnew_temp(ll)
+            ll = elem_nt.l
+            ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+            if lc_var != "" { ll = _lenv_add(ll, lc_var, elem_nt.temp) }
+            // Where filter (optional)
+            if has_where {
+                ll = _lset_pos(ll, where_pos)
+                wcond := _lower_expr(ll)
+                ll = wcond.l
+                skip_lbl := _lnew_label(ll)
+                ll = skip_lbl.l
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, wcond.temp, skip_lbl.temp, "", 0))
+                // Lower mapping expression inside the loop
+                ll = _lset_pos(ll, map_expr_pos)
+                mval := _lower_expr(ll)
+                ll = mval.l
+                ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, mval.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, skip_lbl.temp, 0, "", 0))
+            } else {
+                // Lower mapping expression inside the loop
+                ll = _lset_pos(ll, map_expr_pos)
+                mval := _lower_expr(ll)
+                ll = mval.l
+                ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, mval.temp, "", 0))
+            }
+            // Increment
+            one_nt := _lnew_temp(ll)
+            ll = one_nt.l
+            ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+            inc_nt := _lnew_temp(ll)
+            ll = inc_nt.l
+            ll = _lemit(ll, new_inst(OpAdd, inc_nt.temp, idx_nt.temp, one_nt.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, idx_nt.temp, inc_nt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            ll = _lset_pos(ll, end_pos)
+            return LT{l: ll, temp: arr_nt.temp}
+        }
+        // Regular array literal
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpArrayNew, nt.temp, 0, 0, "", 0))
