@@ -254,10 +254,10 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
     pr := build_decl_index(toks)
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
 
-    rr := resolve(toks, pr.index, file)
+    rr := resolve(toks, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
-    cr := check(toks, pr.index, rr.table, file)
+    cr := check(toks, pr.index, pr.pool, rr.table, file)
     return cr.diagnostics
 }
 

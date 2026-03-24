@@ -11,7 +11,9 @@ use lexer
 
 fn _resolve_source(source: str) -> ResolveResult {
     lex := tokenize(source, "test.aria")
-    resolve(get_tokens(lex), "test.aria")
+    toks := get_tokens(lex)
+    pr := build_decl_index(toks)
+    resolve(toks, pr.index, pr.pool, "test.aria")
 }
 
 fn _has_errors(result: ResolveResult) -> bool = bag_has_errors(result.diagnostics)

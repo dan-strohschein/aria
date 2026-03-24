@@ -141,6 +141,11 @@ const TY_TASK: i64 = 18
 const TY_CHAN_SEND: i64 = 19
 const TY_CHAN_RECV: i64 = 20
 
+// Registry-based struct type IDs start at this offset.
+// Type IDs >= TY_STRUCT_BASE are indices into the TypeRegistry's struct_defs array.
+// Index into struct_defs = type_id - TY_STRUCT_BASE + 1 (slot 0 is sentinel).
+const TY_STRUCT_BASE: i64 = 100
+
 fn new_store() -> TypeStore {
     mut types := [_sentinel_type()]
     types = types.append(_mk_prim(TyI64))     // 1: i64

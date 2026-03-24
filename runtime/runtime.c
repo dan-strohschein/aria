@@ -885,6 +885,128 @@ long _aria_map_keys(long map_ptr) {
     return arr;
 }
 
+// --- Set (hash set using same structure as Map, no values) ---
+// Header: [size, capacity, keys_ptr, states_ptr]
+
+long _aria_set_new(long capacity) {
+    if (capacity < 8) capacity = 8;
+    long *header = (long *)calloc(1, 32);  // 4 * 8 bytes
+    header[0] = 0;          // size
+    header[1] = capacity;   // capacity
+    header[2] = (long)calloc((size_t)capacity, 8);  // keys (ptr+len pairs)
+    header[3] = (long)calloc((size_t)capacity, 1);  // states
+    return (long)header;
+}
+
+void _aria_set_add(long set_ptr, long key_ptr, long key_len) {
+    long *header = (long *)set_ptr;
+    long size = header[0];
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[3];
+
+    if (size * 10 > capacity * 7) {
+        long new_cap = capacity * 2;
+        long *new_keys = (long *)calloc((size_t)new_cap, 8);
+        char *new_states = (char *)calloc((size_t)new_cap, 1);
+        for (long i = 0; i < capacity; i++) {
+            if (states[i] == 1) {
+                long kp = keys[i * 2];
+                long kl = keys[i * 2 + 1];
+                unsigned long h = _fnv_hash_str((char *)kp, kl) % (unsigned long)new_cap;
+                while (new_states[h] == 1) { h = (h + 1) % (unsigned long)new_cap; }
+                new_keys[h * 2] = kp;
+                new_keys[h * 2 + 1] = kl;
+                new_states[h] = 1;
+            }
+        }
+        free(keys); free(states);
+        header[1] = new_cap;
+        header[2] = (long)new_keys;
+        header[3] = (long)new_states;
+        capacity = new_cap;
+        keys = new_keys;
+        states = new_states;
+    }
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    while (states[h] == 1) {
+        if (keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            return;  // already in set
+        }
+        h = (h + 1) % (unsigned long)capacity;
+    }
+    keys[h * 2] = key_ptr;
+    keys[h * 2 + 1] = key_len;
+    states[h] = 1;
+    header[0] = size + 1;
+}
+
+long _aria_set_contains(long set_ptr, long key_ptr, long key_len) {
+    long *header = (long *)set_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[3];
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    long probes = 0;
+    while (states[h] != 0 && probes < capacity) {
+        if (states[h] == 1 && keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            return 1;
+        }
+        h = (h + 1) % (unsigned long)capacity;
+        probes++;
+    }
+    return 0;
+}
+
+long _aria_set_len(long set_ptr) {
+    if (set_ptr == 0) return 0;
+    long *header = (long *)set_ptr;
+    return header[0];
+}
+
+void _aria_set_remove(long set_ptr, long key_ptr, long key_len) {
+    long *header = (long *)set_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[3];
+
+    unsigned long h = _fnv_hash_str((char *)key_ptr, key_len) % (unsigned long)capacity;
+    long probes = 0;
+    while (states[h] != 0 && probes < capacity) {
+        if (states[h] == 1 && keys[h * 2 + 1] == key_len &&
+            memcmp((char *)keys[h * 2], (char *)key_ptr, (size_t)key_len) == 0) {
+            states[h] = 2;  // tombstone
+            header[0] = header[0] - 1;
+            return;
+        }
+        h = (h + 1) % (unsigned long)capacity;
+        probes++;
+    }
+}
+
+long _aria_set_values(long set_ptr) {
+    long *header = (long *)set_ptr;
+    long capacity = header[1];
+    long *keys = (long *)header[2];
+    char *states = (char *)header[3];
+
+    long arr = _aria_array_new(header[0] * 2 + 2);
+    _aria_array_append(arr, 0);  // sentinel
+    for (long i = 0; i < capacity; i++) {
+        if (states[i] == 1) {
+            long *str_struct = (long *)malloc(16);
+            str_struct[0] = keys[i * 2];
+            str_struct[1] = keys[i * 2 + 1];
+            _aria_array_append(arr, (long)str_struct);
+        }
+    }
+    return arr;
+}
+
 // --- Command line args ---
 
 static long _aria_args_array = 0;

@@ -288,6 +288,8 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "None", SkBuiltin)
     // Built-in constructors
     rr = _add_builtin(rr, "Map", SkBuiltin)
+    rr = _add_builtin(rr, "Set", SkBuiltin)
+    rr = _add_builtin(rr, "dyn", SkBuiltin)
     // Effect names
     rr = _add_builtin(rr, "Io", SkBuiltin)
     rr = _add_builtin(rr, "Fs", SkBuiltin)
@@ -1454,22 +1456,24 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     }
 
     if nk == "Call" {
-        // c0 = callee, list = args
+        // c0 = callee, list = args (index nodes with c0 → actual arg)
         mut rr := _resolve_expr_node(r, node.c0)
         mut ai := 0
         while ai < node.list_count {
-            rr = _resolve_expr_node(rr, node.list_start + ai)
+            arg_idx := pool_get(r.pool, node.list_start + ai)
+            rr = _resolve_expr_node(rr, arg_idx.c0)
             ai = ai + 1
         }
         return rr
     }
 
     if nk == "MethodCall" {
-        // c0 = receiver, list = args (method name s1 is not a reference)
+        // c0 = receiver, list = args (index nodes with c0 → actual arg)
         mut rr := _resolve_expr_node(r, node.c0)
         mut ai := 0
         while ai < node.list_count {
-            rr = _resolve_expr_node(rr, node.list_start + ai)
+            arg_idx := pool_get(r.pool, node.list_start + ai)
+            rr = _resolve_expr_node(rr, arg_idx.c0)
             ai = ai + 1
         }
         return rr
@@ -1479,7 +1483,8 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
         mut rr := r
         mut ai := 0
         while ai < node.list_count {
-            rr = _resolve_expr_node(rr, node.list_start + ai)
+            elem_idx := pool_get(r.pool, node.list_start + ai)
+            rr = _resolve_expr_node(rr, elem_idx.c0)
             ai = ai + 1
         }
         return rr
@@ -1493,7 +1498,8 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
         }
         mut fi := 0
         while fi < node.list_count {
-            rr = _resolve_expr_node(rr, node.list_start + fi)
+            fval_idx := pool_get(r.pool, node.list_start + fi)
+            rr = _resolve_expr_node(rr, fval_idx.c0)
             fi = fi + 1
         }
         return rr

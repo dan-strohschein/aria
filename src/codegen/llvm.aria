@@ -62,7 +62,12 @@ fn _llvm_escape_str(s: str) -> str {
             result = result + "\\0D"
         } else if ch == "\t" {
             result = result + "\\09"
+        } else if ch == "\0" {
+            result = result + "\\00"
         } else {
+            // Printable ASCII and raw UTF-8 bytes pass through unchanged.
+            // LLVM c"..." accepts raw bytes; the byte count in [N x i8] uses
+            // s.len() which returns byte length, so multi-byte UTF-8 is correct.
             result = result + ch
         }
         i = i + 1
@@ -233,6 +238,12 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare i64 @_aria_map_contains(i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_map_len(i64)" + nl)
     p = p.append("declare i64 @_aria_map_keys(i64)" + nl)
+    p = p.append("declare i64 @_aria_set_new(i64)" + nl)
+    p = p.append("declare void @_aria_set_add(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_set_contains(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_set_len(i64)" + nl)
+    p = p.append("declare void @_aria_set_remove(i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_set_values(i64)" + nl)
     // Networking + environment
     p = p.append("declare " + si64 + " @_aria_getenv(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_tcp_socket()" + nl)
@@ -402,13 +413,19 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     }
 
     // Entry point wrapper
+    lb := _lb()
+    rb := _rb()
     if m.entry_func != "" {
-        lb := _lb()
-        rb := _rb()
         p = p.append("; Entry wrapper" + nl)
         p = p.append("define void @_aria_entry() " + lb + nl)
         p = p.append("entry:" + nl)
         p = p.append("  call void @" + m.entry_func + "()" + nl)
+        p = p.append("  ret void" + nl)
+        p = p.append(rb + nl + nl)
+    } else {
+        // Stub entry for test-only files (no entry block)
+        p = p.append("define void @_aria_entry() " + lb + nl)
+        p = p.append("entry:" + nl)
         p = p.append("  ret void" + nl)
         p = p.append(rb + nl + nl)
     }
@@ -1262,6 +1279,81 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%mkeys_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_keys(i64 " + map_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "SetNew" {
+        mut gg := g
+        cap_v := "%snew_cap_" + i2s(idx)
+        gg = _lg_emit(gg, cap_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%snew_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_set_new(i64 " + cap_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "SetAdd" {
+        // arg1 = set ptr, arg2 = value (str temp)
+        mut gg := g
+        set_v := "%sadd_s_" + i2s(idx)
+        gg = _lg_emit(gg, set_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%sadd_kp_" + i2s(idx)
+        key_l := "%sadd_kl_" + i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%sadd_kpc_" + i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        gg = _lg_emit(gg, "call void @_aria_set_add(i64 " + set_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
+        return gg
+    }
+
+    if op == "SetContains" {
+        mut gg := g
+        set_v := "%shas_s_" + i2s(idx)
+        gg = _lg_emit(gg, set_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%shas_kp_" + i2s(idx)
+        key_l := "%shas_kl_" + i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%shas_kpc_" + i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        res := "%shas_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_set_contains(i64 " + set_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "SetLen" {
+        mut gg := g
+        set_v := "%slen_s_" + i2s(idx)
+        gg = _lg_emit(gg, set_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%slen_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_set_len(i64 " + set_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "SetValues" {
+        mut gg := g
+        set_v := "%svals_s_" + i2s(idx)
+        gg = _lg_emit(gg, set_v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%svals_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_set_values(i64 " + set_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "SetRemove" {
+        mut gg := g
+        set_v := "%srem_s_" + i2s(idx)
+        gg = _lg_emit(gg, set_v + " = load i64, i64* " + _t(inst.arg1))
+        key_p := "%srem_kp_" + i2s(idx)
+        key_l := "%srem_kl_" + i2s(idx)
+        gg = _lg_emit(gg, key_p + " = load i64, i64* " + _t(inst.arg2))
+        gg = _lg_emit(gg, key_l + " = load i64, i64* " + _t(inst.arg2 + 1))
+        key_pc := "%srem_kpc_" + i2s(idx)
+        gg = _lg_emit(gg, key_pc + " = inttoptr i64 " + key_p + " to i8*")
+        gg = _lg_emit(gg, "call void @_aria_set_remove(i64 " + set_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
         return gg
     }
 

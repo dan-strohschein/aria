@@ -28,15 +28,15 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
 
     // 2. Resolve
-    rr := resolve(toks, pr.index, file)
+    rr := resolve(toks, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
     // 3. Type check
-    cr := check(toks, pr.index, rr.table, file)
+    cr := check(toks, pr.index, pr.pool, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(toks, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower(toks, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR and compile with clang
     generate_from_module(m, output_path, runtime_path)
@@ -149,15 +149,15 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
 
     // 2. Resolve
-    rr := resolve(merged, pr.index, file)
+    rr := resolve(merged, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
 
     // 3. Type check
-    cr := check(merged, pr.index, rr.table, file)
+    cr := check(merged, pr.index, pr.pool, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // 4. Lower to IR
-    m := lower(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
 
     // 5. Generate LLVM IR + compile
     generate_from_module(m, output_path, runtime_path)
@@ -186,9 +186,9 @@ fn check_sources(files: [str]) -> DiagnosticBag {
     file := files[1]
     pr := build_decl_index(merged)
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
-    rr := resolve(merged, pr.index, file)
+    rr := resolve(merged, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, pr.index, rr.table, file)
+    cr := check(merged, pr.index, pr.pool, rr.table, file)
     cr.diagnostics
 }
 
@@ -215,13 +215,13 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
     file := files[1]
     pr := build_decl_index(merged)
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
-    rr := resolve(merged, pr.index, file)
+    rr := resolve(merged, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, pr.index, rr.table, file)
+    cr := check(merged, pr.index, pr.pool, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // Lower with test runner generation
-    m := lower_for_tests(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
 
     generate_from_module(m, output_path, runtime_path)
 }
@@ -249,10 +249,10 @@ fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str
     file := files[1]
     pr := build_decl_index(merged)
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
-    rr := resolve(merged, pr.index, file)
+    rr := resolve(merged, pr.index, pr.pool, file)
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
-    cr := check(merged, pr.index, rr.table, file)
+    cr := check(merged, pr.index, pr.pool, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
-    m := lower_for_tests(merged, pr.index, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
     generate_from_module(m, output_path, runtime_path)
 }

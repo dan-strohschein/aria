@@ -98,6 +98,7 @@ fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
 
 fn _add_float_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
     mut rr := reg
+    rr = treg_add_impl(rr, _mk_impl("Eq", type_name))
     rr = treg_add_impl(rr, _mk_impl("Ord", type_name))
     rr = treg_add_impl(rr, _mk_impl("Add", type_name))
     rr = treg_add_impl(rr, _mk_impl("Sub", type_name))
@@ -144,7 +145,7 @@ fn populate_builtins(reg: TraitRegistry) -> TraitRegistry {
     rr = _add_numeric_impl(rr, "u32")
     rr = _add_numeric_impl(rr, "u16")
     rr = _add_numeric_impl(rr, "u8")
-    // Float types: Ord, Add, Sub, Mul, Div, Mod, Numeric — but NOT Eq or Hash (per spec)
+    // Float types: Eq, Ord, Add, Sub, Mul, Div, Mod, Numeric (Eq needed for practical use)
     rr = _add_float_impl(rr, "f64")
     rr = _add_float_impl(rr, "f32")
 
