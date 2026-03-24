@@ -26,10 +26,15 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout bootstrap compiler
+        # Requires BOOTSTRAP_PAT secret (Personal Access Token with repo scope)
+        # if aria-compiler-go is a private repository.
+        # To create: GitHub Settings > Developer Settings > Personal Access Tokens > Generate
+        # Then add as repo secret: aria repo > Settings > Secrets > Actions > BOOTSTRAP_PAT
         uses: actions/checkout@v4
         with:
           repository: dan-strohschein/aria-compiler-go
           path: aria-compiler-go
+          token: ${{ secrets.BOOTSTRAP_PAT }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
