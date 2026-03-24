@@ -60,7 +60,6 @@ jobs:
         with:
           repository: dan-strohschein/aria-compiler-go
           path: aria-compiler-go
-          token: ${{ secrets.BOOTSTRAP_PAT }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
