@@ -56,6 +56,7 @@ struct _aria_str {
 };
 
 // --- Forward declarations ---
+static char *_str_arena_alloc(aria_int size);
 aria_int _aria_array_new(aria_int capacity);
 aria_int _aria_array_append(aria_int arr_ptr, aria_int value);
 aria_int _aria_array_slice(aria_int arr_ptr, aria_int start);
@@ -157,10 +158,39 @@ aria_int _aria_gc_collect(void) {
 aria_int _aria_gc_total_bytes(void) { return _gc.total_bytes; }
 aria_int _aria_gc_allocation_count(void) { return _gc.count; }
 
+// Memory stats (reserved for future use)
+
+// --- Struct allocation with large pool + bump allocator ---
+// The compiler creates millions of small short-lived structs.
+// We allocate from a large pre-allocated pool. When the pool fills,
+// we allocate a new chunk. This reduces malloc overhead dramatically
+// and improves cache locality.
+
+#define STRUCT_POOL_SIZE (256 * 1024 * 1024)  // 256MB per chunk
+
+static struct {
+    char *current;
+    aria_int offset;
+    aria_int capacity;
+} _spool = {NULL, 0, 0};
+
 char *_aria_alloc(aria_int size) {
-    if (!_gc.ptrs) _gc_init();
-    char *ptr = (char *)calloc(1, (size_t)size);
-    _gc_track(ptr, size);
+    aria_int aligned = (size + 7) & ~7;
+
+    // Large allocations go directly to calloc
+    if (aligned > 4096) {
+        return (char *)calloc(1, (size_t)size);
+    }
+
+    if (!_spool.current || _spool.offset + aligned > _spool.capacity) {
+        // Allocate a new chunk — old chunk stays alive (referenced by live structs)
+        _spool.capacity = STRUCT_POOL_SIZE;
+        _spool.current = (char *)calloc(1, (size_t)_spool.capacity);
+        _spool.offset = 0;
+    }
+
+    char *ptr = _spool.current + _spool.offset;
+    _spool.offset += aligned;
     return ptr;
 }
 
@@ -320,6 +350,51 @@ void _aria_write_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_in
     close(fd);
 }
 
+// Append data to a file (creates if doesn't exist)
+void _aria_append_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_int data_len) {
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    free(path);
+    if (fd < 0) return;
+    write(fd, data_ptr, (size_t)data_len);
+    close(fd);
+}
+
+// Write a [str] array directly to a file — avoids building one huge joined string.
+// arr_ptr is an Aria array of str-struct pointers (sentinel at index 0).
+void _aria_write_str_parts(char *path_ptr, aria_int path_len, aria_int arr_ptr) {
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    free(path);
+    if (fd < 0) return;
+
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+
+    // Write each part (skip sentinel at index 0)
+    for (aria_int i = 1; i < length; i++) {
+        aria_int val = data[i];
+        if (val == 0) continue;
+        // val is a str (ptr, len pair passed as two i64s in the str representation)
+        // Actually, array elements are i64. For [str], each element is a struct
+        // pointer with {char_ptr, len}. Extract both fields.
+        aria_int *str_pair = (aria_int *)val;
+        char *s_ptr = (char *)str_pair[0];
+        aria_int s_len = str_pair[1];
+        if (s_ptr && s_len > 0) {
+            write(fd, s_ptr, (size_t)s_len);
+        }
+    }
+    close(fd);
+}
+
 void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_arr, aria_int data_len) {
     char *path = (char *)malloc((size_t)(path_len + 1));
     memcpy(path, path_ptr, (size_t)path_len);
@@ -345,7 +420,7 @@ void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_a
 struct _aria_str _aria_int_to_str(aria_int value) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), ARIA_FMT, value);
-    char *result = (char *)malloc((size_t)(len + 1));
+    char *result = _str_arena_alloc(len);
     memcpy(result, buf, (size_t)(len + 1));
     struct _aria_str s = {result, (aria_int)len};
     return s;
@@ -402,17 +477,77 @@ struct _aria_str _aria_float_to_str(aria_int bits) {
     memcpy(&value, &bits, sizeof(double));
     char buf[64];
     int len = snprintf(buf, sizeof(buf), "%g", value);
-    char *result = (char *)malloc((size_t)(len + 1));
+    char *result = _str_arena_alloc(len);
     memcpy(result, buf, (size_t)(len + 1));
     struct _aria_str s = {result, (aria_int)len};
     return s;
+}
+
+// --- String arena allocator ---
+// Short-lived string allocations (concat, substring, int_to_str) use a bump
+// allocator. When the arena fills, a new chunk is allocated and the old one
+// is kept alive (strings may still be referenced). Chunks are freed in bulk
+// via _aria_str_arena_reset() between compilation phases if desired.
+
+#define STR_ARENA_CHUNK_SIZE (4 * 1024 * 1024)  // 4MB chunks
+
+static struct {
+    char *current;       // Current chunk pointer
+    aria_int offset;     // Next free byte in current chunk
+    aria_int capacity;   // Current chunk capacity
+    char **chunks;       // All allocated chunks
+    aria_int chunk_count;
+    aria_int chunk_cap;
+} _str_arena = {NULL, 0, 0, NULL, 0, 0};
+
+static char *_str_arena_alloc(aria_int size) {
+    // Ensure null-terminated strings fit; add 1 for safety
+    aria_int needed = size + 1;
+
+    // Large allocations go directly to malloc (rare)
+    if (needed > STR_ARENA_CHUNK_SIZE / 2) {
+        return (char *)malloc((size_t)needed);
+    }
+
+    // Allocate new chunk if needed
+    if (!_str_arena.current || _str_arena.offset + needed > _str_arena.capacity) {
+        _str_arena.capacity = STR_ARENA_CHUNK_SIZE;
+        _str_arena.current = (char *)malloc((size_t)_str_arena.capacity);
+        _str_arena.offset = 0;
+
+        // Track chunk for potential future bulk free
+        if (_str_arena.chunk_count >= _str_arena.chunk_cap) {
+            _str_arena.chunk_cap = _str_arena.chunk_cap < 16 ? 16 : _str_arena.chunk_cap * 2;
+            _str_arena.chunks = (char **)realloc(_str_arena.chunks,
+                (size_t)_str_arena.chunk_cap * sizeof(char *));
+        }
+        _str_arena.chunks[_str_arena.chunk_count++] = _str_arena.current;
+    }
+
+    char *ptr = _str_arena.current + _str_arena.offset;
+    _str_arena.offset += needed;
+    // Align to 8 bytes
+    _str_arena.offset = (_str_arena.offset + 7) & ~7;
+    return ptr;
+}
+
+// Free all arena chunks except the current one (reset for next phase)
+void _aria_str_arena_reset(void) {
+    for (aria_int i = 0; i + 1 < _str_arena.chunk_count; i++) {
+        free(_str_arena.chunks[i]);
+    }
+    if (_str_arena.chunk_count > 1) {
+        _str_arena.chunks[0] = _str_arena.current;
+        _str_arena.chunk_count = 1;
+    }
+    _str_arena.offset = 0;
 }
 
 // --- String operations ---
 
 struct _aria_str _aria_str_concat(char *a_ptr, aria_int a_len, char *b_ptr, aria_int b_len) {
     aria_int total = a_len + b_len;
-    char *result = (char *)malloc((size_t)(total + 1));
+    char *result = _str_arena_alloc(total);
     memcpy(result, a_ptr, (size_t)a_len);
     memcpy(result + a_len, b_ptr, (size_t)b_len);
     result[total] = '\0';
@@ -426,6 +561,10 @@ aria_int _aria_str_eq(char *a_ptr, aria_int a_len, char *b_ptr, aria_int b_len) 
     return memcmp(a_ptr, b_ptr, (size_t)a_len) == 0 ? 1 : 0;
 }
 
+// Static pool of 256 single-character strings — avoids malloc per charAt call.
+static char _char_pool[256][2];
+static int _char_pool_init = 0;
+
 struct _aria_str _aria_str_charAt(char *ptr, aria_int len, aria_int index) {
     if (index < 0 || index >= len) {
         struct _aria_str s = {"", 0};
@@ -435,10 +574,15 @@ struct _aria_str _aria_str_charAt(char *ptr, aria_int len, aria_int index) {
         fprintf(stderr, "FATAL charAt: ptr=NULL len=" ARIA_FMT " idx=" ARIA_FMT "\n", len, index);
         exit(97);
     }
-    char *result = (char *)malloc(2);
-    result[0] = ptr[index];
-    result[1] = '\0';
-    struct _aria_str s = {result, 1};
+    if (!_char_pool_init) {
+        for (int i = 0; i < 256; i++) {
+            _char_pool[i][0] = (char)i;
+            _char_pool[i][1] = '\0';
+        }
+        _char_pool_init = 1;
+    }
+    unsigned char ch = (unsigned char)ptr[index];
+    struct _aria_str s = {_char_pool[ch], 1};
     return s;
 }
 
@@ -450,7 +594,7 @@ struct _aria_str _aria_str_substring(char *ptr, aria_int len, aria_int start, ar
         return s;
     }
     aria_int sub_len = end - start;
-    char *result = (char *)malloc((size_t)(sub_len + 1));
+    char *result = _str_arena_alloc(sub_len);
     memcpy(result, ptr + start, (size_t)sub_len);
     result[sub_len] = '\0';
     struct _aria_str s = {result, sub_len};
@@ -507,7 +651,7 @@ struct _aria_str _aria_str_trim(char *ptr, aria_int len) {
         struct _aria_str s = {"", 0};
         return s;
     }
-    char *result = (char *)malloc((size_t)(new_len + 1));
+    char *result = _str_arena_alloc(new_len);
     memcpy(result, ptr + start, (size_t)new_len);
     result[new_len] = '\0';
     struct _aria_str s = {result, new_len};
@@ -518,7 +662,7 @@ struct _aria_str _aria_str_replace(char *ptr, aria_int len,
                                    char *old_ptr, aria_int old_len,
                                    char *new_ptr, aria_int new_len) {
     if (old_len == 0) {
-        char *result = (char *)malloc((size_t)(len + 1));
+        char *result = _str_arena_alloc(len);
         memcpy(result, ptr, (size_t)len);
         result[len] = '\0';
         struct _aria_str s = {result, len};
@@ -532,14 +676,14 @@ struct _aria_str _aria_str_replace(char *ptr, aria_int len,
         }
     }
     if (count == 0) {
-        char *result = (char *)malloc((size_t)(len + 1));
+        char *result = _str_arena_alloc(len);
         memcpy(result, ptr, (size_t)len);
         result[len] = '\0';
         struct _aria_str s = {result, len};
         return s;
     }
     aria_int result_len = len + count * (new_len - old_len);
-    char *result = (char *)malloc((size_t)(result_len + 1));
+    char *result = _str_arena_alloc(result_len);
     aria_int ri = 0;
     aria_int i = 0;
     while (i < len) {
@@ -557,7 +701,7 @@ struct _aria_str _aria_str_replace(char *ptr, aria_int len,
 }
 
 struct _aria_str _aria_str_toLower(char *ptr, aria_int len) {
-    char *result = (char *)malloc((size_t)(len + 1));
+    char *result = _str_arena_alloc(len);
     for (aria_int i = 0; i < len; i++) {
         char c = ptr[i];
         if (c >= 'A' && c <= 'Z') c = c + 32;
@@ -569,7 +713,7 @@ struct _aria_str _aria_str_toLower(char *ptr, aria_int len) {
 }
 
 struct _aria_str _aria_str_toUpper(char *ptr, aria_int len) {
-    char *result = (char *)malloc((size_t)(len + 1));
+    char *result = _str_arena_alloc(len);
     for (aria_int i = 0; i < len; i++) {
         char c = ptr[i];
         if (c >= 'a' && c <= 'z') c = c - 32;
@@ -583,13 +727,13 @@ struct _aria_str _aria_str_toUpper(char *ptr, aria_int len) {
 aria_int _aria_str_split(char *ptr, aria_int len, char *delim_ptr, aria_int delim_len) {
     aria_int arr = _aria_array_new(8);
     // Sentinel: empty string struct (safe to dereference)
-    aria_int *sentinel_str = (aria_int *)malloc(16);
+    aria_int *sentinel_str = (aria_int *)_str_arena_alloc(16);
     sentinel_str[0] = (aria_int)"";
     sentinel_str[1] = 0;
     arr = _aria_array_append(arr,(aria_int)sentinel_str);
 
     if (delim_len == 0) {
-        aria_int *str_struct = (aria_int *)malloc(16);
+        aria_int *str_struct = (aria_int *)_str_arena_alloc(16);
         str_struct[0] = (aria_int)ptr;
         str_struct[1] = len;
         arr = _aria_array_append(arr,(aria_int)str_struct);
@@ -601,10 +745,10 @@ aria_int _aria_str_split(char *ptr, aria_int len, char *delim_ptr, aria_int deli
     while (i <= len - delim_len) {
         if (memcmp(ptr + i, delim_ptr, (size_t)delim_len) == 0) {
             aria_int sub_len = i - start;
-            char *sub = (char *)malloc((size_t)(sub_len + 1));
+            char *sub = _str_arena_alloc(sub_len);
             memcpy(sub, ptr + start, (size_t)sub_len);
             sub[sub_len] = '\0';
-            aria_int *str_struct = (aria_int *)malloc(16);
+            aria_int *str_struct = (aria_int *)_str_arena_alloc(16);
             str_struct[0] = (aria_int)sub;
             str_struct[1] = sub_len;
             arr = _aria_array_append(arr,(aria_int)str_struct);
@@ -615,10 +759,10 @@ aria_int _aria_str_split(char *ptr, aria_int len, char *delim_ptr, aria_int deli
         }
     }
     aria_int sub_len = len - start;
-    char *sub = (char *)malloc((size_t)(sub_len + 1));
+    char *sub = _str_arena_alloc(sub_len);
     memcpy(sub, ptr + start, (size_t)sub_len);
     sub[sub_len] = '\0';
-    aria_int *str_struct = (aria_int *)malloc(16);
+    aria_int *str_struct = (aria_int *)_str_arena_alloc(16);
     str_struct[0] = (aria_int)sub;
     str_struct[1] = sub_len;
     arr = _aria_array_append(arr,(aria_int)str_struct);
@@ -644,20 +788,43 @@ struct _aria_str _aria_map_get_str(aria_int map_ptr, aria_int key_ptr, aria_int 
 }
 
 // --- Array operations ---
-// Array layout: [header_ptr] -> { capacity: i64, length: i64, data_ptr: i8* }
+// Array layout: [header_ptr] -> { length: i64, capacity: i64, data_ptr: i64, refcount: i64 }
 // data_ptr -> contiguous i64 elements (sentinel at index 0)
+// refcount tracks shared references; when 1, append can free old memory.
 
 // Allocate a new array with given capacity
 // Returns pointer to header as i64
 aria_int _aria_array_new(aria_int capacity) {
-    // Header: 3 i64s = 24 bytes: [length, capacity, data_ptr]
-    aria_int *header = (aria_int *)calloc(1, 24);
+    if (capacity < 8) capacity = 8;
+    // Header: 4 i64s = 32 bytes: [length, capacity, data_ptr, refcount]
+    aria_int *header = (aria_int *)calloc(1, 32);
     header[0] = 0;         // length (0 = empty)
     header[1] = capacity;  // capacity
     // Allocate data: capacity * 8 bytes for i64 elements
     aria_int *data = (aria_int *)calloc((size_t)(capacity), 8);
     header[2] = (aria_int)data;
+    header[3] = 1;         // refcount = 1 (sole owner)
     return (aria_int)header;
+}
+
+// Increment refcount (called when array pointer is shared, e.g., stored in struct)
+void _aria_array_rc_inc(aria_int arr_ptr) {
+    if (arr_ptr == 0) return;
+    aria_int *header = (aria_int *)arr_ptr;
+    header[3]++;
+}
+
+// Decrement refcount and free if it reaches 0
+void _aria_array_rc_dec(aria_int arr_ptr) {
+    if (arr_ptr == 0) return;
+    aria_int *header = (aria_int *)arr_ptr;
+    if (header[3] <= 1) {
+        aria_int *data = (aria_int *)header[2];
+        if (data) free(data);
+        free(header);
+    } else {
+        header[3]--;
+    }
 }
 
 aria_int _aria_array_len(aria_int arr_ptr) {
@@ -684,17 +851,28 @@ void _aria_array_set(aria_int arr_ptr, aria_int index, aria_int value) {
     data[index] = value;
 }
 
-// Array append with value semantics: always returns a NEW array.
-// Aria code assumes arrays are immutable values — appending to a copy
-// must not mutate the original.
+// Array append with copy-on-write semantics.
+// If the array has refcount==1 (sole owner) and spare capacity, appends in-place.
+// Otherwise allocates a new array with 2x growth and frees old if sole owner.
 aria_int _aria_array_append(aria_int arr_ptr, aria_int value) {
     aria_int *header = (aria_int *)arr_ptr;
     aria_int length = header[0];
+    aria_int capacity = header[1];
+    aria_int refcount = header[3];
 
-    // Always create a new array (copy-on-write semantics)
-    aria_int new_cap = length + 1;
+    // Fast path: sole owner with spare capacity — append in place
+    if (refcount <= 1 && length < capacity) {
+        aria_int *data = (aria_int *)header[2];
+        data[length] = value;
+        header[0] = length + 1;
+        return arr_ptr;  // Same pointer, no allocation
+    }
+
+    // Slow path: need to allocate new array
+    aria_int new_cap = capacity * 2;
     if (new_cap < 8) new_cap = 8;
-    aria_int *new_header = (aria_int *)calloc(3, 8);
+    if (new_cap < length + 1) new_cap = length + 1;
+    aria_int *new_header = (aria_int *)calloc(1, 32);
     aria_int *new_data = (aria_int *)calloc((size_t)new_cap, 8);
     aria_int *old_data = (aria_int *)header[2];
     if (length > 0) {
@@ -704,6 +882,16 @@ aria_int _aria_array_append(aria_int arr_ptr, aria_int value) {
     new_header[0] = length + 1;
     new_header[1] = new_cap;
     new_header[2] = (aria_int)new_data;
+    new_header[3] = 1;  // new array has refcount 1
+
+    // Free old array if we were the sole owner
+    if (refcount <= 1) {
+        if (old_data) free(old_data);
+        free(header);
+    } else {
+        header[3]--;  // Decrement old refcount
+    }
+
     return (aria_int)new_header;
 }
 
@@ -713,8 +901,8 @@ aria_int _aria_array_slice(aria_int arr_ptr, aria_int start) {
     aria_int *old_data = (aria_int *)header[2];
     aria_int new_len = length - start;
     if (new_len < 0) new_len = 0;
-    aria_int new_cap = new_len < 4 ? 4 : new_len;
-    aria_int *new_header = (aria_int *)calloc(3, 8);
+    aria_int new_cap = new_len < 8 ? 8 : new_len;
+    aria_int *new_header = (aria_int *)calloc(1, 32);
     aria_int *new_data = (aria_int *)calloc((size_t)new_cap, 8);
     if (new_len > 0) {
         memcpy(new_data, old_data + start, (size_t)(new_len * 8));
@@ -722,6 +910,7 @@ aria_int _aria_array_slice(aria_int arr_ptr, aria_int start) {
     new_header[0] = new_len;
     new_header[1] = new_cap;
     new_header[2] = (aria_int)new_data;
+    new_header[3] = 1;  // refcount
     return (aria_int)new_header;
 }
 

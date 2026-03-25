@@ -167,7 +167,7 @@ fn _target_datalayout(target: str) -> str {
 }
 
 fn generate_llvm_ir(m: IrModule) -> str {
-    _generate_llvm_ir_target(m, "native")
+    return _generate_llvm_ir_target(m, "native")
 }
 
 fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
@@ -449,7 +449,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
         }
     }
 
-    _join(p)
+    return _join(p)
 }
 
 // ============================================================
