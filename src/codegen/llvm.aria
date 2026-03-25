@@ -87,12 +87,58 @@ fn _get_temp_type(f: IrFunc, temp: i64) -> i64 {
 
 // --- GC root helpers ---
 
+// Determine if a temp is definitely scalar by checking its defining IR instruction.
+// This supplements temp_types: even if temp_types says 0 (unknown), we can
+// determine scalarity from the instruction that writes to this temp.
+fn _is_definitely_scalar_op(op: str) -> bool =
+    op == "Const" || op == "Add" || op == "Sub" || op == "Mul" || op == "Div" ||
+    op == "Mod" || op == "Neg" || op == "Eq" || op == "Neq" || op == "Lt" ||
+    op == "Gt" || op == "Lte" || op == "Gte" || op == "And" || op == "Or" ||
+    op == "Not" || op == "BitAnd" || op == "BitOr" || op == "BitXor" ||
+    op == "Shl" || op == "Shr" || op == "ArrayLen" || op == "StrLen" ||
+    op == "StrEq" || op == "StrContains" || op == "StrStartsWith" ||
+    op == "StrEndsWith" || op == "StrIndexOf" || op == "MapContains" ||
+    op == "MapLen" || op == "SetContains" || op == "SetLen" ||
+    op == "BranchTrue" || op == "BranchFalse" || op == "Label" || op == "Jump"
+
+// Check if a temp is a potential GC root (not definitely scalar)
+fn _is_gc_root(f: IrFunc, temp: i64) -> bool {
+    // Check temp_types first (set by lowerer)
+    tt := _get_temp_type(f, temp)
+    if tt == 1 { return false }  // Known i64 scalar
+    if tt == 12 { return false }  // Known string (on stack, not heap ptr)
+    if tt >= 100 { return true }  // Known struct — definitely a root
+
+    // Type 0 (unknown): scan ALL instructions writing to this temp.
+    // If ANY instruction could produce a pointer, treat as root.
+    // (Temps can be written by multiple instructions in different branches.)
+    mut could_be_pointer := false
+    mut found_any := false
+    mut ii := 1
+    while ii < f.insts.len() {
+        inst := f.insts[ii]
+        if inst.dest == temp {
+            found_any = true
+            op := ir_op_name(inst.op)
+            if _is_definitely_scalar_op(op) == false && op != "ConstStr" {
+                could_be_pointer = true
+            }
+        }
+        ii = ii + 1
+    }
+
+    if found_any { return could_be_pointer }
+
+    // No defining instruction — parameter or uninitialized
+    if temp < f.param_count { return true }
+    return false
+}
+
 fn _gc_root_count_for_func(f: IrFunc) -> i64 {
     mut count := 0
     mut i := 0
     while i < f.local_count {
-        tt := _get_temp_type(f, i)
-        if tt != 1 && tt != 12 { count = count + 1 }
+        if _is_gc_root(f, i) { count = count + 1 }
         i = i + 1
     }
     return count
@@ -103,8 +149,7 @@ fn _gc_slot_for_temp(f: IrFunc, temp: i64) -> i64 {
     mut slot := 0
     mut i := 0
     while i < f.local_count {
-        tt := _get_temp_type(f, i)
-        if tt != 1 && tt != 12 {
+        if _is_gc_root(f, i) {
             if i == temp { return slot }
             slot = slot + 1
         }
@@ -868,13 +913,7 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     // GC frame: count pointer-typed temps and reserve shadow stack slots
     // Only for functions that have OpAlloc instructions (functions that allocate)
     mut has_alloc := false
-    mut gc_root_count := 0
-    mut gci := 0
-    while gci < f.local_count {
-        gtt := _get_temp_type(f, gci)
-        if gtt != 1 && gtt != 12 { gc_root_count = gc_root_count + 1 }
-        gci = gci + 1
-    }
+    mut gc_root_count := _gc_root_count_for_func(f)
     // Check if this function has any OpAlloc
     mut aci := 1
     while aci < f.insts.len() {
@@ -896,6 +935,21 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
             zi = zi + 1
         }
         p = p.append("  call void @_aria_gc_frame_push(i64 %gc_frame_ptr, i64 " + i2s(gc_root_count) + ")" + nl)
+        // Store parameter values into GC frame (params might hold struct pointers)
+        mut pi2 := 0
+        while pi2 < f.param_count {
+            if _is_gc_root(f, pi2) {
+                slot := _gc_slot_for_temp(f, pi2)
+                if slot >= 0 {
+                    pv := "%gc_param_" + i2s(pi2)
+                    pg := "%gc_paramg_" + i2s(pi2)
+                    p = p.append("  " + pv + " = load i64, i64* " + _t(pi2) + nl)
+                    p = p.append("  " + pg + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2) + nl)
+                    p = p.append("  store i64 " + pv + ", i64* " + pg + nl)
+                }
+            }
+            pi2 = pi2 + 1
+        }
     }
 
     // Generate instructions
@@ -1145,9 +1199,8 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%store_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
-        // Update GC frame if dest is a pointer-typed temp
-        dt := _get_temp_type(f, inst.dest)
-        if dt != 1 && dt != 12 {
+        // Update GC frame if dest is a potential pointer temp
+        if _is_gc_root(f, inst.dest) {
             gc_frame_slots := _gc_root_count_for_func(f) + 2
             slot := _gc_slot_for_temp(f, inst.dest)
             if slot >= 0 && gc_frame_slots > 2 {
@@ -1167,7 +1220,22 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return gg
     }
 
-    if op == "Call" { return _gen_call(g, m, f, inst, idx) }
+    if op == "Call" {
+        mut gg := _gen_call(g, m, f, inst, idx)
+        // After call: if dest is a GC root, store result into GC frame
+        if _is_gc_root(f, inst.dest) {
+            gc_frame_slots := _gc_root_count_for_func(f) + 2
+            slot := _gc_slot_for_temp(f, inst.dest)
+            if slot >= 0 && gc_frame_slots > 2 {
+                cv := "%gc_cr_" + i2s(idx)
+                cg := "%gc_cg_" + i2s(idx)
+                gg = _lg_emit(gg, cv + " = load i64, i64* " + _t(inst.dest))
+                gg = _lg_emit(gg, cg + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+                gg = _lg_emit(gg, "store i64 " + cv + ", i64* " + cg)
+            }
+        }
+        return gg
+    }
 
     if op == "FnRef" {
         // Store function pointer as i64
@@ -1227,8 +1295,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         // Store this allocation's result into the GC frame.
         // The frame is kept up-to-date incrementally: each OpAlloc stores
         // only its own result. Previous allocs already stored theirs.
-        tt := _get_temp_type(f, inst.dest)
-        if tt != 1 && tt != 12 {
+        if _is_gc_root(f, inst.dest) {
             gc_frame_slots := _gc_root_count_for_func(f) + 2
             slot := _gc_slot_for_temp(f, inst.dest)
             if slot >= 0 {
@@ -1311,6 +1378,16 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         val := "%fg_val_" + i2s(idx)
         gg = _lg_emit(gg, val + " = load i64, i64* " + gep)
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+        // Update GC frame if result is a potential pointer
+        if _is_gc_root(f, inst.dest) {
+            gc_frame_slots := _gc_root_count_for_func(f) + 2
+            slot := _gc_slot_for_temp(f, inst.dest)
+            if slot >= 0 && gc_frame_slots > 2 {
+                fgep := "%gc_fg_" + i2s(idx)
+                gg = _lg_emit(gg, fgep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+                gg = _lg_emit(gg, "store i64 " + val + ", i64* " + fgep)
+            }
+        }
         return gg
     }
 
