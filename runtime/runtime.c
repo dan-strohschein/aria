@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <setjmp.h>
 
 // On Windows, 'long' is 32-bit even on 64-bit systems.
 // Aria uses i64 (mapped to LLVM i64) for all values including pointers.
@@ -91,106 +92,403 @@ void _aria_eprintln_str(char *ptr, aria_int len) {
     write(2, "\n", 1);
 }
 
-// --- Memory: GC-tracked allocator ---
-// Simple mark-sweep GC: track all allocations, sweep when threshold exceeded.
+// ====================================================================
+// Generational Mark-Sweep Garbage Collector
+//
+// Design: Non-moving, conservative stack scanning, two generations.
+// - Young objects: collected on every minor GC (threshold-triggered)
+// - Old objects: promoted after surviving GC_TENURE_AGE collections,
+//   only collected during major GC
+// - Conservative: scans C stack for values matching tracked pointers
+// - Uses hash table for O(1) pointer lookup during marking
+// ====================================================================
 
-#define GC_INITIAL_CAPACITY 4096
-#define GC_GROWTH_FACTOR 2
+#define GC_INITIAL_CAPACITY   (64 * 1024)  // Initial tracking array size
+#define GC_GROWTH_FACTOR      2
+#define GC_INITIAL_THRESHOLD  (8L * 1024 * 1024 * 1024)  // 8GB — effectively disabled until precise scanning is added
+#define GC_THRESHOLD_GROW     1.5                   // Grow threshold after collection
+#define GC_MAX_THRESHOLD      (512 * 1024 * 1024)  // Cap at 512MB
+#define GC_TENURE_AGE         3   // Promote after surviving 3 minor GCs
+#define GC_MAJOR_INTERVAL     10  // Major GC every N minor GCs
+#define GC_HASH_LOAD_FACTOR   0.7
+
+// --- Pointer hash table for O(1) lookup ---
+
+typedef struct {
+    void **keys;       // pointer values (NULL = empty slot)
+    aria_int *indices;  // index into _gc.ptrs[]
+    aria_int capacity;
+    aria_int count;
+} GcHashTable;
+
+static GcHashTable _gc_ht = {NULL, NULL, 0, 0};
+
+static aria_int _gc_ht_hash(void *ptr, aria_int cap) {
+    // Fibonacci hashing for pointer values
+    uint64_t h = (uint64_t)(uintptr_t)ptr;
+    h = (h >> 4) * 11400714819323198485ULL;  // shift out alignment bits
+    return (aria_int)(h & (uint64_t)(cap - 1));
+}
+
+static void _gc_ht_init(aria_int cap) {
+    _gc_ht.capacity = cap;
+    _gc_ht.keys = (void **)calloc((size_t)cap, sizeof(void *));
+    _gc_ht.indices = (aria_int *)calloc((size_t)cap, sizeof(aria_int));
+    _gc_ht.count = 0;
+}
+
+static void _gc_ht_insert(void *ptr, aria_int idx) {
+    if (!_gc_ht.keys) _gc_ht_init(GC_INITIAL_CAPACITY);
+    if ((double)_gc_ht.count / (double)_gc_ht.capacity > GC_HASH_LOAD_FACTOR) {
+        // Rehash at double capacity
+        aria_int old_cap = _gc_ht.capacity;
+        void **old_keys = _gc_ht.keys;
+        aria_int *old_indices = _gc_ht.indices;
+        aria_int new_cap = old_cap * 2;
+        _gc_ht.keys = (void **)calloc((size_t)new_cap, sizeof(void *));
+        _gc_ht.indices = (aria_int *)calloc((size_t)new_cap, sizeof(aria_int));
+        _gc_ht.capacity = new_cap;
+        _gc_ht.count = 0;
+        for (aria_int i = 0; i < old_cap; i++) {
+            if (old_keys[i]) _gc_ht_insert(old_keys[i], old_indices[i]);
+        }
+        free(old_keys);
+        free(old_indices);
+    }
+    aria_int slot = _gc_ht_hash(ptr, _gc_ht.capacity);
+    while (_gc_ht.keys[slot]) {
+        if (_gc_ht.keys[slot] == ptr) {
+            _gc_ht.indices[slot] = idx;  // Update existing
+            return;
+        }
+        slot = (slot + 1) & (_gc_ht.capacity - 1);
+    }
+    _gc_ht.keys[slot] = ptr;
+    _gc_ht.indices[slot] = idx;
+    _gc_ht.count++;
+}
+
+// Returns index into _gc.ptrs, or -1 if not found
+static aria_int _gc_ht_lookup(void *ptr) {
+    if (!_gc_ht.keys || !ptr) return -1;
+    aria_int slot = _gc_ht_hash(ptr, _gc_ht.capacity);
+    aria_int start = slot;
+    while (_gc_ht.keys[slot]) {
+        if (_gc_ht.keys[slot] == ptr) return _gc_ht.indices[slot];
+        slot = (slot + 1) & (_gc_ht.capacity - 1);
+        if (slot == start) break;
+    }
+    return -1;
+}
+
+static void _gc_ht_remove(void *ptr) {
+    if (!_gc_ht.keys || !ptr) return;
+    aria_int slot = _gc_ht_hash(ptr, _gc_ht.capacity);
+    aria_int start = slot;
+    while (_gc_ht.keys[slot]) {
+        if (_gc_ht.keys[slot] == ptr) {
+            _gc_ht.keys[slot] = NULL;
+            _gc_ht.count--;
+            // Rehash subsequent entries (Robin Hood deletion)
+            aria_int next = (slot + 1) & (_gc_ht.capacity - 1);
+            while (_gc_ht.keys[next]) {
+                void *k = _gc_ht.keys[next];
+                aria_int v = _gc_ht.indices[next];
+                _gc_ht.keys[next] = NULL;
+                _gc_ht.count--;
+                _gc_ht_insert(k, v);
+                next = (next + 1) & (_gc_ht.capacity - 1);
+            }
+            return;
+        }
+        slot = (slot + 1) & (_gc_ht.capacity - 1);
+        if (slot == start) break;
+    }
+}
+
+// --- GC tracking arrays ---
 
 static struct {
     void **ptrs;
     aria_int *sizes;
-    int *marks;
+    uint8_t *marks;
+    uint8_t *ages;        // Generational: age counter per object
     aria_int count;
     aria_int capacity;
     aria_int total_bytes;
     aria_int threshold;
+    aria_int collections;  // Number of minor collections since last major
+    aria_int total_collections;
     int enabled;
-} _gc = {NULL, NULL, NULL, 0, 0, 0, 1048576, 0};  // 1MB threshold
+    int in_gc;             // Reentrance guard
+} _gc = {NULL, NULL, NULL, NULL, 0, 0, 0, GC_INITIAL_THRESHOLD, 0, 0, 0, 0};
+
+// Stack bottom: set once in main()
+static void *_gc_stack_bottom = NULL;
+
+void _aria_gc_set_stack_bottom(void *addr) {
+    _gc_stack_bottom = addr;
+}
 
 static void _gc_init(void) {
     if (_gc.ptrs) return;
     _gc.capacity = GC_INITIAL_CAPACITY;
     _gc.ptrs = (void **)calloc((size_t)_gc.capacity, sizeof(void *));
     _gc.sizes = (aria_int *)calloc((size_t)_gc.capacity, sizeof(aria_int));
-    _gc.marks = (int *)calloc((size_t)_gc.capacity, sizeof(int));
+    _gc.marks = (uint8_t *)calloc((size_t)_gc.capacity, sizeof(uint8_t));
+    _gc.ages = (uint8_t *)calloc((size_t)_gc.capacity, sizeof(uint8_t));
     _gc.count = 0;
     _gc.total_bytes = 0;
     _gc.enabled = 1;
+    _gc.in_gc = 0;
 }
 
 static void _gc_track(void *ptr, aria_int size) {
     if (!_gc.ptrs) _gc_init();
     if (_gc.count >= _gc.capacity) {
-        _gc.capacity *= GC_GROWTH_FACTOR;
-        _gc.ptrs = (void **)realloc(_gc.ptrs, (size_t)_gc.capacity * sizeof(void *));
-        _gc.sizes = (aria_int *)realloc(_gc.sizes, (size_t)_gc.capacity * sizeof(aria_int));
-        _gc.marks = (int *)realloc(_gc.marks, (size_t)_gc.capacity * sizeof(int));
+        aria_int new_cap = _gc.capacity * GC_GROWTH_FACTOR;
+        _gc.ptrs = (void **)realloc(_gc.ptrs, (size_t)new_cap * sizeof(void *));
+        _gc.sizes = (aria_int *)realloc(_gc.sizes, (size_t)new_cap * sizeof(aria_int));
+        _gc.marks = (uint8_t *)realloc(_gc.marks, (size_t)new_cap * sizeof(uint8_t));
+        _gc.ages = (uint8_t *)realloc(_gc.ages, (size_t)new_cap * sizeof(uint8_t));
+        _gc.capacity = new_cap;
     }
-    _gc.ptrs[_gc.count] = ptr;
-    _gc.sizes[_gc.count] = size;
-    _gc.marks[_gc.count] = 0;
+    aria_int idx = _gc.count;
+    _gc.ptrs[idx] = ptr;
+    _gc.sizes[idx] = size;
+    _gc.marks[idx] = 0;
+    _gc.ages[idx] = 0;
     _gc.count++;
     _gc.total_bytes += size;
+    _gc_ht_insert(ptr, idx);
 }
 
-// GC sweep: free all unmarked allocations (called explicitly or at threshold)
-aria_int _aria_gc_collect(void) {
-    aria_int freed = 0;
-    aria_int new_count = 0;
-    for (aria_int i = 0; i < _gc.count; i++) {
-        if (_gc.marks[i] == 0 && _gc.ptrs[i] != NULL) {
-            _gc.total_bytes -= _gc.sizes[i];
-            free(_gc.ptrs[i]);
-            freed++;
-        } else {
-            _gc.ptrs[new_count] = _gc.ptrs[i];
-            _gc.sizes[new_count] = _gc.sizes[i];
-            _gc.marks[new_count] = 0;  // reset marks for next cycle
-            new_count++;
+// --- Conservative mark phase ---
+
+// Mark worklist to avoid recursion (stack overflow on deep object graphs)
+#define GC_WORKLIST_SIZE (64 * 1024)
+static void **_gc_worklist = NULL;
+static aria_int _gc_worklist_head = 0;
+static aria_int _gc_worklist_tail = 0;
+
+static void _gc_worklist_push(void *ptr) {
+    if (!_gc_worklist) {
+        _gc_worklist = (void **)malloc(GC_WORKLIST_SIZE * sizeof(void *));
+    }
+    _gc_worklist[_gc_worklist_tail & (GC_WORKLIST_SIZE - 1)] = ptr;
+    _gc_worklist_tail++;
+}
+
+static void *_gc_worklist_pop(void) {
+    if (_gc_worklist_head >= _gc_worklist_tail) return NULL;
+    void *ptr = _gc_worklist[_gc_worklist_head & (GC_WORKLIST_SIZE - 1)];
+    _gc_worklist_head++;
+    return ptr;
+}
+
+// Mark a single pointer if it's a tracked GC object
+static void _gc_mark_ptr(void *ptr, int major) {
+    aria_int idx = _gc_ht_lookup(ptr);
+    if (idx < 0) return;
+    if (_gc.marks[idx]) return;  // Already marked
+    // For minor GC: skip old objects (they're implicitly live)
+    if (!major && _gc.ages[idx] >= GC_TENURE_AGE) return;
+    _gc.marks[idx] = 1;
+    _gc_worklist_push(ptr);
+}
+
+// Scan an object's contents conservatively: every i64 slot could be a pointer
+static void _gc_scan_object(void *ptr, aria_int size, int major) {
+    aria_int *words = (aria_int *)ptr;
+    aria_int word_count = size / 8;
+    for (aria_int i = 0; i < word_count; i++) {
+        void *candidate = (void *)(uintptr_t)words[i];
+        if (candidate) _gc_mark_ptr(candidate, major);
+    }
+}
+
+// Conservative stack + register scan.
+// Uses setjmp to spill all registers onto the stack, then scans
+// from the current stack pointer to the recorded stack bottom.
+static void _gc_scan_stack(int major) {
+    // Spill registers to stack via setjmp
+    jmp_buf regs;
+    setjmp(regs);
+
+    // Scan the jmp_buf itself (contains saved register values)
+    aria_int *reg_start = (aria_int *)&regs;
+    aria_int *reg_end = reg_start + (sizeof(jmp_buf) / sizeof(aria_int));
+    for (aria_int *p = reg_start; p < reg_end; p++) {
+        void *candidate = (void *)(uintptr_t)*p;
+        if (candidate) _gc_mark_ptr(candidate, major);
+    }
+
+    // Scan the C stack
+    volatile aria_int stack_anchor = 0;
+    void *stack_top = (void *)&stack_anchor;
+
+    if (!_gc_stack_bottom) return;
+
+    void *lo = stack_top < _gc_stack_bottom ? stack_top : _gc_stack_bottom;
+    void *hi = stack_top < _gc_stack_bottom ? _gc_stack_bottom : stack_top;
+
+    aria_int stack_words = ((aria_int *)hi - (aria_int *)lo);
+    aria_int found = 0;
+
+    aria_int *start = (aria_int *)lo;
+    aria_int *end = (aria_int *)hi;
+    for (aria_int *p = start; p < end; p++) {
+        void *candidate = (void *)(uintptr_t)*p;
+        if (candidate) {
+            aria_int idx = _gc_ht_lookup(candidate);
+            if (idx >= 0) found++;
+            _gc_mark_ptr(candidate, major);
         }
     }
+    (void)found; (void)stack_words;  // suppress unused warnings
+}
+
+// Process the mark worklist: scan all newly-marked objects
+static void _gc_process_worklist(int major) {
+    while (_gc_worklist_head < _gc_worklist_tail) {
+        void *ptr = _gc_worklist_pop();
+        if (!ptr) break;
+        aria_int idx = _gc_ht_lookup(ptr);
+        if (idx >= 0) {
+            _gc_scan_object(ptr, _gc.sizes[idx], major);
+        }
+    }
+}
+
+// --- Sweep phase ---
+
+static aria_int _gc_sweep(int major) {
+    aria_int freed = 0;
+    aria_int new_count = 0;
+
+    for (aria_int i = 0; i < _gc.count; i++) {
+        int is_old = (_gc.ages[i] >= GC_TENURE_AGE);
+
+        // Minor GC: only sweep young objects
+        if (!major && is_old) {
+            // Keep old objects unconditionally in minor GC
+            _gc.ptrs[new_count] = _gc.ptrs[i];
+            _gc.sizes[new_count] = _gc.sizes[i];
+            _gc.marks[new_count] = 0;
+            _gc.ages[new_count] = _gc.ages[i];
+            new_count++;
+            continue;
+        }
+
+        if (_gc.marks[i]) {
+            // Live: keep, age it
+            _gc.ptrs[new_count] = _gc.ptrs[i];
+            _gc.sizes[new_count] = _gc.sizes[i];
+            _gc.marks[new_count] = 0;
+            uint8_t age = _gc.ages[i];
+            if (age < GC_TENURE_AGE) age++;
+            _gc.ages[new_count] = age;
+            new_count++;
+        } else if (_gc.ptrs[i] != NULL) {
+            // Dead: free it
+            _gc.total_bytes -= _gc.sizes[i];
+            _gc_ht_remove(_gc.ptrs[i]);
+            free(_gc.ptrs[i]);
+            freed++;
+        }
+        // Skip entries with NULL ptr (already freed by refcount)
+    }
+
     _gc.count = new_count;
+
+    // Rebuild hash table (indices shifted during compaction)
+    if (freed > 0) {
+        // Clear and re-insert all
+        memset(_gc_ht.keys, 0, (size_t)_gc_ht.capacity * sizeof(void *));
+        _gc_ht.count = 0;
+        for (aria_int i = 0; i < _gc.count; i++) {
+            _gc_ht_insert(_gc.ptrs[i], i);
+        }
+    }
+
     return freed;
+}
+
+// --- Public GC API ---
+
+// Minor collection: scan stack, mark reachable young objects, sweep dead young
+aria_int _aria_gc_minor(void) {
+    if (_gc.in_gc) return 0;  // Prevent reentrance
+    _gc.in_gc = 1;
+
+    // Reset marks
+    for (aria_int i = 0; i < _gc.count; i++) _gc.marks[i] = 0;
+    _gc_worklist_head = 0;
+    _gc_worklist_tail = 0;
+
+    // Mark phase: scan stack conservatively
+    _gc_scan_stack(0);
+    _gc_process_worklist(0);
+
+    // Sweep: free unreachable young objects
+    aria_int freed = _gc_sweep(0);
+
+    _gc.collections++;
+    _gc.total_collections++;
+    _gc.in_gc = 0;
+    return freed;
+}
+
+// Major collection: mark everything, sweep all generations
+aria_int _aria_gc_major(void) {
+    if (_gc.in_gc) return 0;
+    _gc.in_gc = 1;
+
+    for (aria_int i = 0; i < _gc.count; i++) _gc.marks[i] = 0;
+    _gc_worklist_head = 0;
+    _gc_worklist_tail = 0;
+
+    _gc_scan_stack(1);
+    _gc_process_worklist(1);
+
+    aria_int freed = _gc_sweep(1);
+
+    _gc.collections = 0;
+    _gc.total_collections++;
+    _gc.in_gc = 0;
+    return freed;
+}
+
+// Auto-triggered collection
+aria_int _aria_gc_collect(void) {
+    if (_gc.collections >= GC_MAJOR_INTERVAL) {
+        return _aria_gc_major();
+    }
+    return _aria_gc_minor();
 }
 
 // GC stats
 aria_int _aria_gc_total_bytes(void) { return _gc.total_bytes; }
 aria_int _aria_gc_allocation_count(void) { return _gc.count; }
 
-// Memory stats (reserved for future use)
-
-// --- Struct allocation with large pool + bump allocator ---
-// The compiler creates millions of small short-lived structs.
-// We allocate from a large pre-allocated pool. When the pool fills,
-// we allocate a new chunk. This reduces malloc overhead dramatically
-// and improves cache locality.
-
-#define STRUCT_POOL_SIZE (256 * 1024 * 1024)  // 256MB per chunk
-
-static struct {
-    char *current;
-    aria_int offset;
-    aria_int capacity;
-} _spool = {NULL, 0, 0};
+// --- Struct allocation: GC-tracked with auto-collection ---
 
 char *_aria_alloc(aria_int size) {
+    if (!_gc.ptrs) _gc_init();
     aria_int aligned = (size + 7) & ~7;
 
-    // Large allocations go directly to calloc
-    if (aligned > 4096) {
-        return (char *)calloc(1, (size_t)size);
+    // Check if we should collect before allocating
+    if (_gc.total_bytes + aligned > _gc.threshold && !_gc.in_gc) {
+        _aria_gc_collect();
+        // Adjust threshold: grow if we couldn't free enough
+        if (_gc.total_bytes > _gc.threshold / 2) {
+            _gc.threshold = (aria_int)((double)_gc.threshold * GC_THRESHOLD_GROW);
+            if (_gc.threshold > GC_MAX_THRESHOLD) _gc.threshold = GC_MAX_THRESHOLD;
+        }
     }
 
-    if (!_spool.current || _spool.offset + aligned > _spool.capacity) {
-        // Allocate a new chunk — old chunk stays alive (referenced by live structs)
-        _spool.capacity = STRUCT_POOL_SIZE;
-        _spool.current = (char *)calloc(1, (size_t)_spool.capacity);
-        _spool.offset = 0;
-    }
-
-    char *ptr = _spool.current + _spool.offset;
-    _spool.offset += aligned;
+    char *ptr = (char *)calloc(1, (size_t)aligned);
+    _gc_track(ptr, aligned);
     return ptr;
 }
 
@@ -800,10 +1098,12 @@ aria_int _aria_array_new(aria_int capacity) {
     aria_int *header = (aria_int *)calloc(1, 32);
     header[0] = 0;         // length (0 = empty)
     header[1] = capacity;  // capacity
-    // Allocate data: capacity * 8 bytes for i64 elements
     aria_int *data = (aria_int *)calloc((size_t)(capacity), 8);
     header[2] = (aria_int)data;
     header[3] = 1;         // refcount = 1 (sole owner)
+    // Track both header and data in GC so the scanner can follow pointers
+    _gc_track(header, 32);
+    _gc_track(data, capacity * 8);
     return (aria_int)header;
 }
 
@@ -884,8 +1184,17 @@ aria_int _aria_array_append(aria_int arr_ptr, aria_int value) {
     new_header[2] = (aria_int)new_data;
     new_header[3] = 1;  // new array has refcount 1
 
+    // Track new allocations in GC
+    _gc_track(new_header, 32);
+    _gc_track(new_data, new_cap * 8);
+
     // Free old array if we were the sole owner
     if (refcount <= 1) {
+        // Mark as freed in GC tracking to prevent double-free during sweep
+        aria_int hdr_idx = _gc_ht_lookup(header);
+        if (hdr_idx >= 0) { _gc.ptrs[hdr_idx] = NULL; _gc.total_bytes -= _gc.sizes[hdr_idx]; }
+        aria_int data_idx = _gc_ht_lookup(old_data);
+        if (data_idx >= 0) { _gc.ptrs[data_idx] = NULL; _gc.total_bytes -= _gc.sizes[data_idx]; }
         if (old_data) free(old_data);
         free(header);
     } else {
@@ -911,6 +1220,8 @@ aria_int _aria_array_slice(aria_int arr_ptr, aria_int start) {
     new_header[1] = new_cap;
     new_header[2] = (aria_int)new_data;
     new_header[3] = 1;  // refcount
+    _gc_track(new_header, 32);
+    _gc_track(new_data, new_cap * 8);
     return (aria_int)new_header;
 }
 
@@ -2423,6 +2734,13 @@ aria_int _aria_cancel_is_triggered(aria_int handle) {
 extern void _aria_entry(void);
 
 int main(int argc, char **argv) {
+    // Capture stack bottom for conservative GC scanning.
+    // On most platforms, the stack grows downward. main()'s frame
+    // is near the top (highest address). We want to scan from
+    // the current frame (low address during GC) up to here.
+    volatile aria_int stack_anchor = 0;
+    _aria_gc_set_stack_bottom((void *)&stack_anchor);
+
     _aria_args_init(argc, argv);
     _aria_entry();
     return 0;
