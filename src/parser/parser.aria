@@ -171,6 +171,19 @@ fn parse(tokens: [Token]) -> PR {
 // Walks tokens once, records each top-level declaration.
 // ============================================================
 
+// Check if a token kind can be used as a function name.
+// Keywords like "test", "check", "match" are valid fn names.
+fn _is_fn_name_token(tk: str) -> bool {
+    if tk == "IDENT" { return true }
+    if tk == "test" { return true }
+    if tk == "check" { return true }
+    if tk == "match" { return true }
+    if tk == "type" { return true }
+    if tk == "where" { return true }
+    if tk == "bench" { return true }
+    return false
+}
+
 fn build_decl_index(tokens: [Token]) -> ParseResult {
     mut idx := new_decl_index()
     mut pos := 0
@@ -240,7 +253,7 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             decl_start := pos
             pos = pos + 1  // skip "fn"
             mut name := ""
-            if pos < len && token_name(tokens[pos].kind) == "IDENT" {
+            if pos < len && _is_fn_name_token(token_name(tokens[pos].kind)) {
                 name = tokens[pos].text
             }
             // Find body start: scan past params, return type, where clause to = or {
@@ -532,8 +545,8 @@ fn _bdi_find_fn_body(tokens: [Token], start: i64, len: i64) -> i64 {
     // to find = or { that starts the body
     mut pos := start
     lb := "\{"
-    // Skip name
-    if pos < len && token_name(tokens[pos].kind) == "IDENT" { pos = pos + 1 }
+    // Skip name (can be IDENT or keyword used as function name)
+    if pos < len && _is_fn_name_token(token_name(tokens[pos].kind)) { pos = pos + 1 }
     // Skip generic params [T, U]
     if pos < len && token_name(tokens[pos].kind) == "[" {
         pos = _bdi_skip_brackets(tokens, pos, len)

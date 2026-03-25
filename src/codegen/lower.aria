@@ -4806,7 +4806,14 @@ fn _lower_primary(l: Lowerer) -> LT {
         }
     }
 
-    if k == "IDENT" {
+    // Keywords used as function names: treat as IDENT when followed by (
+    mut is_kw_fn_call := false
+    if k == "test" || k == "check" || k == "bench" || k == "where" {
+        next_ll := _ladv(l)
+        if _lk(next_ll) == "(" { is_kw_fn_call = true }
+    }
+
+    if k == "IDENT" || is_kw_fn_call {
         name := _lcur(l).text
         mut ll := _ladv(l)
 

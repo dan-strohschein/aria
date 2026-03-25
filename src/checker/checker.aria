@@ -1506,10 +1506,21 @@ fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Che
     cc
 }
 
+fn _is_fn_name_kind(tk: str) -> bool {
+    if tk == "IDENT" { return true }
+    if tk == "test" { return true }
+    if tk == "check" { return true }
+    if tk == "match" { return true }
+    if tk == "type" { return true }
+    if tk == "where" { return true }
+    if tk == "bench" { return true }
+    return false
+}
+
 fn _register_fn_sig(c: Checker) -> Checker {
     token_start := c.pos  // save position of 'fn' keyword for re-lowering
     mut cc := _cadv(c)  // skip fn
-    if _ck2(cc) != "IDENT" { return cc }
+    if _is_fn_name_kind(_ck2(cc)) == false { return cc }
     name := _ccur(cc).text
     cc = _cadv(cc)
 
