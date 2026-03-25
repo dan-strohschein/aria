@@ -171,7 +171,7 @@ entry {
         "TODO: implement generics\nTODO: add trait bounds checking\nDONE: lexer is complete\nDONE: parser handles all expressions\nIN PROGRESS: type checker improvements")
 
     _ariaWriteFile(sample_dir + "/hello.aria",
-        "// Hello World in Aria\nprintln Hello World")
+        "// Hello World in Aria\nentry \{\n    println(Hello World)\n\}")
 
     _ariaWriteFile(sample_dir + "/data.txt",
         "The quick brown fox jumps over the lazy dog.\nThe fox was very quick and the dog was very lazy.\nAria makes programming fun and safe.\nTypes prevent bugs before they happen.")
