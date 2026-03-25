@@ -144,6 +144,19 @@ fn _gc_root_count_for_func(f: IrFunc) -> i64 {
     return count
 }
 
+// After storing a value to a temp, update its GC frame slot if it's a root
+fn _gc_frame_update(g: LlvmGen, f: IrFunc, temp: i64, val: str, idx: i64) -> LlvmGen {
+    if _is_gc_root(f, temp) == false { return g }
+    gc_frame_slots := _gc_root_count_for_func(f) + 2
+    slot := _gc_slot_for_temp(f, temp)
+    if slot < 0 || gc_frame_slots <= 2 { return g }
+    mut gg := g
+    gep := "%gc_u_" + i2s(idx) + "_" + i2s(temp)
+    gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+    gg = _lg_emit(gg, "store i64 " + val + ", i64* " + gep)
+    return gg
+}
+
 // Map a temp to its GC frame slot index (-1 if not a root)
 fn _gc_slot_for_temp(f: IrFunc, temp: i64) -> i64 {
     mut slot := 0
@@ -1222,18 +1235,10 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Call" {
         mut gg := _gen_call(g, m, f, inst, idx)
-        // After call: if dest is a GC root, store result into GC frame
-        if _is_gc_root(f, inst.dest) {
-            gc_frame_slots := _gc_root_count_for_func(f) + 2
-            slot := _gc_slot_for_temp(f, inst.dest)
-            if slot >= 0 && gc_frame_slots > 2 {
-                cv := "%gc_cr_" + i2s(idx)
-                cg := "%gc_cg_" + i2s(idx)
-                gg = _lg_emit(gg, cv + " = load i64, i64* " + _t(inst.dest))
-                gg = _lg_emit(gg, cg + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
-                gg = _lg_emit(gg, "store i64 " + cv + ", i64* " + cg)
-            }
-        }
+        // After call: update GC frame for result
+        cv := "%gc_cr_" + i2s(idx)
+        gg = _lg_emit(gg, cv + " = load i64, i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, cv, idx)
         return gg
     }
 
@@ -1378,16 +1383,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         val := "%fg_val_" + i2s(idx)
         gg = _lg_emit(gg, val + " = load i64, i64* " + gep)
         gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
-        // Update GC frame if result is a potential pointer
-        if _is_gc_root(f, inst.dest) {
-            gc_frame_slots := _gc_root_count_for_func(f) + 2
-            slot := _gc_slot_for_temp(f, inst.dest)
-            if slot >= 0 && gc_frame_slots > 2 {
-                fgep := "%gc_fg_" + i2s(idx)
-                gg = _lg_emit(gg, fgep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
-                gg = _lg_emit(gg, "store i64 " + val + ", i64* " + fgep)
-            }
-        }
+        gg = _gc_frame_update(gg, f, inst.dest, val, idx)
         return gg
     }
 
@@ -1410,6 +1406,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         arr := "%anew_" + i2s(idx)
         gg = _lg_emit(gg, arr + " = call i64 @_aria_array_new(i64 8)")
         gg = _lg_emit(gg, "store i64 " + arr + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, arr, idx)
         return gg
     }
 
@@ -1446,6 +1443,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             gg = _lg_emit(gg, "store i64 " + sv1 + ", i64* " + _t(inst.dest + 1))
         } else {
             gg = _lg_emit(gg, "store i64 " + val + ", i64* " + _t(inst.dest))
+            gg = _gc_frame_update(gg, f, inst.dest, val, idx)
         }
         return gg
     }
@@ -1460,6 +1458,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         asl_res := "%aslice_" + i2s(idx)
         gg = _lg_emit(gg, asl_res + " = call i64 @_aria_array_slice(i64 " + asl_arr + ", i64 " + asl_idx + ")")
         gg = _lg_emit(gg, "store i64 " + asl_res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, asl_res, idx)
         return gg
     }
 
@@ -1498,12 +1497,14 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             res := "%aapp_res_" + i2s(idx)
             gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + spp + ")")
             gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+            gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         } else {
             val := "%aapp_val_" + i2s(idx)
             gg = _lg_emit(gg, val + " = load i64, i64* " + _t(inst.arg2))
             res := "%aapp_res_" + i2s(idx)
             gg = _lg_emit(gg, res + " = call i64 @_aria_array_append(i64 " + arr_v + ", i64 " + val + ")")
             gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+            gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         }
         return gg
     }
