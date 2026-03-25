@@ -17,7 +17,7 @@ Human-oriented languages are full of ambiguity, implicit behavior, and ceremony 
 - **Effect tracking** — `with [Io, Fs, Net]` makes side effects visible to the AI reasoning about code.
 - **GC with opt-out** — garbage collected by default; `@stack`, `@arena`, `Pool[T]` when the AI needs control.
 - **FFI** — `extern fn` calls C functions directly for system-level work.
-- **161 test programs** covering every language feature (156 single-file pass, 5 multi-file pass when built together).
+- **164 test programs** covering every language feature (158 single-file pass, 6 require external dependencies or multi-file build).
 - **Standard library** — JSON parser, HTTP server, PostgreSQL client in `lib/`.
 
 ## Quick Example
@@ -80,10 +80,16 @@ cd aria-compiler-go
 go build -o aria ./cmd/aria
 cd ../aria
 
-# Build the self-hosting compiler
-../aria-compiler-go/aria build src/
+# Build the self-hosting compiler (multi-file)
+../aria-compiler-go/aria build src/main.aria src/lexer/lexer.aria src/lexer/token.aria \
+  src/parser/parser.aria src/parser/ast.aria src/parser/precedence.aria \
+  src/resolver/resolver.aria src/resolver/scope.aria \
+  src/checker/checker.aria src/checker/types.aria src/checker/traits.aria \
+  src/codegen/codegen.aria src/codegen/lower.aria src/codegen/ir.aria src/codegen/llvm.aria \
+  src/diagnostic/diagnostic.aria
 
-# The compiler is now at src/aria_generated
+# Rename the output
+mv main src/aria_generated
 ```
 
 ### Self-Compile (Compiler Compiles Itself)
@@ -335,9 +341,10 @@ Source (.aria) --> Lexer --> Parser (AST) --> Resolver --> Checker --> Lowerer -
 ### Project Stats
 
 - **27 source files** across 7 modules + 3 stdlib libraries
-- **161 test programs** in `testdata/programs/`
-- **~27,000 lines** of Aria source
-- **~2,000 lines** of C runtime
+- **164 test programs** in `testdata/programs/`
+- **11 example applications** in `examples/`
+- **~31,000 lines** of Aria source
+- **~2,200 lines** of C runtime
 - **Self-compiling** — the compiler builds itself
 
 ## Cross-Compilation

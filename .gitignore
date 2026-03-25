@@ -37,6 +37,14 @@ diagnostic
 examples/hello
 examples/fibonacci
 examples/shapes
+examples/calculator
+examples/chat_server
+examples/database
+examples/file_processor
+examples/json_pipeline
+examples/key_value_store
+examples/markdown
+examples/todo_cli
 
 # Compiled lib artifacts
 lib/*.ll
