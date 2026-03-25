@@ -1217,13 +1217,33 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             consumed_value = true
         } else if k == "STRING_START" {
             // String interpolation: resolve identifiers inside
+            // Must track after_dot so field access like {t.id} works
             rr = _radv(rr)  // skip STRING_START
+            mut interp_after_dot := false
             while _rk(rr) != "STRING_END" && _rk(rr) != "EOF" {
-                if _rk(rr) == "STRING_MIDDLE" {
+                ik := _rk(rr)
+                mut interp_handled := false
+                if ik == "STRING_MIDDLE" {
                     rr = _radv(rr)
-                } else if _rk(rr) == "IDENT" {
-                    rr = _resolve_ident(rr)
-                } else {
+                    interp_after_dot = false
+                    interp_handled = true
+                }
+                if interp_handled == false && ik == "IDENT" {
+                    if interp_after_dot {
+                        rr = _radv(rr)
+                    } else {
+                        rr = _resolve_ident(rr)
+                    }
+                    interp_after_dot = false
+                    interp_handled = true
+                }
+                if interp_handled == false && ik == "fn" {
+                    rr = _resolve_closure(rr)
+                    interp_after_dot = false
+                    interp_handled = true
+                }
+                if interp_handled == false {
+                    if ik == "." { interp_after_dot = true } else { interp_after_dot = false }
                     rr = _radv(rr)
                 }
             }

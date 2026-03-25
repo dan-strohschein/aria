@@ -7870,7 +7870,7 @@ fn _lower_if(l: Lowerer) -> LT {
     end_lbl := _lnew_label(ll)
     ll = end_lbl.l
 
-    // Allocate result temp (2 slots for potential string result)
+    // Allocate result temp — use 2 slots for safety (string fat pointers need ptr+len)
     result_nt := _lnew_str_temp(ll)
     ll = result_nt.l
 
@@ -7878,10 +7878,10 @@ fn _lower_if(l: Lowerer) -> LT {
     ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond.temp, else_lbl.temp, "", 0))
 
     // Then block — process statements and capture last expression
+    mut then_last := -1
     if _lk(ll) == lb {
         ll = _ladv(ll)
         ll = _lskip_nl(ll)
-        mut then_last := -1
         while _lk(ll) != rb && _lk(ll) != "EOF" {
             k := _lk(ll)
             if k == "return" || k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" || k == "with" {
@@ -7898,12 +7898,16 @@ fn _lower_if(l: Lowerer) -> LT {
             ll = _lskip_nl(ll)
         }
         if _lk(ll) == rb { ll = _ladv(ll) }
-        // Store last expression to result temp (always copy both ptr+len slots)
+        // Store last expression to result temp — only copy second slot for string types
         if then_last >= 0 {
             ll = _lemit(ll, new_inst(OpStore, result_nt.temp, then_last, 0, "", 0))
-            then_len_dst := result_nt.temp + 1
-            then_len_src := then_last + 1
-            ll = _lemit(ll, new_inst(OpStore, then_len_dst, then_len_src, 0, "", 0))
+            then_type := _lget_type(ll, then_last)
+            if then_type == 12 {
+                then_len_dst := result_nt.temp + 1
+                then_len_src := then_last + 1
+                ll = _lemit(ll, new_inst(OpStore, then_len_dst, then_len_src, 0, "", 0))
+            }
+            ll = _lset_type(ll, result_nt.temp, then_type)
         }
     }
     ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
@@ -7918,9 +7922,13 @@ fn _lower_if(l: Lowerer) -> LT {
             else_result := _lower_if(ll)
             ll = else_result.l
             ll = _lemit(ll, new_inst(OpStore, result_nt.temp, else_result.temp, 0, "", 0))
-            eif_len_dst := result_nt.temp + 1
-            eif_len_src := else_result.temp + 1
-            ll = _lemit(ll, new_inst(OpStore, eif_len_dst, eif_len_src, 0, "", 0))
+            eif_type := _lget_type(ll, else_result.temp)
+            if eif_type == 12 {
+                eif_len_dst := result_nt.temp + 1
+                eif_len_src := else_result.temp + 1
+                ll = _lemit(ll, new_inst(OpStore, eif_len_dst, eif_len_src, 0, "", 0))
+            }
+            ll = _lset_type(ll, result_nt.temp, eif_type)
         } else if _lk(ll) == lb {
             ll = _ladv(ll)
             ll = _lskip_nl(ll)
@@ -7943,9 +7951,13 @@ fn _lower_if(l: Lowerer) -> LT {
             if _lk(ll) == rb { ll = _ladv(ll) }
             if else_last >= 0 {
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, else_last, 0, "", 0))
-                else_len_dst := result_nt.temp + 1
-                else_len_src := else_last + 1
-                ll = _lemit(ll, new_inst(OpStore, else_len_dst, else_len_src, 0, "", 0))
+                else_type := _lget_type(ll, else_last)
+                if else_type == 12 {
+                    else_len_dst := result_nt.temp + 1
+                    else_len_src := else_last + 1
+                    ll = _lemit(ll, new_inst(OpStore, else_len_dst, else_len_src, 0, "", 0))
+                }
+                ll = _lset_type(ll, result_nt.temp, else_type)
             }
         }
     }

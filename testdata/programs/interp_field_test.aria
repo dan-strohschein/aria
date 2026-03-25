@@ -1,0 +1,37 @@
+// Test string interpolation with struct field access
+struct Point {
+    x: i64
+    y: i64
+}
+
+struct Person {
+    name: str
+    age: i64
+}
+
+fn format_point(p: Point) -> str {
+    "({p.x}, {p.y})"
+}
+
+entry {
+    // Basic field access in interpolation
+    p := Point{x: 10, y: 20}
+    s := "point: {p.x}, {p.y}"
+    assert s == "point: 10, 20"
+
+    // Struct with string field
+    person := Person{name: "Alice", age: 30}
+    greeting := "Hello, {person.name}! Age: {person.age}"
+    assert greeting == "Hello, Alice! Age: 30"
+
+    // Function returning interpolated string with fields
+    p2 := Point{x: 3, y: 7}
+    assert format_point(p2) == "(3, 7)"
+
+    // Chained: simple variable + field in same string
+    label := "coords"
+    msg := "{label}: {p.x} and {p.y}"
+    assert msg == "coords: 10 and 20"
+
+    println("interp_field_test passed")
+}

@@ -1,0 +1,32 @@
+// Test if/else used as value expression (ternary pattern)
+
+fn abs_val(n: i64) -> i64 {
+    if n < 0 { return 0 - n }
+    return n
+}
+
+entry {
+    // Integer result from if/else expression
+    x := 5
+    val := if x > 3 { 100 } else { 200 }
+    assert val == 100
+
+    y := 1
+    val2 := if y > 3 { 100 } else { 200 }
+    assert val2 == 200
+
+    // String result from if/else expression
+    flag := true
+    label := if flag { "yes" } else { "no" }
+    assert label == "yes"
+
+    // Nested if/else as value
+    n := 42
+    category := if n > 100 { "big" } else { if n > 10 { "medium" } else { "small" } }
+    assert category == "medium"
+
+    // If/else value in function argument
+    println("result: " + if true { "ok" } else { "fail" })
+
+    println("if_else_value_test passed")
+}
