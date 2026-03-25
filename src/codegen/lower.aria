@@ -140,7 +140,11 @@ fn _lnew_temp(l: Lowerer) -> LT {
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
             temp_types: l.temp_types,
             fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
-    LT{l: ll, temp: temp}
+    // Default new temps to type=1 (i64 scalar). The lowerer explicitly sets
+    // type=12 (str) or type>=100 (struct) where needed. This ensures the GC
+    // only tracks actual pointer temps, keeping the root set small.
+    ll2 := _lset_type(ll, temp, 1)
+    LT{l: ll2, temp: temp}
 }
 
 fn _lnew_label(l: Lowerer) -> LT {

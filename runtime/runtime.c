@@ -93,28 +93,35 @@ void _aria_eprintln_str(char *ptr, aria_int len) {
 }
 
 // ====================================================================
-// GC Shadow Stack
+// GC Root Frame Chain
 //
-// The compiler emits code to push/pop live pointer-typed temps to this
-// global array before each heap allocation. The GC scans this instead
-// of the C stack, providing precise root information.
+// Each function that has pointer-typed temps allocates a root frame
+// on the C stack (via LLVM alloca). The frame is a struct:
+//   { prev_frame*, count, roots[count] }
+// Functions push their frame at entry and pop at return.
+// The GC walks the chain to find all live roots.
+// This is zero-cost when GC doesn't run (just a pointer update at
+// function entry/return) and produces zero extra function calls at
+// safepoints (roots are just LLVM stores to the alloca'd array).
 // ====================================================================
 
-#define GC_SHADOW_STACK_SIZE (128 * 1024)  // 128K root slots
-static aria_int _gc_shadow_stack[GC_SHADOW_STACK_SIZE];
-static aria_int _gc_shadow_sp = 0;
+// Global frame chain head — points to the most recent function's root frame
+// Frame layout: [prev_ptr: i64, count: i64, roots...: i64*count]
+static aria_int _gc_frame_top = 0;
 
-// Push a single root value onto the shadow stack
-void _aria_gc_root_push(aria_int value) {
-    if (_gc_shadow_sp < GC_SHADOW_STACK_SIZE) {
-        _gc_shadow_stack[_gc_shadow_sp++] = value;
-    }
+// Push a frame onto the chain. frame_ptr points to the alloca'd struct.
+void _aria_gc_frame_push(aria_int frame_ptr, aria_int count) {
+    aria_int *frame = (aria_int *)frame_ptr;
+    frame[0] = _gc_frame_top;  // prev = old top
+    frame[1] = count;          // number of root slots
+    _gc_frame_top = frame_ptr;
 }
 
-// Pop N roots from the shadow stack
-void _aria_gc_root_pop(aria_int count) {
-    _gc_shadow_sp -= count;
-    if (_gc_shadow_sp < 0) _gc_shadow_sp = 0;
+// Pop the current frame
+void _aria_gc_frame_pop(void) {
+    if (_gc_frame_top == 0) return;
+    aria_int *frame = (aria_int *)_gc_frame_top;
+    _gc_frame_top = frame[0];  // restore prev
 }
 
 // ====================================================================
@@ -350,21 +357,26 @@ static void _gc_scan_object(void *ptr, aria_int size, int major) {
     }
 }
 
-// Root scanning: uses shadow stack (precise) + conservative C stack scan.
-// The shadow stack contains compiler-registered pointer temps.
-// The C stack scan catches roots in runtime C functions (string ops, etc.).
+// Root scanning: walk the GC frame chain + conservative C stack scan.
 static void _gc_scan_roots(int major) {
-    // 1. Scan shadow stack (precise roots from compiled code)
-    for (aria_int i = 0; i < _gc_shadow_sp; i++) {
-        void *candidate = (void *)(uintptr_t)_gc_shadow_stack[i];
-        if (candidate) _gc_mark_ptr(candidate, major);
+    // 1. Walk the frame chain (precise roots from compiled Aria functions)
+    aria_int frame_ptr = _gc_frame_top;
+    while (frame_ptr != 0) {
+        aria_int *frame = (aria_int *)frame_ptr;
+        aria_int prev = frame[0];
+        aria_int count = frame[1];
+        // Roots start at frame[2]
+        for (aria_int i = 0; i < count; i++) {
+            void *candidate = (void *)(uintptr_t)frame[2 + i];
+            if (candidate) _gc_mark_ptr(candidate, major);
+        }
+        frame_ptr = prev;
     }
 
-    // 2. Conservative scan of C stack (catches runtime function locals)
+    // 2. Conservative scan of C stack (catches runtime C function locals)
     jmp_buf regs;
     setjmp(regs);
 
-    // Scan registers
     aria_int *reg_start = (aria_int *)&regs;
     aria_int *reg_end = reg_start + (sizeof(jmp_buf) / sizeof(aria_int));
     for (aria_int *p = reg_start; p < reg_end; p++) {
@@ -372,7 +384,6 @@ static void _gc_scan_roots(int major) {
         if (candidate) _gc_mark_ptr(candidate, major);
     }
 
-    // Scan C stack
     volatile aria_int stack_anchor = 0;
     void *stack_top = (void *)&stack_anchor;
     if (!_gc_stack_bottom) return;

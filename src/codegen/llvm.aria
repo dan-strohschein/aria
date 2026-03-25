@@ -85,6 +85,41 @@ fn _get_temp_type(f: IrFunc, temp: i64) -> i64 {
     return 0
 }
 
+// --- GC root helpers ---
+
+fn _gc_root_count_for_func(f: IrFunc) -> i64 {
+    mut count := 0
+    mut i := 0
+    while i < f.local_count {
+        tt := _get_temp_type(f, i)
+        if tt != 1 && tt != 12 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+// Store all pointer temps into the GC frame before a call that might trigger GC
+fn _gc_store_roots(g: LlvmGen, f: IrFunc, idx: i64) -> LlvmGen {
+    mut gg := g
+    gc_frame_slots := _gc_root_count_for_func(f) + 2
+    if gc_frame_slots <= 2 { return gg }  // No roots to store
+    mut ri := 0
+    mut slot := 0
+    while ri < f.local_count {
+        tt := _get_temp_type(f, ri)
+        if tt != 1 && tt != 12 {
+            val := "%gc_s_" + i2s(idx) + "_" + i2s(ri)
+            gep := "%gc_g_" + i2s(idx) + "_" + i2s(ri)
+            gg = _lg_emit(gg, val + " = load i64, i64* " + _t(ri))
+            gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+            gg = _lg_emit(gg, "store i64 " + val + ", i64* " + gep)
+            slot = slot + 1
+        }
+        ri = ri + 1
+    }
+    return gg
+}
+
 // --- LLVM IR text builder (array-based) ---
 
 struct LlvmGen {
@@ -210,8 +245,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare void @_aria_print_str(i8*, i64)" + nl)
     p = p.append("declare void @_aria_eprintln_str(i8*, i64)" + nl)
     p = p.append("declare i8* @_aria_alloc(i64)" + nl)
-    p = p.append("declare void @_aria_gc_root_push(i64)" + nl)
-    p = p.append("declare void @_aria_gc_root_pop(i64)" + nl)
+    p = p.append("declare void @_aria_gc_frame_push(i64, i64)" + nl)
+    p = p.append("declare void @_aria_gc_frame_pop()" + nl)
     p = p.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
@@ -558,6 +593,39 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         pi = pi + 1
     }
 
+    // GC frame: count pointer-typed temps and reserve shadow stack slots
+    // Only for functions that have OpAlloc instructions (functions that allocate)
+    mut has_alloc := false
+    mut gc_root_count := 0
+    mut gci := 0
+    while gci < f.local_count {
+        gtt := _get_temp_type(f, gci)
+        if gtt != 1 && gtt != 12 { gc_root_count = gc_root_count + 1 }
+        gci = gci + 1
+    }
+    // Check if this function has any OpAlloc
+    mut aci := 1
+    while aci < f.insts.len() {
+        if ir_op_name(f.insts[aci].op) == "Alloc" { has_alloc = true }
+        aci = aci + 1
+    }
+    // GC root frame: allocate on stack and register with GC frame chain.
+    // The frame layout is: [prev_ptr: i64, count: i64, roots...: i64*gc_root_count]
+    // Total size: (2 + gc_root_count) i64s
+    gc_frame_slots := gc_root_count + 2
+    p = p.append("  %gc_frame = alloca [" + i2s(gc_frame_slots) + " x i64], align 8" + nl)
+    p = p.append("  %gc_frame_ptr = ptrtoint [" + i2s(gc_frame_slots) + " x i64]* %gc_frame to i64" + nl)
+    if gc_root_count > 0 {
+        // Zero the roots portion
+        mut zi := 0
+        while zi < gc_root_count {
+            p = p.append("  %gc_init_" + i2s(zi) + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(zi + 2) + nl)
+            p = p.append("  store i64 0, i64* %gc_init_" + i2s(zi) + nl)
+            zi = zi + 1
+        }
+        p = p.append("  call void @_aria_gc_frame_push(i64 %gc_frame_ptr, i64 " + i2s(gc_root_count) + ")" + nl)
+    }
+
     // Generate instructions
     mut g := _lg_new()
     mut idx := 1
@@ -765,6 +833,11 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Ret" {
         mut gg := g
+        // Pop GC frame before return
+        gc_rc := _gc_root_count_for_func(f)
+        if gc_rc > 0 {
+            gg = _lg_emit(gg, "call void @_aria_gc_frame_pop()")
+        }
         si64 := _struct_i64_i64()
         if f.return_type == 12 {
             ptr_v := "%ret_ptr_" + i2s(idx)
@@ -784,7 +857,14 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return gg
     }
 
-    if op == "RetVoid" { return _lg_emit_term(g, "ret void") }
+    if op == "RetVoid" {
+        mut gg := g
+        gc_rcv := _gc_root_count_for_func(f)
+        if gc_rcv > 0 {
+            gg = _lg_emit(gg, "call void @_aria_gc_frame_pop()")
+        }
+        return _lg_emit_term(gg, "ret void")
+    }
     if op == "Arg" { return g }
     if op == "Local" { return g }
 
@@ -853,35 +933,13 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if op == "Alloc" {
-        mut gg := g
-        // GC safepoint: push all live pointer-typed temps to shadow stack
-        // so the GC can find them if collection triggers during _aria_alloc.
-        // Pointer types: 12 = str (skip, fat pointer), >= 100 = struct
-        mut root_count := 0
-        mut ri := 0
-        while ri < f.local_count {
-            tt := _get_temp_type(f, ri)
-            // Only push struct-typed temps (type >= 100), skip the alloc dest itself
-            if tt >= 100 && ri != inst.dest {
-                val := "%gc_push_" + i2s(idx) + "_" + i2s(ri)
-                gg = _lg_emit(gg, val + " = load i64, i64* " + _t(ri))
-                gg = _lg_emit(gg, "call void @_aria_gc_root_push(i64 " + val + ")")
-                root_count = root_count + 1
-            }
-            ri = ri + 1
-        }
-
+        mut gg := _gc_store_roots(g, f, idx)
         size := inst.arg1 * 8
         raw := "%alloc_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + i2s(size) + ")")
         ptr := "%alloc_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
-
-        // Pop roots after allocation
-        if root_count > 0 {
-            gg = _lg_emit(gg, "call void @_aria_gc_root_pop(i64 " + i2s(root_count) + ")")
-        }
         return gg
     }
 
@@ -1559,7 +1617,12 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     orig_name := inst.s1
     mut name := orig_name
     if name == "main" { name = "_aria_main" }
+    // GC safepoint: store roots before calls to Aria functions
+    // (which may contain OpAlloc). Skip runtime _aria_* builtins.
     mut gg := g
+    if name.len() < 6 || name.substring(0, 6) != "_aria_" {
+        gg = _gc_store_roots(gg, f, idx)
+    }
 
     if name == "_aria_println_str" || name == "_aria_print_str" || name == "_aria_eprintln_str" {
         ptr_v := "%call_p_" + i2s(idx)
