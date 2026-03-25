@@ -1,3 +1,5 @@
+mod http
+
 // ============================================================
 // HTTP Library for Aria
 // Request parsing, response building, and a simple server loop.
@@ -49,9 +51,10 @@ fn http_response_json(status: i64, json_body: str) -> HttpResponse {
     HttpResponse{status: status, status_text: st, headers: headers, body: json_body}
 }
 
-fn http_add_header(resp: HttpResponse, header: str) -> HttpResponse =
-    HttpResponse{status: resp.status, status_text: resp.status_text,
+fn http_add_header(resp: HttpResponse, header: str) -> HttpResponse {
+    return HttpResponse{status: resp.status, status_text: resp.status_text,
                  headers: resp.headers.append(header), body: resp.body}
+}
 
 fn _http_status_text(code: i64) -> str {
     if code == 200 { return "OK" }

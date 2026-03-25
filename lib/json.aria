@@ -1,3 +1,5 @@
+mod json
+
 // ============================================================
 // JSON Library for Aria
 // Standalone parser and emitter.
@@ -36,9 +38,10 @@ struct JsonPool {
     obj_key_lists: [i64]  // pool_id → str-array ptr for key order
 }
 
-fn _jp_new_pool() -> JsonPool =
-    JsonPool{kinds: [0], ints: [0], strs: [""],
+fn _jp_new_pool() -> JsonPool {
+    return JsonPool{kinds: [0], ints: [0], strs: [""],
              child_arrays: [0], obj_key_lists: [0]}
+}
 
 fn _jp_alloc(pool: JsonPool, kind: i64, int_val: i64, str_val: str) -> i64 {
     // Returns the new id (= length before append, since index 0 is sentinel)
@@ -59,11 +62,12 @@ struct _JPool {
 }
 
 // Global singleton pool — initialized once
-fn _jpool_init() -> _JPool =
-    _JPool{kinds: [0], ints: [0], strs: [""], children: [0], key_lists: [0]}
+fn _jpool_init() -> _JPool {
+    return _JPool{kinds: [0], ints: [0], strs: [""], children: [0], key_lists: [0]}
+}
 
 fn _jpool_add(p: _JPool, kind: i64, iv: i64, sv: str, ch: i64, kl: i64) -> _JPool {
-    _JPool{
+    return _JPool{
         kinds: p.kinds.append(kind),
         ints: p.ints.append(iv),
         strs: p.strs.append(sv),
@@ -91,29 +95,29 @@ struct _JV {
 
 fn _jv_null(p: _JPool) -> _JV {
     np := _jpool_add(p, JSON_NULL, 0, "", 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_bool(p: _JPool, b: bool) -> _JV {
     mut v := 0
     if b { v = 1 }
     np := _jpool_add(p, JSON_BOOL, v, "", 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_int(p: _JPool, n: i64) -> _JV {
     np := _jpool_add(p, JSON_INT, n, "", 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_float(p: _JPool, s: str) -> _JV {
     np := _jpool_add(p, JSON_FLOAT, 0, s, 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_string(p: _JPool, s: str) -> _JV {
     np := _jpool_add(p, JSON_STRING, 0, s, 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_array(p: _JPool, child_arr: [i64]) -> _JV {
@@ -133,7 +137,7 @@ fn _jv_array(p: _JPool, child_arr: [i64]) -> _JV {
         i = i + 1
     }
     np := _jpool_add(p, JSON_ARRAY, count, s, 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 fn _jv_object(p: _JPool, keys: [str], val_ids: [i64]) -> _JV {
@@ -158,7 +162,7 @@ fn _jv_object(p: _JPool, keys: [str], val_ids: [i64]) -> _JV {
     // Use a two-part encoding: "keys\x00val_ids"
     encoded := ks + "\x00" + vs
     np := _jpool_add(p, JSON_OBJECT, count, encoded, 0, 0)
-    _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
+    return _JV{val: JsonValue{id: _jpool_id(np), pool: np}, pool: np}
 }
 
 // --- Accessors ---
@@ -177,7 +181,7 @@ fn json_array_get(v: JsonValue, idx: i64) -> JsonValue {
     parts := s.split(",")
     if idx + 1 >= parts.len() { return JsonValue{id: 0, pool: v.pool} }
     eid := _jp_parse_int(parts[idx + 1])
-    JsonValue{id: eid, pool: v.pool}
+    return JsonValue{id: eid, pool: v.pool}
 }
 
 fn json_object_get(v: JsonValue, key: str) -> JsonValue {
@@ -198,7 +202,7 @@ fn json_object_get(v: JsonValue, key: str) -> JsonValue {
         }
         i = i + 1
     }
-    JsonValue{id: 0, pool: v.pool}
+    return JsonValue{id: 0, pool: v.pool}
 }
 
 fn json_object_has(v: JsonValue, key: str) -> bool {
@@ -237,7 +241,7 @@ fn json_parse(input: str) -> JsonValue {
     // Add null at index 0
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
     r := _jp_value(pool, input, 0)
-    r.val
+    return r.val
 }
 
 fn _jp_value(pool: _JPool, src: str, pos: i64) -> _JP {
@@ -267,7 +271,7 @@ fn _jp_value(pool: _JPool, src: str, pos: i64) -> _JP {
     if ch == "-" || _jp_is_digit(ch) { return _jp_number(pool, src, p) }
 
     r := _jv_null(pool)
-    _JP{pool: r.pool, pos: p, val: r.val}
+    return _JP{pool: r.pool, pos: p, val: r.val}
 }
 
 fn _jp_skip_ws(src: str, pos: i64) -> i64 {
@@ -310,7 +314,7 @@ fn _jp_string(pool: _JPool, src: str, pos: i64) -> _JP {
         p = p + 1
     }
     r := _jv_string(pool, result)
-    _JP{pool: r.pool, pos: p, val: r.val}
+    return _JP{pool: r.pool, pos: p, val: r.val}
 }
 
 fn _jp_number(pool: _JPool, src: str, pos: i64) -> _JP {
@@ -341,7 +345,7 @@ fn _jp_number(pool: _JPool, src: str, pos: i64) -> _JP {
         return _JP{pool: r.pool, pos: p, val: r.val}
     }
     r := _jv_int(pool, _jp_parse_int(text))
-    _JP{pool: r.pool, pos: p, val: r.val}
+    return _JP{pool: r.pool, pos: p, val: r.val}
 }
 
 fn _jp_object(pool: _JPool, src: str, pos: i64) -> _JP {
@@ -378,7 +382,7 @@ fn _jp_object(pool: _JPool, src: str, pos: i64) -> _JP {
     p = _jp_skip_ws(src, p)
     if p < src.len() && src.charAt(p) == rb { p = p + 1 }
     r := _jv_object(pl, keys, val_ids)
-    _JP{pool: r.pool, pos: p, val: r.val}
+    return _JP{pool: r.pool, pos: p, val: r.val}
 }
 
 fn _jp_array(pool: _JPool, src: str, pos: i64) -> _JP {
@@ -406,7 +410,7 @@ fn _jp_array(pool: _JPool, src: str, pos: i64) -> _JP {
     p = _jp_skip_ws(src, p)
     if p < src.len() && src.charAt(p) == "]" { p = p + 1 }
     r := _jv_array(pl, ids)
-    _JP{pool: r.pool, pos: p, val: r.val}
+    return _JP{pool: r.pool, pos: p, val: r.val}
 }
 
 fn _jp_parse_int(s: str) -> i64 {
@@ -533,26 +537,26 @@ fn json_new_null() -> JsonValue {
     pool := _jpool_init()
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)  // sentinel at 0
     r := _jv_null(pool)
-    r.val
+    return r.val
 }
 
 fn json_new_bool(b: bool) -> JsonValue {
     pool := _jpool_init()
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
     r := _jv_bool(pool, b)
-    r.val
+    return r.val
 }
 
 fn json_new_int(n: i64) -> JsonValue {
     pool := _jpool_init()
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
     r := _jv_int(pool, n)
-    r.val
+    return r.val
 }
 
 fn json_new_string(s: str) -> JsonValue {
     pool := _jpool_init()
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
     r := _jv_string(pool, s)
-    r.val
+    return r.val
 }

@@ -347,6 +347,56 @@ Source (.aria) --> Lexer --> Parser (AST) --> Resolver --> Checker --> Lowerer -
 - **~2,200 lines** of C runtime
 - **Self-compiling** — the compiler builds itself
 
+## Standard Library
+
+Aria ships with a standard library in `lib/`. These modules are automatically included when you use them:
+
+```aria
+use json    // JSON parser and emitter
+use http    // HTTP request/response and server
+use db      // PostgreSQL client (requires libpq)
+```
+
+No extra flags or file paths needed — `use json` just works.
+
+### Adding a New Standard Library Module
+
+1. Create `lib/yourmodule.aria` with `mod yourmodule` as the first line
+2. Add `"yourmodule"` to the `_is_stdlib_module()` function in `src/main.aria`
+3. Rebuild the compiler
+
+The compiler scans source files for `use <module>` statements. When a module name matches a known stdlib module, the corresponding `lib/<module>.aria` file is automatically found (via `ARIA_HOME` or `/usr/local/lib/aria/`) and merged into the compilation.
+
+### Standard Library Structure
+
+```
+lib/
+├── json.aria    # JSON values, parsing, emission, builder API
+├── http.aria    # HTTP request parsing, response building, server loop
+└── db.aria      # PostgreSQL connection, queries, result inspection
+```
+
+Each library is pure Aria source that calls runtime builtins (`_aria*` functions) for low-level operations. The C runtime (`runtime/runtime.c`) provides the underlying implementations for I/O, networking, database access, concurrency, and memory management.
+
+### Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `ARIA_HOME` | Root directory for stdlib and runtime | `/usr/local/lib/aria` |
+
+When installed via the installer, the directory structure is:
+
+```
+/usr/local/lib/aria/
+├── aria              # compiler binary
+├── lib/              # standard library (.aria source files)
+│   ├── json.aria
+│   ├── http.aria
+│   └── db.aria
+└── runtime/
+    └── runtime.c     # C runtime (linked into every compiled program)
+```
+
 ## Cross-Compilation
 
 The compiler supports 6 target platforms:

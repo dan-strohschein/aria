@@ -134,7 +134,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aria-${{ matrix.label }}
-          path: ${{ runner.os == 'Windows' && 'gen1.exe' || 'gen1' }}
+          path: |
+            ${{ runner.os == 'Windows' && 'gen1.exe' || 'gen1' }}
+            lib/*.aria
+            runtime/runtime.c
 
   release:
     needs: build
@@ -177,24 +180,47 @@ jobs:
         with:
           path: artifacts
 
-      - name: Prepare release binaries
+      - name: Prepare release tarballs
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           mkdir -p dist
           for dir in artifacts/aria-*; do
             label=$(basename "$dir" | sed 's/^aria-//')
+
+            # Create distribution directory structure
+            STAGING="staging-${label}"
+            mkdir -p "$STAGING/aria/lib" "$STAGING/aria/runtime"
+
+            # Copy compiler binary
             if [ -f "$dir/gen1.exe" ]; then
-              dest="dist/aria-${TAG}-${label}.exe"
-              cp "$dir/gen1.exe" "$dest"
-              echo "Prepared: $dest ($(wc -c < "$dest") bytes)"
+              cp "$dir/gen1.exe" "$STAGING/aria/aria.exe"
             elif [ -f "$dir/gen1" ]; then
-              dest="dist/aria-${TAG}-${label}"
-              cp "$dir/gen1" "$dest"
-              chmod +x "$dest"
-              echo "Prepared: $dest ($(wc -c < "$dest") bytes)"
+              cp "$dir/gen1" "$STAGING/aria/aria"
+              chmod +x "$STAGING/aria/aria"
+            fi
+
+            # Copy standard library and runtime
+            if [ -d "$dir/lib" ]; then
+              cp "$dir"/lib/*.aria "$STAGING/aria/lib/" 2>/dev/null || true
+            fi
+            if [ -d "$dir/runtime" ]; then
+              cp "$dir"/runtime/runtime.c "$STAGING/aria/runtime/" 2>/dev/null || true
+            fi
+
+            # Create tarball
+            TARBALL="dist/aria-${TAG}-${label}.tar.gz"
+            tar -czf "$TARBALL" -C "$STAGING" aria
+            echo "Prepared: $TARBALL ($(wc -c < "$TARBALL") bytes)"
+
+            # Also upload bare binary for direct download
+            if [ -f "$dir/gen1.exe" ]; then
+              cp "$dir/gen1.exe" "dist/aria-${TAG}-${label}.exe"
+            elif [ -f "$dir/gen1" ]; then
+              cp "$dir/gen1" "dist/aria-${TAG}-${label}"
+              chmod +x "dist/aria-${TAG}-${label}"
             fi
           done
-          cd dist && sha256sum aria-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create tag and release
         env:
@@ -216,28 +242,34 @@ jobs:
             --title "Aria ${TAG}" \
             --notes "## Aria Compiler ${TAG}
 
-          Self-hosting Aria compiler. Each binary was produced by the compiler compiling itself.
+          Self-hosting Aria compiler with standard library. Each binary was produced by the compiler compiling itself.
 
-          ### Quick Start
+          ### Install (recommended)
           \`\`\`bash
-          # macOS / Linux
-          chmod +x aria-*
-          sudo mv aria-* /usr/local/bin/aria
-          aria build hello.aria && ./hello
-
-          # Windows
-          aria-v...-windows-amd64.exe build hello.aria
-          hello.exe
+          curl -sSL https://aria-lang.com/install.sh | sh
           \`\`\`
+
+          ### Manual Install
+          \`\`\`bash
+          # Download and extract the tarball for your platform
+          tar -xzf aria-${TAG}-darwin-arm64.tar.gz
+          sudo mv aria /usr/local/lib/aria
+          sudo ln -sf /usr/local/lib/aria/aria /usr/local/bin/aria
+          \`\`\`
+
+          ### What's Included
+          - \`aria\` — the compiler binary
+          - \`lib/\` — standard library (json, http, db)
+          - \`runtime/runtime.c\` — C runtime (linked automatically)
 
           ### Requires
           - **clang** (macOS: xcode-select --install, Ubuntu: sudo apt install clang, Windows: choco install llvm)
 
-          ### Binaries
-          | File | Platform |
-          |------|----------|
-          | aria-${TAG}-darwin-arm64 | macOS Apple Silicon |
-          | aria-${TAG}-linux-amd64 | Linux x86_64 |
-          | aria-${TAG}-windows-amd64.exe | Windows x86_64 |" \
+          ### Downloads
+          | File | Platform | Contents |
+          |------|----------|----------|
+          | aria-${TAG}-darwin-arm64.tar.gz | macOS Apple Silicon | Full distribution |
+          | aria-${TAG}-linux-amd64.tar.gz | Linux x86_64 | Full distribution |
+          | aria-${TAG}-windows-amd64.tar.gz | Windows x86_64 | Full distribution |" \
             $PRERELEASE_FLAG \
             dist/*
