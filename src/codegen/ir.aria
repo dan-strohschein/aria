@@ -188,23 +188,29 @@ struct IrFunc {
     insts: [IrInst]
     return_type: i64
     local_count: i64
+    temp_types: [i64]
 }
 
 fn _sentinel_func() -> IrFunc =
-    IrFunc{name: "", param_count: 0, insts: [_sentinel_inst()], return_type: 0, local_count: 0}
+    IrFunc{name: "", param_count: 0, insts: [_sentinel_inst()], return_type: 0, local_count: 0, temp_types: [0]}
 
 fn new_ir_func(name: str, param_count: i64, ret_type: i64) -> IrFunc =
-    IrFunc{name: name, param_count: param_count, insts: [_sentinel_inst()], return_type: ret_type, local_count: 0}
+    IrFunc{name: name, param_count: param_count, insts: [_sentinel_inst()], return_type: ret_type, local_count: 0, temp_types: [0]}
 
 fn func_add_inst(f: IrFunc, inst: IrInst) -> IrFunc =
     IrFunc{name: f.name, param_count: f.param_count,
            insts: f.insts.append(inst), return_type: f.return_type,
-           local_count: f.local_count}
+           local_count: f.local_count, temp_types: f.temp_types}
 
 fn func_set_locals(f: IrFunc, count: i64) -> IrFunc =
     IrFunc{name: f.name, param_count: f.param_count,
            insts: f.insts, return_type: f.return_type,
-           local_count: count}
+           local_count: count, temp_types: f.temp_types}
+
+fn func_set_temp_types(f: IrFunc, types: [i64]) -> IrFunc =
+    IrFunc{name: f.name, param_count: f.param_count,
+           insts: f.insts, return_type: f.return_type,
+           local_count: f.local_count, temp_types: types}
 
 fn func_inst_count(f: IrFunc) -> i64 = f.insts.len() - 1  // minus sentinel
 

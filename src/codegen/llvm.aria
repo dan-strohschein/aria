@@ -75,6 +75,16 @@ fn _llvm_escape_str(s: str) -> str {
     result
 }
 
+// --- Temp type lookup for GC safepoints ---
+
+fn _get_temp_type(f: IrFunc, temp: i64) -> i64 {
+    idx := temp + 1
+    if idx >= 0 && idx < f.temp_types.len() {
+        return f.temp_types[idx]
+    }
+    return 0
+}
+
 // --- LLVM IR text builder (array-based) ---
 
 struct LlvmGen {
@@ -200,6 +210,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare void @_aria_print_str(i8*, i64)" + nl)
     p = p.append("declare void @_aria_eprintln_str(i8*, i64)" + nl)
     p = p.append("declare i8* @_aria_alloc(i64)" + nl)
+    p = p.append("declare void @_aria_gc_root_push(i64)" + nl)
+    p = p.append("declare void @_aria_gc_root_pop(i64)" + nl)
     p = p.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
@@ -842,12 +854,34 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Alloc" {
         mut gg := g
+        // GC safepoint: push all live pointer-typed temps to shadow stack
+        // so the GC can find them if collection triggers during _aria_alloc.
+        // Pointer types: 12 = str (skip, fat pointer), >= 100 = struct
+        mut root_count := 0
+        mut ri := 0
+        while ri < f.local_count {
+            tt := _get_temp_type(f, ri)
+            // Only push struct-typed temps (type >= 100), skip the alloc dest itself
+            if tt >= 100 && ri != inst.dest {
+                val := "%gc_push_" + i2s(idx) + "_" + i2s(ri)
+                gg = _lg_emit(gg, val + " = load i64, i64* " + _t(ri))
+                gg = _lg_emit(gg, "call void @_aria_gc_root_push(i64 " + val + ")")
+                root_count = root_count + 1
+            }
+            ri = ri + 1
+        }
+
         size := inst.arg1 * 8
         raw := "%alloc_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + i2s(size) + ")")
         ptr := "%alloc_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
+
+        // Pop roots after allocation
+        if root_count > 0 {
+            gg = _lg_emit(gg, "call void @_aria_gc_root_pop(i64 " + i2s(root_count) + ")")
+        }
         return gg
     }
 

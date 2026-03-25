@@ -185,7 +185,8 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
             fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_start_4: 0, defer_start_5: 0, defer_start_6: 0, defer_start_7: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0, defer_end_4: 0, defer_end_5: 0, defer_end_6: 0, defer_end_7: 0}
 
 fn _lfinish_func(l: Lowerer) -> Lowerer {
-    f := func_set_locals(l.current_func, l.temp_counter)
+    f0 := func_set_locals(l.current_func, l.temp_counter)
+    f := func_set_temp_types(f0, l.temp_types)
     new_mod := mod_add_func(l.module, f)
     Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: new_mod,

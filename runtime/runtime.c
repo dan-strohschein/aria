@@ -93,19 +93,44 @@ void _aria_eprintln_str(char *ptr, aria_int len) {
 }
 
 // ====================================================================
+// GC Shadow Stack
+//
+// The compiler emits code to push/pop live pointer-typed temps to this
+// global array before each heap allocation. The GC scans this instead
+// of the C stack, providing precise root information.
+// ====================================================================
+
+#define GC_SHADOW_STACK_SIZE (128 * 1024)  // 128K root slots
+static aria_int _gc_shadow_stack[GC_SHADOW_STACK_SIZE];
+static aria_int _gc_shadow_sp = 0;
+
+// Push a single root value onto the shadow stack
+void _aria_gc_root_push(aria_int value) {
+    if (_gc_shadow_sp < GC_SHADOW_STACK_SIZE) {
+        _gc_shadow_stack[_gc_shadow_sp++] = value;
+    }
+}
+
+// Pop N roots from the shadow stack
+void _aria_gc_root_pop(aria_int count) {
+    _gc_shadow_sp -= count;
+    if (_gc_shadow_sp < 0) _gc_shadow_sp = 0;
+}
+
+// ====================================================================
 // Generational Mark-Sweep Garbage Collector
 //
-// Design: Non-moving, conservative stack scanning, two generations.
+// Design: Non-moving, two generations, shadow stack for precise roots.
 // - Young objects: collected on every minor GC (threshold-triggered)
 // - Old objects: promoted after surviving GC_TENURE_AGE collections,
 //   only collected during major GC
-// - Conservative: scans C stack for values matching tracked pointers
+// - Shadow stack: compiler-emitted root registration for precise scanning
 // - Uses hash table for O(1) pointer lookup during marking
 // ====================================================================
 
 #define GC_INITIAL_CAPACITY   (64 * 1024)  // Initial tracking array size
 #define GC_GROWTH_FACTOR      2
-#define GC_INITIAL_THRESHOLD  (8L * 1024 * 1024 * 1024)  // 8GB — effectively disabled until precise scanning is added
+#define GC_DEFAULT_THRESHOLD  (32 * 1024 * 1024)   // 32MB default
 #define GC_THRESHOLD_GROW     1.5                   // Grow threshold after collection
 #define GC_MAX_THRESHOLD      (512 * 1024 * 1024)  // Cap at 512MB
 #define GC_TENURE_AGE         3   // Promote after surviving 3 minor GCs
@@ -221,7 +246,7 @@ static struct {
     aria_int total_collections;
     int enabled;
     int in_gc;             // Reentrance guard
-} _gc = {NULL, NULL, NULL, NULL, 0, 0, 0, GC_INITIAL_THRESHOLD, 0, 0, 0, 0};
+} _gc = {NULL, NULL, NULL, NULL, 0, 0, 0, GC_DEFAULT_THRESHOLD, 0, 0, 0, 0};
 
 // Stack bottom: set once in main()
 static void *_gc_stack_bottom = NULL;
@@ -241,6 +266,24 @@ static void _gc_init(void) {
     _gc.total_bytes = 0;
     _gc.enabled = 1;
     _gc.in_gc = 0;
+    // Allow runtime threshold override: ARIA_GC_THRESHOLD=64m or ARIA_GC_THRESHOLD=off
+    char *env = getenv("ARIA_GC_THRESHOLD");
+    if (env) {
+        if (env[0] == 'o' && env[1] == 'f' && env[2] == 'f') {
+            _gc.threshold = (aria_int)8L * 1024 * 1024 * 1024;  // effectively disabled
+        } else {
+            aria_int val = 0;
+            for (int i = 0; env[i] >= '0' && env[i] <= '9'; i++) {
+                val = val * 10 + (env[i] - '0');
+            }
+            // Check for suffix: m=MB, g=GB
+            int last = 0;
+            while (env[last]) last++;
+            if (last > 0 && (env[last-1] == 'm' || env[last-1] == 'M')) val *= 1024 * 1024;
+            else if (last > 0 && (env[last-1] == 'g' || env[last-1] == 'G')) val *= 1024 * 1024 * 1024;
+            if (val > 0) _gc.threshold = val;
+        }
+    }
 }
 
 static void _gc_track(void *ptr, aria_int size) {
@@ -307,15 +350,21 @@ static void _gc_scan_object(void *ptr, aria_int size, int major) {
     }
 }
 
-// Conservative stack + register scan.
-// Uses setjmp to spill all registers onto the stack, then scans
-// from the current stack pointer to the recorded stack bottom.
-static void _gc_scan_stack(int major) {
-    // Spill registers to stack via setjmp
+// Root scanning: uses shadow stack (precise) + conservative C stack scan.
+// The shadow stack contains compiler-registered pointer temps.
+// The C stack scan catches roots in runtime C functions (string ops, etc.).
+static void _gc_scan_roots(int major) {
+    // 1. Scan shadow stack (precise roots from compiled code)
+    for (aria_int i = 0; i < _gc_shadow_sp; i++) {
+        void *candidate = (void *)(uintptr_t)_gc_shadow_stack[i];
+        if (candidate) _gc_mark_ptr(candidate, major);
+    }
+
+    // 2. Conservative scan of C stack (catches runtime function locals)
     jmp_buf regs;
     setjmp(regs);
 
-    // Scan the jmp_buf itself (contains saved register values)
+    // Scan registers
     aria_int *reg_start = (aria_int *)&regs;
     aria_int *reg_end = reg_start + (sizeof(jmp_buf) / sizeof(aria_int));
     for (aria_int *p = reg_start; p < reg_end; p++) {
@@ -323,29 +372,20 @@ static void _gc_scan_stack(int major) {
         if (candidate) _gc_mark_ptr(candidate, major);
     }
 
-    // Scan the C stack
+    // Scan C stack
     volatile aria_int stack_anchor = 0;
     void *stack_top = (void *)&stack_anchor;
-
     if (!_gc_stack_bottom) return;
 
     void *lo = stack_top < _gc_stack_bottom ? stack_top : _gc_stack_bottom;
     void *hi = stack_top < _gc_stack_bottom ? _gc_stack_bottom : stack_top;
 
-    aria_int stack_words = ((aria_int *)hi - (aria_int *)lo);
-    aria_int found = 0;
-
     aria_int *start = (aria_int *)lo;
     aria_int *end = (aria_int *)hi;
     for (aria_int *p = start; p < end; p++) {
         void *candidate = (void *)(uintptr_t)*p;
-        if (candidate) {
-            aria_int idx = _gc_ht_lookup(candidate);
-            if (idx >= 0) found++;
-            _gc_mark_ptr(candidate, major);
-        }
+        if (candidate) _gc_mark_ptr(candidate, major);
     }
-    (void)found; (void)stack_words;  // suppress unused warnings
 }
 
 // Process the mark worklist: scan all newly-marked objects
@@ -427,7 +467,7 @@ aria_int _aria_gc_minor(void) {
     _gc_worklist_tail = 0;
 
     // Mark phase: scan stack conservatively
-    _gc_scan_stack(0);
+    _gc_scan_roots(0);
     _gc_process_worklist(0);
 
     // Sweep: free unreachable young objects
@@ -448,7 +488,7 @@ aria_int _aria_gc_major(void) {
     _gc_worklist_head = 0;
     _gc_worklist_tail = 0;
 
-    _gc_scan_stack(1);
+    _gc_scan_roots(1);
     _gc_process_worklist(1);
 
     aria_int freed = _gc_sweep(1);
