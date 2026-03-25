@@ -208,6 +208,14 @@ fn generate_llvm_ir(m: IrModule) -> str {
     return _generate_llvm_ir_target(m, "native")
 }
 
+// Streaming variant: writes LLVM IR directly to file in chunks.
+// Each function's IR is generated, joined, written, and discarded.
+// This avoids holding the entire 22MB+ IR in memory at once.
+fn generate_llvm_ir_to_file(m: IrModule, path: str) {
+    _generate_llvm_ir_to_file_target(m, path, "native")
+    mut _void := 0
+}
+
 fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     nl := _nl()
     si64 := _struct_i64_i64()
@@ -243,6 +251,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare void @_aria_append_file(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_binary_file(i8*, i64, i64*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
@@ -490,6 +499,276 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     }
 
     return _join(p)
+}
+
+// Streaming variant: write LLVM IR to file in chunks.
+// Reuses _generate_llvm_ir_target for the header/declarations and tail,
+// but writes each function's IR separately to avoid holding 22MB+ in memory.
+fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) {
+    nl := _nl()
+    si64 := _struct_i64_i64()
+
+    // Phase 1: Build header + declarations (small, ~50KB)
+    mut h := [""]
+    triple := _target_triple(target)
+    layout := _target_datalayout(target)
+    h = h.append("target datalayout = \"" + layout + "\"" + nl)
+    h = h.append("target triple = \"" + triple + "\"" + nl + nl)
+
+    // String constants
+    mut si := 1
+    while si < m.string_constants.len() {
+        s := m.string_constants[si]
+        escaped := _llvm_escape_str(s)
+        slen := s.len()
+        h = h.append("@.str." + i2s(si) + " = private unnamed_addr constant [" + i2s(slen + 1) + " x i8] c\"" + escaped + "\\00\"" + nl)
+        si = si + 1
+    }
+    h = h.append(nl)
+
+    // Runtime declarations (same as non-streaming version)
+    h = h.append("; Runtime declarations" + nl)
+    h = h.append("declare void @_aria_exit(i64)" + nl)
+    h = h.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_println_str(i8*, i64)" + nl)
+    h = h.append("declare void @_aria_print_str(i8*, i64)" + nl)
+    h = h.append("declare void @_aria_eprintln_str(i8*, i64)" + nl)
+    h = h.append("declare i8* @_aria_alloc(i64)" + nl)
+    h = h.append("declare void @_aria_gc_frame_push(i64, i64)" + nl)
+    h = h.append("declare void @_aria_gc_frame_pop()" + nl)
+    h = h.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
+    h = h.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_append_file(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_write_binary_file(i8*, i64, i64*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_startsWith(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_endsWith(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_indexOf(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_trim(i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_replace(i8*, i64, i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_toLower(i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_toUpper(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_split(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_map_set_str(i64, i8*, i64, i64, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_map_get_str(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_array_new(i64)" + nl)
+    h = h.append("declare i64 @_aria_array_len(i64)" + nl)
+    h = h.append("declare i64 @_aria_array_get(i64, i64)" + nl)
+    h = h.append("declare void @_aria_array_set(i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_array_append(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_array_slice(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_list_dir(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_is_dir(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_args_get()" + nl)
+    h = h.append("declare i64 @_aria_exec(i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_to_int(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_to_float(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_map_new(i64)" + nl)
+    h = h.append("declare void @_aria_map_set(i64, i8*, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_map_get(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_map_contains(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_map_len(i64)" + nl)
+    h = h.append("declare i64 @_aria_map_keys(i64)" + nl)
+    h = h.append("declare i64 @_aria_set_new(i64)" + nl)
+    h = h.append("declare void @_aria_set_add(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_set_contains(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_set_len(i64)" + nl)
+    h = h.append("declare void @_aria_set_remove(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_set_values(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_getenv(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_tcp_socket()" + nl)
+    h = h.append("declare i64 @_aria_tcp_bind(i64, i8*, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_tcp_listen(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_tcp_accept(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_tcp_read(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_tcp_write(i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_tcp_close(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_tcp_peer_addr(i64)" + nl)
+    h = h.append("declare i64 @_aria_tcp_set_timeout(i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_connect(i8*, i64)" + nl)
+    h = h.append("declare void @_aria_pg_close(i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_status(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_pg_error(i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_exec(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_exec_params(i64, i8*, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_result_status(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_pg_result_error(i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_nrows(i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_ncols(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_pg_field_name(i64, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_pg_get_value(i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_is_null(i64, i64, i64)" + nl)
+    h = h.append("declare void @_aria_pg_clear(i64)" + nl)
+    h = h.append("declare i64 @_aria_spawn(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_task_await(i64)" + nl)
+    h = h.append("declare i64 @_aria_chan_new(i64)" + nl)
+    h = h.append("declare void @_aria_chan_send(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_chan_recv(i64)" + nl)
+    h = h.append("declare void @_aria_chan_close(i64)" + nl)
+    h = h.append("declare i64 @_aria_chan_try_recv(i64)" + nl)
+    h = h.append("declare i64 @_aria_mutex_new()" + nl)
+    h = h.append("declare void @_aria_mutex_lock(i64)" + nl)
+    h = h.append("declare void @_aria_mutex_unlock(i64)" + nl)
+    h = h.append("declare void @_aria_sleep(i64)" + nl)
+    h = h.append("declare i64 @_aria_spawn2(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_task_await2(i64)" + nl)
+    h = h.append("declare i64 @_aria_task_done(i64)" + nl)
+    h = h.append("declare void @_aria_task_cancel(i64)" + nl)
+    h = h.append("declare i64 @_aria_task_result(i64)" + nl)
+    h = h.append("declare i64 @_aria_cancel_check()" + nl)
+    h = h.append("declare i64 @_aria_wg_new()" + nl)
+    h = h.append("declare void @_aria_wg_add(i64, i64)" + nl)
+    h = h.append("declare void @_aria_wg_done(i64)" + nl)
+    h = h.append("declare void @_aria_wg_wait(i64)" + nl)
+    h = h.append("declare i64 @_aria_once_new()" + nl)
+    h = h.append("declare void @_aria_once_call(i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_rwmutex_new()" + nl)
+    h = h.append("declare void @_aria_rwmutex_rlock(i64)" + nl)
+    h = h.append("declare void @_aria_rwmutex_runlock(i64)" + nl)
+    h = h.append("declare void @_aria_rwmutex_wlock(i64)" + nl)
+    h = h.append("declare void @_aria_rwmutex_wunlock(i64)" + nl)
+    h = h.append("declare i64 @_aria_cancel_new()" + nl)
+    h = h.append("declare i64 @_aria_cancel_child(i64)" + nl)
+    h = h.append("declare void @_aria_cancel_trigger(i64)" + nl)
+    h = h.append("declare i64 @_aria_cancel_is_triggered(i64)" + nl)
+    h = h.append("declare i64 @_aria_str_char_count(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_chars(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_graphemes(i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_sb_new()" + nl)
+    h = h.append("declare i64 @_aria_sb_with_capacity(i64)" + nl)
+    h = h.append("declare void @_aria_sb_append(i64, i8*, i64)" + nl)
+    h = h.append("declare void @_aria_sb_append_char(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_sb_len(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_sb_build(i64)" + nl)
+    h = h.append("declare void @_aria_sb_clear(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_format_int(i64, i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_format_float(i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_gc_collect()" + nl)
+    h = h.append("declare i64 @_aria_gc_total_bytes()" + nl)
+    h = h.append("declare i64 @_aria_gc_allocation_count()" + nl)
+    h = h.append("declare i64 @_aria_arena_new(i64)" + nl)
+    h = h.append("declare i8* @_aria_arena_alloc(i64, i64)" + nl)
+    h = h.append("declare void @_aria_arena_reset(i64)" + nl)
+    h = h.append("declare void @_aria_arena_free(i64)" + nl)
+    h = h.append("declare i64 @_aria_arena_allocated(i64)" + nl)
+    h = h.append("declare i64 @_aria_arena_capacity(i64)" + nl)
+    h = h.append("declare i64 @_aria_pool_new(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_pool_get(i64)" + nl)
+    h = h.append("declare void @_aria_pool_put(i64, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_float_to_str(i64)" + nl)
+    h = h.append(nl)
+
+    // _aria_panic helper
+    ob := "\{"
+    cb := "\}"
+    h = h.append("define void @_aria_panic(i8* %ptr, i64 %len) " + ob + nl)
+    h = h.append("  call void @_aria_eprintln_str(i8* %ptr, i64 %len)" + nl)
+    h = h.append("  call void @_aria_exit(i64 1)" + nl)
+    h = h.append("  unreachable" + nl)
+    h = h.append(cb + nl)
+    h = h.append(nl)
+
+    // FFI extern declarations
+    mut ei := 1
+    while ei < m.extern_names.len() {
+        ename := m.extern_names[ei]
+        epc := m.extern_param_counts[ei]
+        ert := m.extern_ret_types[ei]
+        mut ret_llvm := "void"
+        if ert == "i64" { ret_llvm = "i64" }
+        if ert == "f64" { ret_llvm = "double" }
+        if ert == "str" { ret_llvm = _str_ret_type() }
+        mut params_llvm := ""
+        mut pi := 0
+        while pi < epc {
+            if pi > 0 { params_llvm = params_llvm + ", " }
+            params_llvm = params_llvm + "i64"
+            pi = pi + 1
+        }
+        h = h.append("declare " + ret_llvm + " @" + ename + "(" + params_llvm + ")" + nl)
+        ei = ei + 1
+    }
+    h = h.append(nl)
+
+    // Write header to file (truncates)
+    _ariaWriteFile(path, _join(h))
+
+    // Phase 2: Generate each function and append to file individually
+    mut defined_names := [""]
+    mut fi := 1
+    while fi < m.funcs.len() {
+        f := m.funcs[fi]
+        if f.name != "" {
+            defined_names = defined_names.append(f.name)
+            if f.name == "main" { defined_names = defined_names.append("_aria_main") }
+            fn_parts := _gen_function(m, f)
+            fn_text := _join(fn_parts) + nl
+            _ariaAppendFile(path, fn_text)
+        }
+        fi = fi + 1
+    }
+
+    // Phase 3: Forward declarations + entry point (small)
+    mut tail := [""]
+    mut called_names := _collect_called_names(m)
+    mut ci := 1
+    while ci < called_names.len() {
+        cname := called_names[ci]
+        if _name_in_list(cname, defined_names) == false {
+            mut is_extern := false
+            mut exi := 1
+            while exi < m.extern_names.len() {
+                if m.extern_names[exi] == cname { is_extern = true }
+                exi = exi + 1
+            }
+            if cname.startsWith("_aria_") == false && is_extern == false {
+                tail = tail.append("declare i64 @" + cname + "(...)" + nl)
+            }
+        }
+        ci = ci + 1
+    }
+
+    lb := _lb()
+    rb := _rb()
+    if m.entry_func != "" {
+        mut entry_call := m.entry_func
+        if entry_call == "main" { entry_call = "_aria_main" }
+        tail = tail.append("; Entry wrapper" + nl)
+        tail = tail.append("define void @_aria_entry() " + lb + nl)
+        tail = tail.append("entry:" + nl)
+        tail = tail.append("  call void @" + entry_call + "()" + nl)
+        tail = tail.append("  ret void" + nl)
+        tail = tail.append(rb + nl + nl)
+    } else {
+        mut has_main := false
+        mut hmi := 1
+        while hmi < m.funcs.len() {
+            if m.funcs[hmi].name == "main" { has_main = true }
+            hmi = hmi + 1
+        }
+        if has_main {
+            tail = tail.append("; Entry wrapper (fn main)" + nl)
+            tail = tail.append("define void @_aria_entry() " + lb + nl)
+            tail = tail.append("entry:" + nl)
+            tail = tail.append("  call i64 @_aria_main()" + nl)
+            tail = tail.append("  ret void" + nl)
+            tail = tail.append(rb + nl + nl)
+        } else {
+            tail = tail.append("define void @_aria_entry() " + lb + nl)
+            tail = tail.append("entry:" + nl)
+            tail = tail.append("  ret void" + nl)
+            tail = tail.append(rb + nl + nl)
+        }
+    }
+
+    _ariaAppendFile(path, _join(tail))
+    mut _void := 0
 }
 
 // ============================================================
@@ -1709,6 +1988,23 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
         gg = _lg_emit(gg, cp_c + " = inttoptr i64 " + cp + " to i8*")
         gg = _lg_emit(gg, "call void @_aria_write_file(i8* " + pp_c + ", i64 " + pl + ", i8* " + cp_c + ", i64 " + cl + ")")
+        return gg
+    }
+
+    if name == "_aria_append_file" {
+        pp := "%call_af_pp_" + i2s(idx)
+        pl := "%call_af_pl_" + i2s(idx)
+        cp := "%call_af_cp_" + i2s(idx)
+        cl := "%call_af_cl_" + i2s(idx)
+        gg = _lg_emit(gg, pp + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, pl + " = load i64, i64* " + _t(inst.arg1 + 1))
+        gg = _lg_emit(gg, cp + " = load i64, i64* " + _t(inst.arg1 + 2))
+        gg = _lg_emit(gg, cl + " = load i64, i64* " + _t(inst.arg1 + 3))
+        pp_c := "%call_af_ppc_" + i2s(idx)
+        cp_c := "%call_af_cpc_" + i2s(idx)
+        gg = _lg_emit(gg, pp_c + " = inttoptr i64 " + pp + " to i8*")
+        gg = _lg_emit(gg, cp_c + " = inttoptr i64 " + cp + " to i8*")
+        gg = _lg_emit(gg, "call void @_aria_append_file(i8* " + pp_c + ", i64 " + pl + ", i8* " + cp_c + ", i64 " + cl + ")")
         return gg
     }
 

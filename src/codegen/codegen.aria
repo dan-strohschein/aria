@@ -47,12 +47,11 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
 // ============================================================
 
 fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag {
-    // Generate LLVM IR text
-    ll_text := generate_llvm_ir(m)
-
-    // Write .ll file
     ll_path := output_path + ".ll"
-    _ariaWriteFile(ll_path, ll_text)
+
+    // Use streaming write to reduce memory: write header, then each function
+    // individually, then tail. Each chunk is joined and discarded.
+    generate_llvm_ir_to_file(m, ll_path)
 
     // Compile with clang
     cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module 2>&1"

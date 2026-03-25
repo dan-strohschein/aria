@@ -181,6 +181,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "panic", SkBuiltin)
     rr = _add_builtin(rr, "_ariaReadFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaWriteFile", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaAppendFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaWriteBinaryFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaArgs", SkBuiltin)
     rr = _add_builtin(rr, "_ariaExec", SkBuiltin)

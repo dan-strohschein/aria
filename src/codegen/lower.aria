@@ -2513,6 +2513,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
 fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaReadFile" { return "_aria_read_file" }
     if name == "_ariaWriteFile" { return "_aria_write_file" }
+    if name == "_ariaAppendFile" { return "_aria_append_file" }
     if name == "_ariaWriteBinaryFile" { return "_aria_write_binary_file" }
     if name == "_ariaExec" { return "_aria_exec" }
     if name == "_ariaArgs" { return "_aria_args" }
@@ -2561,7 +2562,7 @@ fn _builtin_return_type(name: str) -> i64 {
        name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" {
         return 12
     }
-    if name == "_ariaWriteFile" || name == "_ariaWriteBinaryFile" || name == "_ariaArgs" ||
+    if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" || name == "_ariaArgs" ||
        name == "_ariaListDir" || name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
        name == "_ariaMutexUnlock" {
@@ -5261,7 +5262,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, path_arg.temp, 4, "_aria_write_binary_file", 0))
                 return LT{l: ll, temp: nt.temp}
             }
-            if name == "_ariaWriteFile" {
+            if name == "_ariaWriteFile" || name == "_ariaAppendFile" {
                 ll = _ladv(ll)  // skip (
                 // Two args: path (str = 2 temps), content (str = 2 temps)
                 path_arg := _lower_expr(ll)
@@ -5270,9 +5271,24 @@ fn _lower_primary(l: Lowerer) -> LT {
                 content_arg := _lower_expr(ll)
                 ll = content_arg.l
                 if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Pack path + content into 4 consecutive temps for the call
+                p0 := _lnew_temp(ll)
+                ll = p0.l
+                ll = _lemit(ll, new_inst(OpStore, p0.temp, path_arg.temp, 0, "", 0))
+                p1 := _lnew_temp(ll)
+                ll = p1.l
+                ll = _lemit(ll, new_inst(OpStore, p1.temp, path_arg.temp + 1, 0, "", 0))
+                c0 := _lnew_temp(ll)
+                ll = c0.l
+                ll = _lemit(ll, new_inst(OpStore, c0.temp, content_arg.temp, 0, "", 0))
+                c1 := _lnew_temp(ll)
+                ll = c1.l
+                ll = _lemit(ll, new_inst(OpStore, c1.temp, content_arg.temp + 1, 0, "", 0))
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                ll = _lemit(ll, new_inst(OpCall, nt.temp, path_arg.temp, 4, "_aria_write_file", 0))
+                rt_name := "_aria_write_file"
+                if name == "_ariaAppendFile" { rt_name = "_aria_append_file" }
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 4, rt_name, 0))
                 return LT{l: ll, temp: nt.temp}
             }
             if name == "_ariaExec" {
