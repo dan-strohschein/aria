@@ -397,7 +397,7 @@ Source (.aria) --> Lexer --> Parser (AST) --> Resolver --> Checker --> Lowerer -
 - **11 example applications** in `examples/`
 - **~31,000 lines** of Aria source
 - **~2,200 lines** of C runtime
-- **Self-compiling** — the compiler builds itself
+- **Self-compiling** — the compiler builds itself in **580MB peak memory, ~2 seconds**
 
 ## Standard Library
 
