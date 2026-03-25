@@ -812,9 +812,9 @@ aria_int _aria_map_new(aria_int capacity) {
     aria_int *header = (aria_int *)calloc(1, 40);  // 5 * 8 bytes
     header[0] = 0;          // size
     header[1] = capacity;   // capacity
-    header[2] = (aria_int)calloc((size_t)capacity, 8);  // keys
-    header[3] = (aria_int)calloc((size_t)capacity, 8);  // values
-    header[4] = (aria_int)calloc((size_t)capacity, 1);  // states (1 byte each)
+    header[2] = (aria_int)calloc((size_t)capacity * 2, 8);  // keys (ptr+len pairs)
+    header[3] = (aria_int)calloc((size_t)capacity, 8);      // values
+    header[4] = (aria_int)calloc((size_t)capacity, 1);      // states (1 byte each)
     return (aria_int)header;
 }
 
@@ -829,7 +829,7 @@ void _aria_map_set(aria_int map_ptr, aria_int key_ptr, aria_int key_len, aria_in
     // Grow if load factor > 0.7
     if (size * 10 > capacity * 7) {
         aria_int new_cap = capacity * 2;
-        aria_int *new_keys = (aria_int *)calloc((size_t)new_cap, 8);
+        aria_int *new_keys = (aria_int *)calloc((size_t)new_cap * 2, 8);
         aria_int *new_values = (aria_int *)calloc((size_t)new_cap, 8);
         char *new_states = (char *)calloc((size_t)new_cap, 1);
         // Rehash
@@ -951,8 +951,8 @@ aria_int _aria_set_new(aria_int capacity) {
     aria_int *header = (aria_int *)calloc(1, 32);  // 4 * 8 bytes
     header[0] = 0;          // size
     header[1] = capacity;   // capacity
-    header[2] = (aria_int)calloc((size_t)capacity, 8);  // keys (ptr+len pairs)
-    header[3] = (aria_int)calloc((size_t)capacity, 1);  // states
+    header[2] = (aria_int)calloc((size_t)capacity * 2, 8);  // keys (ptr+len pairs)
+    header[3] = (aria_int)calloc((size_t)capacity, 1);     // states
     return (aria_int)header;
 }
 
@@ -965,7 +965,7 @@ void _aria_set_add(aria_int set_ptr, aria_int key_ptr, aria_int key_len) {
 
     if (size * 10 > capacity * 7) {
         aria_int new_cap = capacity * 2;
-        aria_int *new_keys = (aria_int *)calloc((size_t)new_cap, 8);
+        aria_int *new_keys = (aria_int *)calloc((size_t)new_cap * 2, 8);
         char *new_states = (char *)calloc((size_t)new_cap, 1);
         for (aria_int i = 0; i < capacity; i++) {
             if (states[i] == 1) {
