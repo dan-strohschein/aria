@@ -98,26 +98,19 @@ fn _gc_root_count_for_func(f: IrFunc) -> i64 {
     return count
 }
 
-// Store all pointer temps into the GC frame before a call that might trigger GC
-fn _gc_store_roots(g: LlvmGen, f: IrFunc, idx: i64) -> LlvmGen {
-    mut gg := g
-    gc_frame_slots := _gc_root_count_for_func(f) + 2
-    if gc_frame_slots <= 2 { return gg }  // No roots to store
-    mut ri := 0
+// Map a temp to its GC frame slot index (-1 if not a root)
+fn _gc_slot_for_temp(f: IrFunc, temp: i64) -> i64 {
     mut slot := 0
-    while ri < f.local_count {
-        tt := _get_temp_type(f, ri)
+    mut i := 0
+    while i < f.local_count {
+        tt := _get_temp_type(f, i)
         if tt != 1 && tt != 12 {
-            val := "%gc_s_" + i2s(idx) + "_" + i2s(ri)
-            gep := "%gc_g_" + i2s(idx) + "_" + i2s(ri)
-            gg = _lg_emit(gg, val + " = load i64, i64* " + _t(ri))
-            gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
-            gg = _lg_emit(gg, "store i64 " + val + ", i64* " + gep)
+            if i == temp { return slot }
             slot = slot + 1
         }
-        ri = ri + 1
+        i = i + 1
     }
-    return gg
+    return 0 - 1
 }
 
 // --- LLVM IR text builder (array-based) ---
@@ -873,6 +866,17 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%store_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        // Update GC frame if dest is a pointer-typed temp
+        dt := _get_temp_type(f, inst.dest)
+        if dt != 1 && dt != 12 {
+            gc_frame_slots := _gc_root_count_for_func(f) + 2
+            slot := _gc_slot_for_temp(f, inst.dest)
+            if slot >= 0 && gc_frame_slots > 2 {
+                gep := "%gc_ss_" + i2s(idx)
+                gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+                gg = _lg_emit(gg, "store i64 " + v + ", i64* " + gep)
+            }
+        }
         return gg
     }
 
@@ -933,13 +937,27 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if op == "Alloc" {
-        mut gg := _gc_store_roots(g, f, idx)
+        mut gg := g
         size := inst.arg1 * 8
         raw := "%alloc_raw_" + i2s(idx)
         gg = _lg_emit(gg, raw + " = call i8* @_aria_alloc(i64 " + i2s(size) + ")")
         ptr := "%alloc_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
+
+        // Store this allocation's result into the GC frame.
+        // The frame is kept up-to-date incrementally: each OpAlloc stores
+        // only its own result. Previous allocs already stored theirs.
+        tt := _get_temp_type(f, inst.dest)
+        if tt != 1 && tt != 12 {
+            gc_frame_slots := _gc_root_count_for_func(f) + 2
+            slot := _gc_slot_for_temp(f, inst.dest)
+            if slot >= 0 {
+                gep := "%gc_store_" + i2s(idx)
+                gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
+                gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + gep)
+            }
+        }
         return gg
     }
 
@@ -1617,12 +1635,10 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     orig_name := inst.s1
     mut name := orig_name
     if name == "main" { name = "_aria_main" }
-    // GC safepoint: store roots before calls to Aria functions
-    // (which may contain OpAlloc). Skip runtime _aria_* builtins.
+    // GC root stores happen only at OpAlloc points, not at every call site.
+    // This keeps the generated .ll file small (~25MB vs ~200MB).
+    // The frame chain + conservative C stack scan handle cross-call roots.
     mut gg := g
-    if name.len() < 6 || name.substring(0, 6) != "_aria_" {
-        gg = _gc_store_roots(gg, f, idx)
-    }
 
     if name == "_aria_println_str" || name == "_aria_print_str" || name == "_aria_eprintln_str" {
         ptr_v := "%call_p_" + i2s(idx)
