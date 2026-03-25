@@ -669,6 +669,53 @@ fn _lower_bodies(l: Lowerer, index: DeclIndex) -> Lowerer {
     ll
 }
 
+// Like _lower_bodies but skips entry blocks (for test mode)
+fn _lower_bodies_skip_entry(l: Lowerer, index: DeclIndex) -> Lowerer {
+    mut ll := l
+    mut di := 1
+    while di < decl_index_len(index) {
+        decl := decl_index_get(index, di)
+        kname := decl_kind_name(decl.kind)
+        ll = _lset_pos(ll, decl.token_start)
+        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        if _lk(ll) == "@" {
+            ll = _ladv(ll)
+            if _lk(ll) == "IDENT" { ll = _ladv(ll) }
+            if _lk(ll) == "(" {
+                ll = _ladv(ll)
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+            }
+            ll = _lskip_nl(ll)
+        }
+        k := _lk(ll)
+        if kname == "fn" && k == "fn" {
+            if decl.name == "_extern" {
+                ll = _lower_extern(ll)
+            } else if decl.name.startsWith("_fixture:") {
+                ll = _lower_fixture(ll, _lk(ll))
+            } else {
+                ll = _lower_fn_d(ll, decl)
+            }
+        } else if kname == "entry" {
+            // Skip entry blocks in test mode — test runner generates _main
+            ll = _lset_pos(ll, decl.body_end)
+        } else if kname == "test" {
+            if decl.name.startsWith("_bench:") {
+                ll = _lower_bench(ll)
+            } else {
+                ll = _lower_test(ll)
+            }
+        } else if kname == "impl" {
+            ll = _lower_impl_d(ll, decl)
+        } else {
+            ll = _lset_pos(ll, decl.body_end)
+        }
+        di = di + 1
+    }
+    ll
+}
+
 fn _skip_to_next_l(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)
     lb := "\{"
@@ -10963,10 +11010,11 @@ fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, re
 }
 
 // Lower for test mode: compile test blocks and generate a test runner _main
+// Skips entry blocks to avoid duplicate _main (test runner generates its own)
 fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
-    l = _lower_bodies(l, index)
+    l = _lower_bodies_skip_entry(l, index)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function

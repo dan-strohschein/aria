@@ -348,6 +348,36 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i
     0
 }
 
+fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+    // Build to temp path, then execute
+    files := expand_files(raw_files)
+    if files.len() <= 1 {
+        println("error: no input files")
+        return 1
+    }
+    file := files[1]
+
+    // Output path: strip .aria, add _run suffix to avoid clobbering
+    mut output := "a.out"
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+
+    // Build
+    diags := generate_from_sources(files, output, runtime_path)
+    if bag_has_errors(diags) {
+        _print_diagnostics(diags, format)
+        return 1
+    }
+    if bag_warning_count(diags) > 0 {
+        _print_diagnostics(diags, format)
+    }
+
+    // Execute
+    exit_code := _ariaExec(output)
+    return exit_code
+}
+
 fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     files := expand_files(raw_files)
     if files.len() <= 1 {
@@ -502,6 +532,8 @@ entry {
         cmd := command_to_str(opts.command)
         if cmd == "build" {
             run_build(opts.files, opts.format, opts.target, opts.runtime_path)
+        } else if cmd == "run" {
+            run_run(opts.files, opts.format, opts.target, opts.runtime_path)
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {
