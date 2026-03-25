@@ -1,0 +1,52 @@
+// Test closures passed as arguments to higher-order functions
+struct Item { name: str  value: i64  active: bool }
+
+fn filter(items: [Item], pred: fn(Item) -> bool) -> [Item] {
+    mut result := [Item{name: "", value: 0, active: false}]
+    mut i := 1
+    while i < items.len() {
+        it := items[i]
+        if pred(it) { result = result.append(it) }
+        i = i + 1
+    }
+    return result
+}
+
+fn map_values(items: [Item], f: fn(i64) -> i64) -> [Item] {
+    mut result := [Item{name: "", value: 0, active: false}]
+    mut i := 1
+    while i < items.len() {
+        it := items[i]
+        result = result.append(Item{name: it.name, value: f(it.value), active: it.active})
+        i = i + 1
+    }
+    return result
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+entry {
+    // Simple closure HOF
+    result := apply(fn(n: i64) -> i64 => n * 2, 21)
+    assert result == 42
+
+    // Struct closure HOF
+    mut items := [Item{name: "", value: 0, active: false}]
+    items = items.append(Item{name: "A", value: 10, active: true})
+    items = items.append(Item{name: "B", value: 20, active: false})
+    items = items.append(Item{name: "C", value: 30, active: true})
+
+    active := filter(items, fn(it: Item) -> bool => it.active)
+    assert active.len() - 1 == 2
+
+    high := filter(items, fn(it: Item) -> bool => it.value >= 20)
+    assert high.len() - 1 == 2
+
+    doubled := map_values(items, fn(v: i64) -> i64 => v * 2)
+    d1 := doubled[1]
+    assert d1.value == 20
+
+    println("closure_hof_test passed")
+}

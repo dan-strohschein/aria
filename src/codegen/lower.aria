@@ -8734,15 +8734,18 @@ fn _lower_closure(l: Lowerer) -> LT {
         ll = _skip_braces_l(ll)
     } else {
         // Skip single expression — advance until statement boundary
+        // Must NOT return early; just find the end position for the body
         mut depth := 0
-        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" {
+        mut found_end := false
+        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" && found_end == false {
             if _lk(ll) == "(" { depth = depth + 1 }
             if _lk(ll) == ")" {
-                if depth == 0 { return LT{l: ll, temp: 0} }
-                depth = depth - 1
+                if depth == 0 { found_end = true } else { depth = depth - 1 }
             }
-            if _lk(ll) == "," && depth == 0 { return LT{l: ll, temp: 0} }
-            ll = _ladv(ll)
+            if found_end == false {
+                if _lk(ll) == "," && depth == 0 { found_end = true }
+            }
+            if found_end == false { ll = _ladv(ll) }
         }
     }
     body_end := ll.pos
