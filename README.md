@@ -318,6 +318,58 @@ with conn := connect(url)? {
 }  // conn.drop() called here
 ```
 
+## Garbage Collection
+
+Aria uses garbage collection by default — no annotations needed. The GC is generational mark-sweep with compiler-emitted root frames for precise pointer tracking.
+
+### How It Works
+
+- **All heap allocations are GC-tracked** — structs, arrays, and their data buffers
+- **Root frames**: the compiler allocates a stack frame per function that holds live pointer temps. The GC walks a linked chain of these frames to find all roots.
+- **Generational**: young objects are collected frequently, old objects (surviving 3+ collections) are collected less often
+- **Conservative fallback**: the C stack is also scanned for values that look like heap pointers, catching roots in runtime functions
+
+### Tuning
+
+The GC threshold (heap size before collection triggers) defaults to 256MB and is configurable via environment variable:
+
+```bash
+# Default: collect when heap exceeds 256MB
+aria run myprogram.aria
+
+# Custom threshold
+ARIA_GC_THRESHOLD=512m aria run large_program.aria
+
+# Disable GC entirely (for bootstrapping or when memory is not a concern)
+ARIA_GC_THRESHOLD=off aria run compiler_build.aria
+```
+
+### Opt-Out: Manual Memory Control
+
+For performance-critical code, Aria provides manual memory control that bypasses the GC:
+
+| Mechanism | Annotation | Use Case |
+|-----------|-----------|----------|
+| Stack allocation | `@stack` | Short-lived values, tight loops |
+| Arena allocation | `@arena` | Bulk allocate/free, request-scoped |
+| Object pool | `Pool[T]` | Hot-path object recycling |
+| Inline embedding | `@inline` | Cache-friendly data structures |
+| Deterministic cleanup | `Drop` trait | Resource cleanup (connections, files) |
+
+### Roadmap
+
+The current GC is stop-the-world. The spec targets concurrent, low-pause collection:
+
+| Feature | Status | Target |
+|---------|--------|--------|
+| Generational | Implemented | v0.1 |
+| Mark-sweep | Implemented | v0.1 |
+| Compiler root frames | Implemented | v0.1 |
+| Configurable threshold | Implemented | v0.1 |
+| Concurrent marking | Planned | v0.2 |
+| Compacting (old gen) | Planned | v0.2 |
+| Sub-1ms pause target | Planned | v0.3 |
+
 ## Architecture
 
 ### Compilation Pipeline
