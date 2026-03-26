@@ -1665,6 +1665,32 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
         return r
     }
 
+    // Select expression: list of arm pairs (arm_info, body)
+    // arm_info.s1 = binding name ("_default" for default), arm_info.c0 = channel expr
+    if nk == "Select" {
+        mut rr := r
+        mut ai := 0
+        while ai < node.list_count {
+            info_idx_node := pool_get(rr.pool, node.list_start + ai * 2)
+            body_idx_node := pool_get(rr.pool, node.list_start + ai * 2 + 1)
+            info := pool_get(rr.pool, info_idx_node.c0)
+            // Resolve channel expression (if not default arm)
+            if info.s1 != "_default" {
+                rr = _resolve_expr_node(rr, info.c0)
+            }
+            // Create scope for arm body with binding
+            parent_scope := rr.current_scope
+            rr = _push_scope(rr, ScBlock, "select_arm")
+            if info.s1 != "_default" && info.s1 != "_" {
+                rr = _add_sym_warn_shadow(rr, info.s1, SkVariable, info.span, false)
+            }
+            rr = _resolve_expr_node(rr, body_idx_node.c0)
+            rr = _pop_scope(rr, parent_scope)
+            ai = ai + 1
+        }
+        return rr
+    }
+
     // Fallback — skip unknown kinds
     r
 }

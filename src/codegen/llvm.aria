@@ -670,6 +670,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) {
     h = h.append("declare i64 @_aria_chan_recv(i64)" + nl)
     h = h.append("declare void @_aria_chan_close(i64)" + nl)
     h = h.append("declare i64 @_aria_chan_try_recv(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_chan_select(i64, i64)" + nl)
     h = h.append("declare i64 @_aria_mutex_new()" + nl)
     h = h.append("declare void @_aria_mutex_lock(i64)" + nl)
     h = h.append("declare void @_aria_mutex_unlock(i64)" + nl)

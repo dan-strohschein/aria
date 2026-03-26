@@ -1,8 +1,47 @@
-// Test: select expression
-// Note: Full select test deferred until parser support is added.
-// The lowerer and runtime handle select correctly via token-walking,
-// but the resolver's AST walker doesn't register arm bindings yet.
+// Test: select expression with channels
 
 entry {
-    print("select_test passed")
+    // Test 1: select with default (non-blocking)
+    ch1 := _ariaChanNew(1)
+    ch2 := _ariaChanNew(1)
+
+    // Send to ch1 so it has a value ready
+    _ariaChanSend(ch1, 42)
+
+    // Select should pick ch1 since it has data
+    result := select {
+        msg from ch1 => msg
+        msg from ch2 => msg + 100
+        default => -1
+    }
+    assert result == 42
+
+    // Test 2: select with default, no data available
+    ch3 := _ariaChanNew(1)
+    ch4 := _ariaChanNew(1)
+
+    result2 := select {
+        msg from ch3 => msg
+        msg from ch4 => msg
+        default => -999
+    }
+    assert result2 == -999
+
+    // Test 3: select with single channel
+    ch5 := _ariaChanNew(1)
+    _ariaChanSend(ch5, 7)
+
+    result3 := select {
+        val from ch5 => val * 10
+        default => 0
+    }
+    assert result3 == 70
+
+    _ariaChanClose(ch1)
+    _ariaChanClose(ch2)
+    _ariaChanClose(ch3)
+    _ariaChanClose(ch4)
+    _ariaChanClose(ch5)
+
+    println("select_test passed")
 }

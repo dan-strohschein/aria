@@ -1470,6 +1470,7 @@ fn _parse_prefix(p: Parser) -> PR {
     if k == "false" { return PR{p: _adv(p), e: mk_bool_lit(false, _pspan(p))} }
     if k == "if" { return _parse_if(p) }
     if k == "match" { return _parse_match(p) }
+    if k == "select" { return _parse_select(p) }
     if k == "fn" { return _parse_closure_expr(p) }
     if k == "(" { return _parse_grouped(p) }
     if k == "[" { return _parse_array(p) }
@@ -2113,6 +2114,95 @@ fn _parse_assert(p: Parser) -> PR {
     pp = _padd(expr.p, expr.e)
     PR{p: pp, e: Expr{kind: EkCall, s1: "assert", s2: "", b1: false, b2: false,
                        c0: 0, c1: 0, c2: 0, list_start: arg_idx, list_count: 1, span: span}}
+}
+
+// --- Parse select expression ---
+// select { binding from channel => body, default => body }
+// Produces EkSelect node with list of arm pairs:
+//   Each arm = 2 index nodes: (arm_info, body)
+//   arm_info: s1=binding name ("_" for default), c0=channel expr (0 for default)
+//   body: c0=body expression
+
+fn _parse_select(p: Parser) -> PR {
+    span := _pspan(p)
+    mut pp := _adv(p)  // skip select
+    lb := "\{"
+    rb := "\}"
+    pp = _skip_nl(pp)
+    pp = _expect(pp, lb)
+    pp = _skip_nl(pp)
+
+    mut arm_info_indices := [0]
+    mut body_indices := [0]
+    mut count := 0
+
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        pp = _skip_nl(pp)
+        if _ck(pp) == rb { break }
+
+        if _ck(pp) == "_" || (_ck(pp) == "IDENT" && _cur(pp).text == "default") {
+            // default => body
+            pp = _adv(pp)
+            pp = _expect(pp, "=>")
+            pp = _skip_nl(pp)
+            body := _parse_expr(pp, 0)
+            body_idx := _pidx(body.p)
+            pp = _padd(body.p, body.e)
+            // Store arm info: s1="_default", c0=0 (no channel)
+            info_idx := _pidx(pp)
+            pp = _padd(pp, Expr{kind: EkNone, s1: "_default", s2: "", b1: false, b2: false,
+                                 c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _pspan(pp)})
+            arm_info_indices = arm_info_indices.append(info_idx)
+            body_indices = body_indices.append(body_idx)
+            count = count + 1
+        } else if _ck(pp) == "IDENT" {
+            // binding from channel => body
+            bname := _cur(pp).text
+            bspan := _pspan(pp)
+            pp = _adv(pp)  // skip binding name
+            // Expect "from"
+            if _ck(pp) == "IDENT" && _cur(pp).text == "from" {
+                pp = _adv(pp)  // skip from
+            }
+            // Parse channel expression
+            ch := _parse_expr(pp, 0)
+            ch_idx := _pidx(ch.p)
+            pp = _padd(ch.p, ch.e)
+            pp = _expect(pp, "=>")
+            pp = _skip_nl(pp)
+            // Parse body expression
+            body := _parse_expr(pp, 0)
+            body_idx := _pidx(body.p)
+            pp = _padd(body.p, body.e)
+            // Store arm info: s1=binding name, c0=channel expression
+            info_idx := _pidx(pp)
+            pp = _padd(pp, Expr{kind: EkNone, s1: bname, s2: "", b1: false, b2: false,
+                                 c0: ch_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: bspan})
+            arm_info_indices = arm_info_indices.append(info_idx)
+            body_indices = body_indices.append(body_idx)
+            count = count + 1
+        } else {
+            pp = _adv(pp)
+        }
+        pp = _skip_nl(pp)
+    }
+    if _ck(pp) == rb { pp = _adv(pp) }
+
+    // Add arm pairs as index nodes
+    list_start := _pidx(pp)
+    mut ai := 0
+    while ai < count {
+        // Arm info index node
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: arm_info_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        // Body index node
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: body_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        ai = ai + 1
+    }
+
+    PR{p: pp, e: Expr{kind: EkSelect, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn parser_diagnostics(p: Parser) -> DiagnosticBag = p.diagnostics
