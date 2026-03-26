@@ -1,0 +1,39 @@
+mod test_chain
+
+struct Span {
+    file: str
+    line: i64
+}
+
+struct Token {
+    text: str
+    span: Span
+}
+
+struct Lexer {
+    file: str
+    tokens: [i64]
+}
+
+fn get_token_file(t: Token) -> str = t.span.file
+
+fn test_chain(t: Token) -> i64 {
+    // Chain: t.span.line — t is Token, t.span is Span, .line is i64
+    return t.span.line
+}
+
+entry {
+    s := Span{file: "hello.aria", line: 10}
+    t := Token{text: "fn", span: s}
+    l := Lexer{file: "other.aria", tokens: [0]}
+    
+    // Chained access
+    assert get_token_file(t) == "hello.aria"
+    assert test_chain(t) == 10
+    
+    // Both structs have "file" but at different offsets
+    assert t.span.file == "hello.aria"
+    assert l.file == "other.aria"
+    
+    println("field_chain_test passed")
+}

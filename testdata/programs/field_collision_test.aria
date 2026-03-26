@@ -1,0 +1,68 @@
+mod test_stress
+
+struct Span {
+    file: str
+    line: i64
+    col: i64
+    offset: i64
+    length: i64
+}
+
+struct Lexer {
+    tokens: [i64]
+    pos: i64
+    file: str
+    line: i64
+    col: i64
+}
+
+struct Resolver {
+    tokens: [i64]
+    pos: i64
+    file: str
+}
+
+struct Checker {
+    store: i64
+    file: str
+}
+
+fn make_span(f: str, ln: i64) -> Span {
+    return Span{file: f, line: ln, col: 0, offset: 0, length: 0}
+}
+
+fn span_file(s: Span) -> str = s.file
+fn span_line(s: Span) -> i64 = s.line
+
+// Chain through function return
+fn get_file_from_span(f: str) -> str {
+    s := make_span(f, 42)
+    return s.file
+}
+
+// Multiple structs in same function
+fn test_multi() -> bool {
+    s := Span{file: "span.aria", line: 1, col: 2, offset: 3, length: 4}
+    l := Lexer{tokens: [0], pos: 0, file: "lexer.aria", line: 10, col: 20}
+    r := Resolver{tokens: [0], pos: 0, file: "resolver.aria"}
+    c := Checker{store: 0, file: "checker.aria"}
+    
+    if s.file != "span.aria" { return false }
+    if l.file != "lexer.aria" { return false }
+    if r.file != "resolver.aria" { return false }
+    if c.file != "checker.aria" { return false }
+    if s.line != 1 { return false }
+    if l.line != 10 { return false }
+    if s.col != 2 { return false }
+    if l.col != 20 { return false }
+    return true
+}
+
+entry {
+    assert get_file_from_span("test.aria") == "test.aria"
+    assert span_file(make_span("hello", 5)) == "hello"
+    assert span_line(make_span("hello", 5)) == 5
+    assert test_multi()
+    
+    println("field_stress_test passed")
+}
