@@ -1,0 +1,723 @@
+@module diagnostic
+@lang aria
+@aid_version 0.2
+@purpose Diagnostic types, error codes, and rendering for compiler messages
+@depends []
+
+---
+
+@type Severity
+@kind sum
+@variants
+  Error — Compilation error, prevents codegen
+  Warning — Potential issue, does not prevent codegen
+  Info — Informational message
+  Hint — Suggestion for improvement
+@source_file src/diagnostic/diagnostic.aria
+@source_line 10
+
+---
+
+@type LabelStyle
+@kind sum
+@variants
+  Primary — Main diagnostic location
+  Secondary — Related/supporting location
+@source_file src/diagnostic/diagnostic.aria
+@source_line 25
+
+---
+
+@type Applicability
+@kind sum
+@variants
+  MachineApplicable — Safe to auto-apply
+  MaybeIncorrect — May not be correct in all cases
+  HasPlaceholders — Contains placeholder text requiring user edits
+@source_file src/diagnostic/diagnostic.aria
+@source_line 36
+
+---
+
+@type Span
+@kind struct
+@fields
+  file: str — Source file path
+  line: i64 — 1-based line number
+  col: i64 — 1-based column number
+  offset: i64 — Byte offset into source
+  length: i64 — Span length in bytes
+@source_file src/diagnostic/diagnostic.aria
+@source_line 49
+
+---
+
+@type Label
+@kind struct
+@fields
+  span: Span — Location in source
+  message: str — Label text
+  style: LabelStyle — Primary or secondary
+@source_file src/diagnostic/diagnostic.aria
+@source_line 85
+
+---
+
+@type Suggestion
+@kind struct
+@fields
+  message: str — Description of the fix
+  replacement: str — Replacement text
+  span: Span — Location to replace
+  applicability: Applicability — How safe to auto-apply
+@source_file src/diagnostic/diagnostic.aria
+@source_line 102
+
+---
+
+@type Diagnostic
+@kind struct
+@fields
+  code: str — Error code (e.g. E0001)
+  severity: Severity — Error, Warning, Info, or Hint
+  message: str — Human-readable message
+  span: Span — Primary source location
+  labels: [Label] — Annotated source locations
+  notes: [str] — Additional notes
+  suggestions: [Suggestion] — Suggested fixes
+@source_file src/diagnostic/diagnostic.aria
+@source_line 114
+
+---
+
+@type DiagnosticBag
+@kind struct
+@fields
+  diagnostics: [Diagnostic] — Collected diagnostics
+  error_count: i64 — Number of errors
+  warning_count: i64 — Number of warnings
+@source_file src/diagnostic/diagnostic.aria
+@source_line 145
+
+---
+
+@fn severity_to_str
+@sig (s: Severity) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 16
+
+---
+
+@fn label_style_to_str
+@sig (s: LabelStyle) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 29
+
+---
+
+@fn applicability_to_str
+@sig (a: Applicability) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 41
+
+---
+
+@fn new_span
+@sig (file: str, line: i64, col: i64, offset: i64, length: i64) -> Span
+@source_file src/diagnostic/diagnostic.aria
+@source_line 57
+
+---
+
+@fn span_end_offset
+@sig (s: Span) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 60
+
+---
+
+@fn i2s
+@sig (n: i64) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 64
+
+---
+
+@fn format_span
+@sig (s: Span) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 81
+
+---
+
+@fn new_label
+@sig (span: Span, message: str, style: LabelStyle) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 91
+
+---
+
+@fn primary_label
+@sig (span: Span, message: str) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 94
+
+---
+
+@fn secondary_label
+@sig (span: Span, message: str) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 97
+
+---
+
+@fn new_suggestion
+@sig (message: str, replacement: str, span: Span, applicability: Applicability) -> Suggestion
+@source_file src/diagnostic/diagnostic.aria
+@source_line 109
+
+---
+
+@fn new_diagnostic
+@sig (code: str, severity: Severity, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 126
+
+---
+
+@fn new_error
+@sig (code: str, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 137
+
+---
+
+@fn new_warning
+@sig (code: str, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 140
+
+---
+
+@fn new_bag
+@sig () -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 151
+
+---
+
+@fn bag_add_diagnostic
+@sig (bag: DiagnosticBag, diag: Diagnostic) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 158
+
+---
+
+@fn bag_add_error
+@sig (bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 176
+
+---
+
+@fn bag_add_warning
+@sig (bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 179
+
+---
+
+@fn bag_has_errors
+@sig (bag: DiagnosticBag) -> bool
+@source_file src/diagnostic/diagnostic.aria
+@source_line 182
+
+---
+
+@fn bag_error_count
+@sig (bag: DiagnosticBag) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 184
+
+---
+
+@fn bag_warning_count
+@sig (bag: DiagnosticBag) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 186
+
+---
+
+@fn bag_merge
+@sig (a: DiagnosticBag, b: DiagnosticBag) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 188
+
+---
+
+@fn format_summary
+@sig (bag: DiagnosticBag) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 198
+
+---
+
+@fn describe_code
+@sig (code: str) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 280
+
+---
+
+@fn render_text
+@sig (diag: Diagnostic, source: str) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 371
+
+---
+
+@fn render_json_diagnostic
+@sig (diag: Diagnostic) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 440
+
+---
+
+@fn render_json_bag
+@sig (bag: DiagnosticBag) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 504
+
+---
+
+@const E0001
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 206
+
+---
+
+@const E0002
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 207
+
+---
+
+@const E0003
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 208
+
+---
+
+@const E0004
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 209
+
+---
+
+@const E0005
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 210
+
+---
+
+@const E0006
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 211
+
+---
+
+@const E0007
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 212
+
+---
+
+@const E0008
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 213
+
+---
+
+@const E0009
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 214
+
+---
+
+@const E0010
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 215
+
+---
+
+@const E0011
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 216
+
+---
+
+@const E0012
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 217
+
+---
+
+@const E0013
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 218
+
+---
+
+@const E0014
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 219
+
+---
+
+@const E0015
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 220
+
+---
+
+@const E0016
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 221
+
+---
+
+@const E0017
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 222
+
+---
+
+@const E0018
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 223
+
+---
+
+@const E0019
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 224
+
+---
+
+@const E0020
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 225
+
+---
+
+@const E0100
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 228
+
+---
+
+@const E0101
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 229
+
+---
+
+@const E0102
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 230
+
+---
+
+@const E0103
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 231
+
+---
+
+@const E0104
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 232
+
+---
+
+@const E0105
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 233
+
+---
+
+@const E0106
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 234
+
+---
+
+@const E0107
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 235
+
+---
+
+@const E0108
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 236
+
+---
+
+@const E0109
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 237
+
+---
+
+@const E0110
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 238
+
+---
+
+@const E0111
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 239
+
+---
+
+@const E0112
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 240
+
+---
+
+@const E0113
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 241
+
+---
+
+@const E0114
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 242
+
+---
+
+@const E0200
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 245
+
+---
+
+@const E0201
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 246
+
+---
+
+@const E0202
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 247
+
+---
+
+@const E0203
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 248
+
+---
+
+@const E0204
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 249
+
+---
+
+@const E0205
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 250
+
+---
+
+@const E0300
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 253
+
+---
+
+@const E0301
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 254
+
+---
+
+@const E0302
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 255
+
+---
+
+@const E0303
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 256
+
+---
+
+@const E0304
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 257
+
+---
+
+@const E0400
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 257
+
+---
+
+@const E0401
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 258
+
+---
+
+@const E0402
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 259
+
+---
+
+@const E0403
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 260
+
+---
+
+@const E0500
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 263
+
+---
+
+@const E0700
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 266
+
+---
+
+@const E0701
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 267
+
+---
+
+@const E0702
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 268
+
+---
+
+@const E0703
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 269
+
+---
+
+@const E0704
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 270
+
+---
+
+@const W0001
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 273
+
+---
+
+@const W0002
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 274
+
+---
+
+@const W0003
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 275
+
+---
+
+@const W0004
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 276
+
+---
+
+@const W0005
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 277
+
+---
+
+@const W0100
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 278

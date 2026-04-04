@@ -1,0 +1,859 @@
+@module checker
+@lang aria
+@aid_version 0.2
+@purpose Type checking, trait resolution, generics, and effect verification
+@depends [lexer, parser, resolver, diagnostic]
+
+---
+
+@type TypeKind
+@kind sum
+@variants
+  TyI8 — 8-bit signed integer
+  TyI16 — 16-bit signed integer
+  TyI32 — 32-bit signed integer
+  TyI64 — 64-bit signed integer
+  TyU8 — 8-bit unsigned integer
+  TyU16 — 16-bit unsigned integer
+  TyU32 — 32-bit unsigned integer
+  TyU64 — 64-bit unsigned integer
+  TyF32 — 32-bit float
+  TyF64 — 64-bit float
+  TyBool — Boolean
+  TyStr — String
+  TyChar — Character
+  TyUnit — Unit type ()
+  TyArray — Array type [T]
+  TyFunction — Function type fn(A) -> B
+  TyNamed — Named/user-defined type
+  TyResult — Result type T ! E
+  TyOptional — Optional type T?
+  TyTypeVar — Generic type variable
+  TyTraitObject — Trait object
+  TyTuple — Tuple type
+  TyNever — Never type (diverges)
+  TyUnknown — Unknown / unresolved
+  TyNone — Sentinel
+@source_file src/checker/types.aria
+@source_line 14
+
+---
+
+@type TypeInfo
+@kind struct
+@fields
+  kind: TypeKind — Type classification
+  name: str — Type name (for named types, type vars)
+  type_id: i64 — Primary associated type ID (element type for arrays, return for functions)
+  type_id2: i64 — Secondary associated type ID (error type for results)
+  param_start: i64 — Start index for function parameter types
+  param_count: i64 — Number of function parameters
+@source_file src/checker/types.aria
+@source_line 74
+
+---
+
+@type TypeStore
+@kind struct
+@fields
+  types: [TypeInfo] — All registered types
+@source_file src/checker/types.aria
+@source_line 119
+
+---
+
+@type FieldInfo
+@kind struct
+@fields
+  name: str — Field name
+  type_id: i64 — Field type ID
+@source_file src/checker/types.aria
+@source_line 395
+
+---
+
+@type StructDef
+@kind struct
+@fields
+  name: str — Struct or sum type name
+  fields: [FieldInfo] — Struct fields
+  is_sum: bool — Whether this is a sum type
+  variant_names: [str] — Sum type variant names
+  variant_field_counts: [i64] — Fields per variant
+  variant_field_names: [str] — Flat list of all variant field names
+  variant_field_types: [i64] — Flat list of all variant field type IDs
+  variant_field_offsets: [i64] — Start offset per variant into flat field lists
+  generic_count: i64 — Number of generic parameters (0-3)
+  generic_name_0: str — First generic parameter name
+  generic_name_1: str — Second generic parameter name
+  generic_name_2: str — Third generic parameter name
+@source_file src/checker/types.aria
+@source_line 404
+
+---
+
+@type FnSig
+@kind struct
+@fields
+  name: str — Function name
+  param_names: [str] — Parameter names
+  param_types: [i64] — Parameter type IDs
+  return_type: i64 — Return type ID
+  error_type: i64 — Error type ID (0 = no error)
+  generic_count: i64 — Number of generic params (0-3)
+  generic_name_0: str — First generic name
+  generic_name_1: str — Second generic name
+  generic_name_2: str — Third generic name
+  generic_bound_0: str — First generic trait bound
+  generic_bound_1: str — Second generic trait bound
+  generic_bound_2: str — Third generic trait bound
+  token_start: i64 — Token position of declaration
+  has_io: bool — Has IO effect
+  has_fs: bool — Has FS effect
+  has_net: bool — Has Net effect
+  has_ffi: bool — Has FFI effect
+  has_async: bool — Has Async effect
+@source_file src/checker/types.aria
+@source_line 513
+
+---
+
+@type MonoSpec
+@kind struct
+@fields
+  generic_name: str — Original generic function/type name
+  specialized_name: str — Monomorphized name
+  type_arg_0: i64 — First type argument ID
+  type_arg_1: i64 — Second type argument ID
+  type_arg_2: i64 — Third type argument ID
+@source_file src/checker/types.aria
+@source_line 601
+
+---
+
+@type TypeRegistry
+@kind struct
+@fields
+  struct_defs: [StructDef] — All struct/sum type definitions
+  fn_sigs: [FnSig] — All function signatures
+  mono_specs: [MonoSpec] — Monomorphization records
+  deprecated_names: [str] — Deprecated symbol names
+  deprecated_msgs: [str] — Deprecation messages
+  cold_names: [str] — Cold-path function names
+@source_file src/checker/types.aria
+@source_line 614
+
+---
+
+@type TraitDef
+@kind struct
+@fields
+  name: str — Trait name
+  method_names: [str] — Required method names
+  parent_traits: [str] — Supertrait names
+  assoc_type_names: [str] — Associated type names
+  default_starts: [i64] — Token start for default method bodies
+  default_ends: [i64] — Token end for default method bodies
+@source_file src/checker/traits.aria
+@source_line 13
+
+---
+
+@type ImplDef
+@kind struct
+@fields
+  trait_name: str — Trait being implemented
+  type_name: str — Type implementing the trait
+  assoc_type_names: [str] — Associated type names
+  assoc_type_values: [str] — Associated type concrete values
+@source_file src/checker/traits.aria
+@source_line 28
+
+---
+
+@type TraitRegistry
+@kind struct
+@fields
+  trait_defs: [TraitDef] — All trait definitions
+  impl_defs: [ImplDef] — All trait implementations
+@source_file src/checker/traits.aria
+@source_line 43
+
+---
+
+@type Checker
+@kind struct
+@fields
+  tokens: [Token] — Token stream
+  pos: i64 — Current position
+  store: TypeStore — Type store
+  registry: TypeRegistry — Type/function registry
+  treg: TraitRegistry — Trait registry
+  diagnostics: DiagnosticBag — Accumulated diagnostics
+  table: SymbolTable — Symbol table from resolver
+  current_scope: i64 — Active scope ID
+  file: str — Source file path
+  pool: NodePool — AST node pool
+  env_names: [str] — Type environment variable names
+  env_types: [i64] — Type environment variable type IDs
+  env_scopes: [i64] — Type environment variable scope IDs
+  fn_return_type: i64 — Current function return type
+  fn_error_type: i64 — Current function error type
+  fn_current_name: str — Current function name
+  in_loop: bool — Whether inside a loop
+@source_file src/checker/checker.aria
+@source_line 18
+
+---
+
+@type CE
+@kind struct
+@fields
+  c: Checker — Updated checker state
+  type_id: i64 — Type of checked expression
+@source_file src/checker/checker.aria
+@source_line 42
+
+---
+
+@type CheckResult
+@kind struct
+@fields
+  store: TypeStore — Final type store
+  registry: TypeRegistry — Final type/function registry
+  treg: TraitRegistry — Final trait registry
+  diagnostics: DiagnosticBag — Check diagnostics
+@source_file src/checker/checker.aria
+@source_line 49
+
+---
+
+@const TY_NONE
+@value_type i64
+@value 0
+@source_file src/checker/types.aria
+@source_line 126
+
+---
+
+@const TY_I64
+@value_type i64
+@value 1
+@source_file src/checker/types.aria
+@source_line 127
+
+---
+
+@const TY_I32
+@value_type i64
+@value 2
+@source_file src/checker/types.aria
+@source_line 128
+
+---
+
+@const TY_I16
+@value_type i64
+@value 3
+@source_file src/checker/types.aria
+@source_line 129
+
+---
+
+@const TY_I8
+@value_type i64
+@value 4
+@source_file src/checker/types.aria
+@source_line 130
+
+---
+
+@const TY_U64
+@value_type i64
+@value 5
+@source_file src/checker/types.aria
+@source_line 131
+
+---
+
+@const TY_U32
+@value_type i64
+@value 6
+@source_file src/checker/types.aria
+@source_line 132
+
+---
+
+@const TY_U16
+@value_type i64
+@value 7
+@source_file src/checker/types.aria
+@source_line 133
+
+---
+
+@const TY_U8
+@value_type i64
+@value 8
+@source_file src/checker/types.aria
+@source_line 134
+
+---
+
+@const TY_F64
+@value_type i64
+@value 9
+@source_file src/checker/types.aria
+@source_line 135
+
+---
+
+@const TY_F32
+@value_type i64
+@value 10
+@source_file src/checker/types.aria
+@source_line 136
+
+---
+
+@const TY_BOOL
+@value_type i64
+@value 11
+@source_file src/checker/types.aria
+@source_line 137
+
+---
+
+@const TY_STR
+@value_type i64
+@value 12
+@source_file src/checker/types.aria
+@source_line 138
+
+---
+
+@const TY_CHAR
+@value_type i64
+@value 13
+@source_file src/checker/types.aria
+@source_line 139
+
+---
+
+@const TY_UNIT
+@value_type i64
+@value 14
+@source_file src/checker/types.aria
+@source_line 140
+
+---
+
+@const TY_NEVER
+@value_type i64
+@value 15
+@source_file src/checker/types.aria
+@source_line 141
+
+---
+
+@const TY_UNKNOWN
+@value_type i64
+@value 16
+@source_file src/checker/types.aria
+@source_line 142
+
+---
+
+@const TY_CHAN
+@value_type i64
+@value 17
+@source_file src/checker/types.aria
+@source_line 143
+
+---
+
+@const TY_TASK
+@value_type i64
+@value 18
+@source_file src/checker/types.aria
+@source_line 144
+
+---
+
+@const TY_CHAN_SEND
+@value_type i64
+@value 19
+@source_file src/checker/types.aria
+@source_line 145
+
+---
+
+@const TY_CHAN_RECV
+@value_type i64
+@value 20
+@source_file src/checker/types.aria
+@source_line 146
+
+---
+
+@const TY_STRUCT_BASE
+@value_type i64
+@value 10000
+@source_file src/checker/types.aria
+@source_line 151
+
+---
+
+@fn type_kind_name
+@sig (k: TypeKind) -> str
+@source_file src/checker/types.aria
+@source_line 41
+
+---
+
+@fn tk_eq
+@sig (a: TypeKind, b: TypeKind) -> bool
+@source_file src/checker/types.aria
+@source_line 69
+
+---
+
+@fn type_info_name
+@sig (ti: TypeInfo) -> str
+@source_file src/checker/types.aria
+@source_line 90
+
+---
+
+@fn type_info_kind
+@sig (ti: TypeInfo) -> TypeKind
+@source_file src/checker/types.aria
+@source_line 91
+
+---
+
+@fn type_info_type_id
+@sig (ti: TypeInfo) -> i64
+@source_file src/checker/types.aria
+@source_line 92
+
+---
+
+@fn mk_array_type
+@sig (elem_id: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 94
+
+---
+
+@fn mk_fn_type
+@sig (return_id: i64, param_start: i64, param_count: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 97
+
+---
+
+@fn mk_named_type
+@sig (name: str) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 100
+
+---
+
+@fn mk_result_type
+@sig (ok_id: i64, err_id: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 103
+
+---
+
+@fn mk_optional_type
+@sig (inner_id: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 106
+
+---
+
+@fn mk_typevar
+@sig (name: str) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 109
+
+---
+
+@fn mk_tuple_type
+@sig (elem_ids: str, arity: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 114
+
+---
+
+@fn new_store
+@sig () -> TypeStore
+@source_file src/checker/types.aria
+@source_line 153
+
+---
+
+@fn store_add
+@sig (store: TypeStore, info: TypeInfo) -> TypeStore
+@source_file src/checker/types.aria
+@source_line 180
+
+---
+
+@fn store_get
+@sig (store: TypeStore, id: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 183
+
+---
+
+@fn store_last_id
+@sig (store: TypeStore) -> i64
+@source_file src/checker/types.aria
+@source_line 190
+
+---
+
+@fn store_size
+@sig (store: TypeStore) -> i64
+@source_file src/checker/types.aria
+@source_line 192
+
+---
+
+@fn format_type
+@sig (store: TypeStore, id: i64) -> str
+@source_file src/checker/types.aria
+@source_line 196
+
+---
+
+@fn is_numeric
+@sig (store: TypeStore, id: i64) -> bool
+@source_file src/checker/types.aria
+@source_line 221
+
+---
+
+@fn is_integer
+@sig (store: TypeStore, id: i64) -> bool
+@source_file src/checker/types.aria
+@source_line 229
+
+---
+
+@fn is_float
+@sig (store: TypeStore, id: i64) -> bool
+@source_file src/checker/types.aria
+@source_line 236
+
+---
+
+@fn types_equal
+@sig (store: TypeStore, a: i64, b: i64) -> bool
+@source_file src/checker/types.aria
+@source_line 242
+
+---
+
+@fn substitute_type
+@sig (store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64) -> i64
+@source_file src/checker/types.aria
+@source_line 264
+
+---
+
+@fn tuple_elem_type
+@sig (store: TypeStore, tuple_id: i64, index: i64) -> i64
+@source_file src/checker/types.aria
+@source_line 278
+
+---
+
+@fn is_assignable
+@sig (store: TypeStore, src: i64, dst: i64) -> bool
+@source_file src/checker/types.aria
+@source_line 354
+
+---
+
+@fn resolve_type_name
+@sig (store: TypeStore, name: str) -> i64
+@source_file src/checker/types.aria
+@source_line 363
+
+---
+
+@fn new_struct_def
+@sig (name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef
+@source_file src/checker/types.aria
+@source_line 431
+
+---
+
+@fn new_generic_struct_def
+@sig (name: str, fields: [FieldInfo], gc: i64, gn0: str, gn1: str, gn2: str) -> StructDef
+@source_file src/checker/types.aria
+@source_line 437
+
+---
+
+@fn struct_is_generic
+@sig (def: StructDef) -> bool
+@source_file src/checker/types.aria
+@source_line 443
+
+---
+
+@fn new_sum_def
+@sig (name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf_types: [i64], vf_offsets: [i64]) -> StructDef
+@source_file src/checker/types.aria
+@source_line 445
+
+---
+
+@fn variant_data_count
+@sig (def: StructDef, tag: i64) -> i64
+@source_file src/checker/types.aria
+@source_line 452
+
+---
+
+@fn variant_field_name
+@sig (def: StructDef, tag: i64, fi: i64) -> str
+@source_file src/checker/types.aria
+@source_line 458
+
+---
+
+@fn variant_field_type
+@sig (def: StructDef, tag: i64, fi: i64) -> i64
+@source_file src/checker/types.aria
+@source_line 467
+
+---
+
+@fn sum_alloc_size
+@sig (def: StructDef) -> i64
+@source_file src/checker/types.aria
+@source_line 477
+
+---
+
+@fn sum_has_data
+@sig (def: StructDef) -> bool
+@source_file src/checker/types.aria
+@source_line 502
+
+---
+
+@fn new_fn_sig
+@sig (name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig
+@source_file src/checker/types.aria
+@source_line 541
+
+---
+
+@fn new_generic_fn_sig
+@sig (name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64, gc: i64, gn0: str, gn1: str, gn2: str, gb0: str, gb1: str, gb2: str, tstart: i64) -> FnSig
+@source_file src/checker/types.aria
+@source_line 547
+
+---
+
+@fn fn_is_generic
+@sig (sig: FnSig) -> bool
+@source_file src/checker/types.aria
+@source_line 553
+
+---
+
+@fn fn_has_effect
+@sig (sig: FnSig, effect: str) -> bool
+@source_file src/checker/types.aria
+@source_line 557
+
+---
+
+@fn fn_is_pure
+@sig (sig: FnSig) -> bool
+@source_file src/checker/types.aria
+@source_line 566
+
+---
+
+@fn sig_set_effects
+@sig (sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e: bool) -> FnSig
+@source_file src/checker/types.aria
+@source_line 590
+
+---
+
+@fn new_registry
+@sig () -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 624
+
+---
+
+@fn reg_add_struct
+@sig (reg: TypeRegistry, def: StructDef) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 634
+
+---
+
+@fn reg_add_fn
+@sig (reg: TypeRegistry, sig: FnSig) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 637
+
+---
+
+@fn reg_add_mono
+@sig (reg: TypeRegistry, spec: MonoSpec) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 640
+
+---
+
+@fn reg_add_deprecated
+@sig (reg: TypeRegistry, name: str, msg: str) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 643
+
+---
+
+@fn reg_add_cold
+@sig (reg: TypeRegistry, name: str) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 647
+
+---
+
+@fn reg_is_deprecated
+@sig (reg: TypeRegistry, name: str) -> bool
+@source_file src/checker/types.aria
+@source_line 651
+
+---
+
+@fn reg_deprecated_msg
+@sig (reg: TypeRegistry, name: str) -> str
+@source_file src/checker/types.aria
+@source_line 660
+
+---
+
+@fn reg_is_cold
+@sig (reg: TypeRegistry, name: str) -> bool
+@source_file src/checker/types.aria
+@source_line 669
+
+---
+
+@fn reg_find_mono
+@sig (reg: TypeRegistry, specialized_name: str) -> MonoSpec
+@source_file src/checker/types.aria
+@source_line 678
+
+---
+
+@fn reg_find_struct
+@sig (reg: TypeRegistry, name: str) -> StructDef
+@source_file src/checker/types.aria
+@source_line 689
+
+---
+
+@fn reg_find_fn
+@sig (reg: TypeRegistry, name: str) -> FnSig
+@source_file src/checker/types.aria
+@source_line 700
+
+---
+
+@fn reg_find_field
+@sig (reg: TypeRegistry, struct_name: str, field_name: str) -> FieldInfo
+@source_file src/checker/types.aria
+@source_line 711
+
+---
+
+@fn reg_has_variant
+@sig (reg: TypeRegistry, struct_name: str, variant_name: str) -> bool
+@source_file src/checker/types.aria
+@source_line 724
+
+---
+
+@fn new_trait_registry
+@sig () -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 48
+
+---
+
+@fn treg_add_trait
+@sig (reg: TraitRegistry, def: TraitDef) -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 54
+
+---
+
+@fn treg_add_impl
+@sig (reg: TraitRegistry, def: ImplDef) -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 57
+
+---
+
+@fn treg_find_trait
+@sig (reg: TraitRegistry, name: str) -> TraitDef
+@source_file src/checker/traits.aria
+@source_line 60
+
+---
+
+@fn treg_has_impl
+@sig (reg: TraitRegistry, type_name: str, trait_name: str) -> bool
+@source_file src/checker/traits.aria
+@source_line 71
+
+---
+
+@fn populate_builtins
+@sig (reg: TraitRegistry) -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 112
+
+---
+
+@fn op_requires_trait
+@sig (op: str) -> str
+@source_file src/checker/traits.aria
+@source_line 199
+
+---
+
+@fn type_supports_op
+@sig (treg: TraitRegistry, store: TypeStore, type_id: i64, op: str) -> bool
+@source_file src/checker/traits.aria
+@source_line 211
+
+---
+
+@fn binary_result_type
+@sig (store: TypeStore, left: i64, op: str) -> i64
+@source_file src/checker/traits.aria
+@source_line 228
+
+---
+
+@fn check
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult
+@calls [new_store, new_registry, new_trait_registry, populate_builtins]
+@source_file src/checker/checker.aria
+@source_line 4057

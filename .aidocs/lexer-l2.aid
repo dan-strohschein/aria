@@ -1,0 +1,526 @@
+@module lexer
+@lang aria
+@aid_version 0.2
+@layer 2
+@purpose Tokenizes Aria source code into a stream of typed tokens
+@depends [diagnostic]
+@workflow First stage of the compilation pipeline. Produces a token list consumed by the parser. All subsequent stages depend on correct tokenization.
+@invariants
+  Token list always starts with a sentinel TkEof at index 0 (from new_lexer initialization) and ends with a TkEof appended by tokenize.
+  Newline tokens are only inserted outside parentheses and brackets (not braces), and only after tokens that terminate statements.
+  The lexer is purely functional — all state transitions produce a new Lexer struct rather than mutating in place.
+
+---
+
+@type TokenKind
+@kind sum
+@variants
+  TkIdent — Identifier
+  TkIntLit — Integer literal
+  TkFloatLit — Float literal
+  TkStringLit — String literal
+  TkCharLit — Character literal
+  TkBoolTrue — true keyword
+  TkBoolFalse — false keyword
+  TkRawStringLit — Raw string r"..."
+  TkTripleStringLit — Triple-quoted string
+  TkDurationLit — Duration literal
+  TkSizeLit — Size literal
+  TkStringStart — Start of interpolated string
+  TkStringMiddle — Middle segment of interpolated string
+  TkStringEnd — End of interpolated string
+  TkMod — mod keyword
+  TkUse — use keyword
+  TkPub — pub keyword
+  TkFn — fn keyword
+  TkType — type keyword
+  TkEnum — enum keyword
+  TkTrait — trait keyword
+  TkImpl — impl keyword
+  TkStruct — struct keyword
+  TkEntry — entry keyword
+  TkIf — if keyword
+  TkElse — else keyword
+  TkMatch — match keyword
+  TkFor — for keyword
+  TkIn — in keyword
+  TkWhile — while keyword
+  TkLoop — loop keyword
+  TkBreak — break keyword
+  TkContinue — continue keyword
+  TkReturn — return keyword
+  TkMut — mut keyword
+  TkConst — const keyword
+  TkDefer — defer keyword
+  TkWith — with keyword
+  TkCatch — catch keyword
+  TkTest — test keyword
+  TkAssert — assert keyword
+  TkDerives — derives keyword
+  TkWhere — where keyword
+  TkAs — as keyword
+  TkIs — is keyword
+  TkSelf — self keyword
+  TkSelfType — Self keyword
+  TkSpawn — spawn keyword
+  TkScope — scope keyword
+  TkSelect — select keyword
+  TkBench — bench keyword
+  TkBefore — before keyword
+  TkAfter — after keyword
+  TkYield — yield keyword
+  TkMock — mock keyword
+  TkExtern — extern keyword
+  TkPlus — +
+  TkMinus — -
+  TkStar — *
+  TkSlash — /
+  TkPercent — %
+  TkAmpersand — &
+  TkPipe — |
+  TkCaret — ^
+  TkTilde — ~
+  TkBang — !
+  TkLShift — <<
+  TkRShift — >>
+  TkEqEq — ==
+  TkBangEq — !=
+  TkLt — <
+  TkGt — >
+  TkLtEq — <=
+  TkGtEq — >=
+  TkAmpAmp — &&
+  TkPipePipe — ||
+  TkDotDot — ..
+  TkDotDotEq — ..=
+  TkPipeGt — |>
+  TkQuestion — ?
+  TkQuestionDot — ?.
+  TkQuestionQuestion — ??
+  TkArrow — ->
+  TkFatArrow — =>
+  TkLParen — (
+  TkRParen — )
+  TkLBracket — [
+  TkRBracket — ]
+  TkLBrace — {
+  TkRBrace — }
+  TkComma — ,
+  TkColon — :
+  TkDot — .
+  TkDotLBrace — .{
+  TkAt — @
+  TkEq — =
+  TkColonEq — :=
+  TkNewline — Newline (statement terminator)
+  TkEof — End of file
+  TkIllegal — Unrecognized token
+@source_file src/lexer/token.aria
+@source_line 12
+@purpose Discriminates every distinct token the lexer can produce. Variants cover literals, all 44 keywords (including concurrency keywords reserved for future use), operators, punctuation, assignment, and special markers (newline, EOF, illegal).
+@notes TkBoolTrue/TkBoolFalse are keyword variants, not literal variants — `true` and `false` go through lookup_keyword. TkStringStart/TkStringMiddle/TkStringEnd form a triple for string interpolation; a non-interpolated string uses TkStringLit instead. TkDotLBrace is declared but never emitted by the current lexer.
+@antipatterns Do not compare TokenKind values with == directly; the sum type lacks derived equality. Use kind_eq() which compares via token_name strings. [src: token.aria:335]
+
+---
+
+@type Token
+@kind struct
+@fields
+  kind: TokenKind — Token classification
+  text: str — Source text of the token
+  line: i64 — 1-based line number
+  col: i64 — 1-based column number
+  offset: i64 — Byte offset into source
+@source_file src/lexer/token.aria
+@source_line 124
+@purpose Carries a classified token with its source location. The text field holds the literal value for string/char tokens (with escape sequences already resolved), not the raw source text.
+@invariants line >= 1, col >= 1, offset >= 0. For TkStringLit/TkCharLit, text contains the decoded value (e.g., actual newline character, not "\n").
+@notes For TkStringStart/TkStringMiddle/TkStringEnd, text holds the string content between interpolation boundaries with escapes resolved.
+
+---
+
+@type Lexer
+@kind struct
+@fields
+  source: str — Full source text
+  file: str — Source file path
+  pos: i64 — Current byte position
+  line: i64 — Current line number
+  col: i64 — Current column number
+  tokens: [Token] — Accumulated tokens
+  diagnostics: DiagnosticBag — Accumulated diagnostics
+  paren_depth: i64 — Parenthesis nesting depth
+  bracket_depth: i64 — Bracket nesting depth
+  brace_depth: i64 — Brace nesting depth
+  interp_depth: i64 — String interpolation nesting depth
+  interp_brace_depth: i64 — Brace depth within interpolation
+@source_file src/lexer/lexer.aria
+@source_line 49
+@purpose Immutable lexer state threaded through all scanning functions. Each function returns a new Lexer with updated position, tokens, and/or diagnostics rather than mutating in place.
+@invariants
+  tokens always has at least one element (sentinel TkEof at index 0, inserted by new_lexer).
+  paren_depth, bracket_depth, brace_depth >= 0 (guarded by > 0 checks before decrement).
+  interp_depth tracks how many nested string interpolations are active; interp_brace_depth records the brace_depth at the point interpolation began, so the lexer knows which } ends the interpolation vs. a normal block.
+@notes The functional style (returning new structs) is dictated by Aria's immutability-by-default semantics. The `mut lex` binding in tokenize rebinds to successive states.
+
+---
+
+@fn new_token
+@sig (kind: TokenKind, text: str, line: i64, col: i64, offset: i64) -> Token
+@source_file src/lexer/token.aria
+@source_line 132
+@purpose Constructs a Token with all fields. Simple factory function.
+
+---
+
+@fn token_name
+@sig (kind: TokenKind) -> str
+@source_file src/lexer/token.aria
+@source_line 137
+@purpose Maps every TokenKind variant to its display string. Keywords return their lowercase source text (e.g., "fn"), operators return their symbol (e.g., "<="), and special tokens return uppercase names (e.g., "IDENT", "EOF", "ILLEGAL").
+@notes Used pervasively: by kind_eq for equality comparison, by is_keyword for keyword detection, by terminates_statement for newline insertion, and by diagnostic rendering. Exhaustive match over all ~100 variants. [src: token.aria:137-238]
+
+---
+
+@fn lookup_keyword
+@sig (text: str) -> TokenKind
+@source_file src/lexer/token.aria
+@source_line 242
+@purpose Resolves an identifier string to its keyword TokenKind, or TkIdent if it is not a keyword. Called by _scan_ident after consuming an alphanumeric run.
+@post Returns TkIdent for any text that is not one of the 44 reserved keywords or `true`/`false`.
+@notes Implemented as a linear chain of if-return statements. `true` and `false` map to TkBoolTrue/TkBoolFalse respectively. `Self` (capitalized) maps to TkSelfType. [src: token.aria:242-288]
+
+---
+
+@fn is_keyword
+@sig (kind: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 290
+@purpose Determines whether a TokenKind is a keyword by checking if token_name starts with a lowercase letter.
+@notes Returns true for TkBoolTrue ("true") and TkBoolFalse ("false") since those display names start with lowercase. Returns false for TkSelfType because "Self" starts with uppercase. This heuristic works because all operator/punctuation display names start with symbols and all special tokens (IDENT, EOF, etc.) start with uppercase. [src: token.aria:290-302]
+
+---
+
+@fn terminates_statement
+@sig (kind: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 307
+@purpose Determines whether a newline after this token kind should be treated as a statement terminator (TkNewline). This implements Aria's semicolon-free syntax — only newlines after "completing" tokens become statement boundaries.
+@notes Terminating tokens: identifiers, all literal types, true/false, STRING_END, break/continue/return, closing delimiters ), ], }, ?, !, self, Self. Notably, operators and opening delimiters do NOT terminate — allowing multi-line expressions. Uses kind_eq for TkRBrace check since "}" contains an escape sequence that doesn't match via string comparison. [src: token.aria:307-332]
+@antipatterns Adding a new literal or closing-bracket token without updating this function will cause newline insertion failures, leading to parse errors on multi-statement code.
+
+---
+
+@fn kind_eq
+@sig (a: TokenKind, b: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 335
+@purpose Compares two TokenKind values for equality by comparing their token_name strings, since Aria sum types do not have derived == support in the bootstrap compiler.
+@notes This is a workaround for a bootstrap compiler limitation. Once the self-hosting compiler supports derived Eq on sum types, this function can be replaced with direct == comparison. [src: token.aria:335-336]
+
+---
+
+@fn new_lexer
+@sig (source: str, file: str) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 69
+@purpose Creates a fresh Lexer state positioned at the start of source, with a sentinel TkEof token at index 0.
+@post tokens has exactly one element (sentinel). pos=0, line=1, col=1. All depth counters are 0.
+@notes The sentinel token at index 0 simplifies _last_token_kind — it can always return a valid TokenKind without checking for an empty list. The sentinel is effectively invisible since the final TkEof appended by tokenize is what consumers use. [src: lexer.aria:63-77]
+
+---
+
+@fn tokenize
+@sig (source: str, file: str) -> Lexer
+@calls [new_lexer, _scan_ident, _scan_number, _scan_string, _scan_char, _scan_raw_string, _scan_triple_string, _scan_comment]
+@source_file src/lexer/lexer.aria
+@source_line 518
+@purpose Main entry point: tokenizes an entire source string into a complete token list. Returns the final Lexer state containing all tokens and any diagnostics.
+@pre source is a complete Aria source file. file is the path used for diagnostic locations.
+@post Returned Lexer.tokens starts with sentinel TkEof, contains all scanned tokens, and ends with a final TkEof. Diagnostics bag contains any lexer errors encountered.
+@effects Allocates tokens list and diagnostics bag. No I/O.
+@workflow Called by the parser (or CLI) as the first compilation step. The returned tokens are extracted via get_tokens and fed to the parser.
+@notes
+  Main loop dispatches on first character with single-character lookahead (_peek_next).
+  Newline insertion: only emits TkNewline when (a) not inside parens/brackets and (b) the previous token terminates a statement. Braces do NOT suppress newlines — only parens and brackets do. [src: lexer.aria:596]
+  String interpolation: when `{` is found inside a string, emits TkStringStart (or TkStringMiddle), increments interp_depth, saves current brace_depth, and returns to the main loop. When `}` matches the saved brace_depth, decrements interp_depth and calls _scan_string_impl(true) to continue the string.
+  Raw string detection: `r` followed by `"` or `#` triggers _scan_raw_string; otherwise falls through to _scan_ident. [src: lexer.aria:607-614]
+  Triple-quoted string detection: checks three consecutive `"` characters. [src: lexer.aria:620-635]
+  Operator disambiguation uses single-character lookahead: `-` vs `->`, `=` vs `==` vs `=>`, `.` vs `..` vs `..=`, etc.
+  Unrecognized characters produce both an E0001 diagnostic and a TkIllegal token. [src: lexer.aria:801-803]
+
+---
+
+@fn get_tokens
+@sig (lex: Lexer) -> [Token]
+@source_file src/lexer/lexer.aria
+@source_line 807
+@purpose Extracts the accumulated token list from a Lexer. Public API for consumers.
+
+---
+
+@fn get_diagnostics
+@sig (lex: Lexer) -> DiagnosticBag
+@source_file src/lexer/lexer.aria
+@source_line 809
+@purpose Extracts the accumulated diagnostics from a Lexer. Public API for consumers.
+
+---
+
+@fn _is_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 15
+@purpose Tests if a single-character string is an ASCII decimal digit (0-9).
+@pre c is a single character (result of charAt). Empty string returns false.
+
+---
+
+@fn _is_hex_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 19
+@purpose Tests if a single-character string is a hexadecimal digit (0-9, a-f, A-F). Used when scanning 0x-prefixed integer literals.
+
+---
+
+@fn _is_octal_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 24
+@purpose Tests if a single-character string is an octal digit (0-7). Used when scanning 0o-prefixed integer literals.
+
+---
+
+@fn _is_binary_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 28
+@purpose Tests if a single-character string is a binary digit (0 or 1). Used when scanning 0b-prefixed integer literals.
+
+---
+
+@fn _is_alpha
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 30
+@purpose Tests if a single-character string is an ASCII letter (a-z, A-Z) or underscore. Underscore is included because identifiers can start with _.
+@notes Implemented as an exhaustive OR chain over all 53 characters (26 lower + 26 upper + underscore). [src: lexer.aria:29-40]
+
+---
+
+@fn _is_alpha_num
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 43
+@purpose Tests if a character is alphanumeric or underscore. Used for identifier continuation characters.
+
+---
+
+@fn _is_whitespace
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 45
+@purpose Tests if a character is horizontal whitespace (space, tab, carriage return). Newlines are NOT whitespace here — they are handled separately for statement termination.
+@notes Deliberate exclusion of \n: newline handling is semantic in Aria (it can produce TkNewline tokens), so it must be processed by the main tokenize loop, not skipped as whitespace. [src: lexer.aria:44]
+
+---
+
+@fn _peek
+@sig (lex: Lexer) -> str
+@source_file src/lexer/lexer.aria
+@source_line 85
+@purpose Returns the character at the current position without advancing. Returns empty string at end of input.
+@post Returns a single-character string, or "" if at end.
+
+---
+
+@fn _peek_next
+@sig (lex: Lexer) -> str
+@source_file src/lexer/lexer.aria
+@source_line 92
+@purpose Returns the character one position ahead of current without advancing. Used for two-character operator lookahead (e.g., distinguishing `=` from `==` and `=>`).
+@post Returns a single-character string, or "" if pos+1 is at or past end.
+
+---
+
+@fn _at_end
+@sig (lex: Lexer) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 99
+@purpose Tests whether the lexer has consumed all source characters.
+
+---
+
+@fn _advance
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 101
+@purpose Moves the lexer forward by one byte, incrementing pos and col. Does NOT handle newlines — use _newline for \n characters.
+@post pos incremented by 1, col incremented by 1. All other state preserved.
+@antipatterns Do not call _advance on a \n character; it will increment col instead of resetting it. Use _newline which resets col to 1 and increments line. [src: lexer.aria:202-216]
+
+---
+
+@fn _add_token
+@sig (lex: Lexer, kind: TokenKind, text: str, start_line: i64, start_col: i64, start_offset: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 120
+@purpose Appends a token to the Lexer's token list. Takes the start position (captured before scanning began) so the token's location points to where it begins in source, not where scanning ended.
+@post tokens list grows by one element. All other state preserved.
+
+---
+
+@fn _add_error
+@sig (lex: Lexer, code: str, message: str) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 140
+@purpose Records a lexer error diagnostic at the current position with a span of length 1. Uses diagnostic module's new_span and bag_add_error.
+@effects Adds one error to diagnostics bag. Does not halt scanning — the lexer continues to produce tokens after errors.
+@notes Error codes used: E0001 (unexpected character), E0002 (unterminated string/raw string literal). [src: lexer.aria:801, 425, 461, 498]
+
+---
+
+@fn _in_delimiters
+@sig (lex: Lexer) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 158
+@purpose Tests whether the lexer is inside parentheses or brackets (but NOT braces). When true, newlines are suppressed — they are not converted to TkNewline tokens.
+@notes Braces are intentionally excluded. In Aria, `{ }` blocks need newlines for statement separation, but `( )` and `[ ]` allow multi-line expressions without statement breaks. [src: lexer.aria:151-152]
+
+---
+
+@fn _set_depth
+@sig (lex: Lexer, paren: i64, bracket: i64, brace: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 161
+@purpose Returns a new Lexer with updated delimiter depth counters. Used when opening/closing parens, brackets, or braces.
+
+---
+
+@fn _set_interp_brace
+@sig (lex: Lexer, bd: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 172
+@purpose Returns a new Lexer with updated interp_brace_depth. Called when entering string interpolation to record the current brace_depth so the matching `}` can be identified.
+
+---
+
+@fn _set_interp
+@sig (lex: Lexer, depth: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 186
+@purpose Returns a new Lexer with updated interp_depth. Incremented when `{` is encountered inside a string, decremented when the matching `}` is found.
+
+---
+
+@fn _newline
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 200
+@purpose Advances past a newline character: increments pos by 1, increments line by 1, resets col to 1.
+@pre Current character at pos is \n.
+@post pos += 1, line += 1, col = 1. Token list and other state unchanged.
+
+---
+
+@fn _last_token_kind
+@sig (lex: Lexer) -> TokenKind
+@source_file src/lexer/lexer.aria
+@source_line 215
+@purpose Returns the kind of the most recently added token, or TkEof if only the sentinel exists. Used by newline insertion logic to determine whether the previous token terminates a statement.
+@notes The sentinel TkEof at index 0 means this function never fails on an empty-looking list — tokens always has length >= 1. [src: lexer.aria:220-225]
+
+---
+
+@fn _scan_ident
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 225
+@purpose Scans an identifier or keyword. Consumes alphanumeric characters (including underscore), then calls lookup_keyword to determine if the text is a reserved word.
+@pre Current character is alphabetic or underscore (_is_alpha).
+@post One token added: either a keyword token or TkIdent.
+
+---
+
+@fn _scan_number
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 237
+@purpose Scans a numeric literal: decimal integers, hex (0x), octal (0o), binary (0b), floats (with optional exponent), duration suffixes (ns, us, ms, s, m, h), and size suffixes (b, kb, mb, gb). Underscores are allowed as digit separators in all bases.
+@pre Current character is a digit.
+@post One token added: TkIntLit, TkFloatLit, TkDurationLit, or TkSizeLit.
+@notes
+  Float detection: requires a digit after the dot to distinguish `42.0` (float) from `42..` (int followed by range operator). [src: lexer.aria:290-292]
+  Duration suffix `m` alone means minutes; `ms` means milliseconds. The code checks _peek_next to disambiguate. [src: lexer.aria:334-341]
+  Size suffix `b` alone means bytes; requires that the next character is not alphanumeric to avoid consuming the `b` in an identifier like `0bad`. [src: lexer.aria:364-371]
+  Duration and size suffixes are only checked for integer literals (is_float == false). [src: lexer.aria:312]
+
+---
+
+@fn _scan_char
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 350
+@purpose Scans a character literal ('x' or '\n' etc.). Resolves escape sequences to their actual character values.
+@pre Current character is a single quote '.
+@post One TkCharLit token added. The text field contains the decoded character value, not the raw source.
+@notes Supported escapes: \n, \t, \r, \\, \', \0. Unrecognized escapes pass through the escaped character verbatim. Does not produce an error diagnostic for missing closing quote — just stops scanning. [src: lexer.aria:383-399]
+
+---
+
+@fn _scan_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 367
+@purpose Entry point for scanning a regular (non-raw, non-triple) string literal. Delegates to _scan_string_impl with is_continuation=false.
+@pre Current character is a double quote ".
+
+---
+
+@fn _scan_string_impl
+@sig (lex: Lexer, is_continuation: bool) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 371
+@purpose Core string scanner that handles both initial strings and continuation after interpolation expressions. Resolves escape sequences and detects interpolation boundaries.
+@pre If is_continuation is false, current character is ". If true, current character is the first character after the closing } of an interpolation expression.
+@post Adds one of: TkStringLit (complete non-interpolated string), TkStringStart (string before first interpolation), TkStringMiddle (string between interpolations), or TkStringEnd (string after last interpolation).
+@errors E0002 "unterminated string literal" — if end of input or newline is reached before closing ".
+@notes
+  Escape sequences: \n, \r, \t, \\, \", \0, \{, \}. The \{ and \} escapes prevent interpolation. [src: lexer.aria:440-443]
+  Interpolation: when an unescaped { is found, the function emits a TkStringStart or TkStringMiddle, increments interp_depth, saves the current brace_depth to interp_brace_depth, and returns immediately. The main tokenize loop then scans the interpolation expression normally until the matching } is found. [src: lexer.aria:448-459]
+  Newlines inside strings are not allowed (produces E0002). Use triple-quoted strings for multi-line content. [src: lexer.aria:460-462]
+
+---
+
+@fn _scan_raw_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 441
+@purpose Scans a raw string literal (r"..." or r#"..."# with arbitrary hash counts). No escape processing — all characters are literal.
+@pre Current character is 'r', next is '"' or '#'.
+@post One TkRawStringLit token added. Text contains the raw content without delimiters.
+@errors E0002 "expected '\"' after r-string prefix" — if no opening quote found after r and optional hashes.
+@notes The closing delimiter must be " followed by exactly the same number of # characters as the opening. The scanner uses a lookahead loop to verify hash count matches before accepting the close. [src: lexer.aria:506-521]
+
+---
+
+@fn _scan_triple_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 477
+@purpose Scans a triple-quoted string literal ("""..."""). Skips an optional newline immediately after the opening delimiter. Handles embedded newlines.
+@pre Current character is the first " of a """ sequence.
+@post One TkTripleStringLit token added. Text contains content with newlines preserved.
+@notes Comment in source mentions auto-dedentation but it is not implemented — the token text contains the raw indented content. A leading newline after """ is stripped. [src: lexer.aria:571-573]
+
+---
+
+@fn _scan_comment
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 518
+@purpose Skips a line comment (// to end of line). Does not produce any token — comments are discarded.
+@pre Current position is at the first / of a // sequence.
+@post Lexer advanced to the \n (not past it — the main loop handles the newline). No tokens added.
+@notes Only line comments are supported. Aria has no block comments. [src: lexer.aria:578-584]

@@ -1,0 +1,158 @@
+@module main
+@lang aria
+@aid_version 0.2
+@purpose CLI entry point — command parsing and pipeline orchestration
+@depends [lexer, parser, resolver, checker, codegen, diagnostic]
+
+---
+
+@type Command
+@kind sum
+@variants
+  CmdCheck — Type-check without codegen
+  CmdBuild — Compile to executable
+  CmdRun — Build and execute
+  CmdTest — Run test blocks
+  CmdFix — Auto-fix diagnostics
+  CmdExplain — Explain an error code
+  CmdBench — Run bench blocks
+  CmdHelp — Print help text
+  CmdVersion — Print version
+  CmdUnknown — Unrecognized command
+@source_file src/main.aria
+@source_line 16
+
+---
+
+@type Options
+@kind struct
+@fields
+  command: Command — Parsed command
+  files: [str] — Source file paths
+  format: str — Output format (text/json)
+  target: str — Target platform
+  runtime_path: str — Runtime library path
+@source_file src/main.aria
+@source_line 30
+
+---
+
+@const COMPILER_VERSION
+@value_type str
+@value "0.1.0-dev"
+@source_file src/main.aria
+@source_line 158
+
+---
+
+@fn default_options
+@sig () -> Options
+@source_file src/main.aria
+@source_line 38
+
+---
+
+@fn parse_command
+@sig (arg: str) -> Command
+@source_file src/main.aria
+@source_line 49
+
+---
+
+@fn command_to_str
+@sig (cmd: Command) -> str
+@source_file src/main.aria
+@source_line 66
+
+---
+
+@fn parse_args
+@sig (args: [str]) -> Options
+@calls [parse_command]
+@source_file src/main.aria
+@source_line 94
+
+---
+
+@fn print_version
+@sig () -> i64
+@source_file src/main.aria
+@source_line 160
+
+---
+
+@fn print_help
+@sig () -> i64
+@source_file src/main.aria
+@source_line 167
+
+---
+
+@fn expand_files
+@sig (files: [str]) -> [str]
+@source_file src/main.aria
+@source_line 337
+
+---
+
+@fn check_source
+@sig (source: str, file: str) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check]
+@source_file src/main.aria
+@source_line 359
+
+---
+
+@fn run_check
+@sig (raw_files: [str], format: str) -> i64
+@calls [expand_files, check_source, render_text, render_json_bag]
+@source_file src/main.aria
+@source_line 375
+
+---
+
+@fn run_build
+@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
+@calls [expand_files, generate_from_sources]
+@source_file src/main.aria
+@source_line 413
+
+---
+
+@fn run_run
+@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
+@calls [run_build]
+@source_file src/main.aria
+@source_line 467
+
+---
+
+@fn run_test
+@sig (raw_files: [str], format: str, runtime_path: str) -> i64
+@calls [expand_files, generate_tests_from_sources]
+@source_file src/main.aria
+@source_line 500
+
+---
+
+@fn run_explain
+@sig (files: [str]) -> i64
+@calls [describe_code]
+@source_file src/main.aria
+@source_line 532
+
+---
+
+@fn run_fix
+@sig (raw_files: [str], format: str) -> i64
+@calls [expand_files, check_source]
+@source_file src/main.aria
+@source_line 589
+
+---
+
+@fn run_bench
+@sig (raw_files: [str], format: str, runtime_path: str) -> i64
+@calls [expand_files, generate_bench_from_sources]
+@source_file src/main.aria
+@source_line 625

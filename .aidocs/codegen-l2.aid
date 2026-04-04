@@ -1,0 +1,1377 @@
+@module codegen
+@lang aria
+@aid_version 0.2
+@layer 2
+@purpose IR lowering, LLVM IR generation, ARM64 emission, and Mach-O linking
+@depends [lexer, parser, resolver, checker, diagnostic]
+@workflow Source code enters via generate_from_source or generate_from_sources, flows through lex -> parse -> resolve -> check -> lower -> LLVM IR -> clang -> native binary. The LLVM backend is the primary path; ARM64 emitter and Mach-O builder are the dormant native-emission path.
+
+---
+
+@type IrOp
+@kind sum
+@variants
+  OpConst -- Integer constant
+  OpConstStr -- String constant reference
+  OpAdd -- Integer addition
+  OpSub -- Integer subtraction
+  OpMul -- Integer multiplication
+  OpDiv -- Integer division
+  OpMod -- Integer modulo
+  OpNeg -- Integer negation
+  OpEq -- Equality comparison
+  OpNeq -- Inequality comparison
+  OpLt -- Less than
+  OpGt -- Greater than
+  OpLte -- Less than or equal
+  OpGte -- Greater than or equal
+  OpAnd -- Logical AND
+  OpOr -- Logical OR
+  OpNot -- Logical NOT
+  OpBitAnd -- Bitwise AND
+  OpBitOr -- Bitwise OR
+  OpBitXor -- Bitwise XOR
+  OpShl -- Shift left
+  OpShr -- Shift right
+  OpCall -- Direct function call
+  OpCallIndirect -- Indirect function call (closures)
+  OpFnRef -- Function reference (for closures)
+  OpRet -- Return with value
+  OpRetVoid -- Return void
+  OpArg -- Function argument reference
+  OpLocal -- Local variable reference
+  OpStore -- Store to local
+  OpLoad -- Load from local
+  OpFieldGet -- Struct field read
+  OpFieldSet -- Struct field write
+  OpAlloc -- Heap allocation
+  OpArrayNew -- Create new array
+  OpArrayGet -- Array element read
+  OpArraySet -- Array element write
+  OpArrayLen -- Array length
+  OpArrayAppend -- Array append
+  OpStrLen -- String length
+  OpStrConcat -- String concatenation
+  OpStrEq -- String equality
+  OpStrCharAt -- Character at index
+  OpStrSubstring -- Substring extraction
+  OpStrContains -- String contains check
+  OpStrStartsWith -- String starts-with check
+  OpStrEndsWith -- String ends-with check
+  OpStrIndexOf -- String index-of
+  OpStrTrim -- String trim
+  OpStrReplace -- String replace
+  OpStrToLower -- String to lowercase
+  OpStrToUpper -- String to uppercase
+  OpStrSplit -- String split
+  OpIntToStr -- Integer to string conversion
+  OpStrToInt -- String to integer conversion
+  OpMapNew -- Create new map
+  OpMapSet -- Map set key-value
+  OpMapGet -- Map get by key
+  OpMapContains -- Map contains key check
+  OpMapLen -- Map length
+  OpMapKeys -- Map keys
+  OpSetNew -- Create new set
+  OpSetAdd -- Set add element
+  OpSetContains -- Set contains check
+  OpSetLen -- Set length
+  OpSetValues -- Set values
+  OpSetRemove -- Set remove element
+  OpJump -- Unconditional jump
+  OpBranchTrue -- Branch if true
+  OpBranchFalse -- Branch if false
+  OpLabel -- Label definition
+  OpTraitObject -- Create trait object
+  OpVtableCall -- Virtual dispatch call
+  OpArraySlice -- Array slice operation
+  OpNop -- No operation
+@source_file src/codegen/ir.aria
+@source_line 11
+@purpose Flat enum of all IR opcodes. Each instruction in the linear IR carries one of these. The IR is intentionally untyped at the opcode level -- type information lives in IrInst.type_id and IrFunc.temp_types. String operations (OpStr*) and collection operations (OpMap*, OpSet*, OpArray*) lower to runtime function calls in the LLVM backend.
+@invariants Every IrFunc instruction list must end with OpRet or OpRetVoid; the emitter/LLVM gen inserts a fallback if missing.
+@notes OpNop is used as the sentinel instruction in arrays (index 0 is always a sentinel per Aria array convention). OpCallIndirect supports closure dispatch by calling through a function pointer.
+
+---
+
+@type IrInst
+@kind struct
+@fields
+  op: IrOp -- Operation code
+  dest: i64 -- Destination temp register
+  arg1: i64 -- First argument (temp or immediate)
+  arg2: i64 -- Second argument
+  s1: str -- String argument (function names, string constants)
+  type_id: i64 -- Type ID for typed operations
+@source_file src/codegen/ir.aria
+@source_line 168
+@purpose Flat instruction format for the linear IR. All fields are present on every instruction but their meaning varies by opcode: for OpCall, s1 is the target function name and arg1/arg2 carry arguments; for OpConst, arg1 is the integer value; for OpConstStr, arg1 is the string constant index and arg2 is the string length.
+@invariants dest must be a valid temp index within the enclosing IrFunc; arg1/arg2 interpretation is opcode-dependent.
+@notes The fixed-width struct avoids sum type overhead. Unused fields default to 0/"".
+
+---
+
+@type IrFunc
+@kind struct
+@fields
+  name: str -- Function name
+  param_count: i64 -- Number of parameters
+  insts: [IrInst] -- Instruction list
+  return_type: i64 -- Return type ID
+  local_count: i64 -- Number of local variables
+  temp_types: [i64] -- Type IDs for temporaries
+@source_file src/codegen/ir.aria
+@source_line 185
+@purpose Represents one function in the IR module. param_count is the number of register-level parameters (strings count as 2: ptr + len). temp_types tracks per-temp type info used by the LLVM generator for GC root analysis.
+@invariants insts[0] is always a sentinel OpNop instruction. temp_types[0] is always 0 (sentinel). Valid type IDs: 0=unknown, 1=i64, 12=str, 100+=struct type.
+@notes func_inst_count returns insts.len()-1 to account for the sentinel.
+
+---
+
+@type IrModule
+@kind struct
+@fields
+  funcs: [IrFunc] -- All functions
+  string_constants: [str] -- String constant pool
+  entry_func: str -- Entry function name
+  test_count: i64 -- Number of test functions
+  test_names: [str] -- Test function names
+  extern_names: [str] -- External function names
+  extern_param_counts: [i64] -- External function param counts
+  extern_ret_types: [str] -- External function return types
+  extern_libs: [str] -- External library names
+@source_file src/codegen/ir.aria
+@source_line 219
+@purpose Top-level compilation unit. Collects all lowered functions, deduplicated string constants, FFI declarations, and test metadata. Passed to the LLVM generator or ARM64 emitter.
+@invariants All arrays use index-0 sentinels. funcs[0] is a sentinel function. string_constants[0] is "". entry_func must name a function present in funcs (typically "_main").
+@notes extern_* parallel arrays track FFI declarations. test_names stores human-readable test labels for the test runner.
+
+---
+
+@type Lowerer
+@kind struct
+@fields
+  tokens: [Token] -- Token stream
+  pos: i64 -- Current position
+  store: TypeStore -- Type store from checker
+  registry: TypeRegistry -- Type registry from checker
+  treg: TraitRegistry -- Trait registry from checker
+  pool: NodePool -- AST node pool
+  table: SymbolTable -- Symbol table
+  file: str -- Source file path
+  module: IrModule -- Module being built
+  current_func: IrFunc -- Current function being lowered
+  temp_counter: i64 -- Next temp register ID
+  label_counter: i64 -- Next label ID
+  env_names: [str] -- Variable name environment
+  env_slots: [i64] -- Variable slot mapping
+  loop_start: i64 -- Current loop start label
+  loop_end: i64 -- Current loop end label
+  const_names: [str] -- Constant integer names (pre-scanned)
+  const_vals: [i64] -- Constant integer values
+  const_str_names: [str] -- Constant string names (pre-scanned)
+  const_str_vals: [str] -- Constant string values
+  temp_types: [i64] -- Per-temp type tracking (0=unknown, 1=i64, 12=str, 100+=struct)
+  fn_error_type: i64 -- Error type for current fallible function (0=not fallible)
+  defer_count: i64 -- Number of active deferred expressions
+  defer_start_0..7: i64 -- Token start positions for up to 8 deferred expressions
+  defer_end_0..7: i64 -- Token end positions for up to 8 deferred expressions
+@source_file src/codegen/lower.aria
+@source_line 19
+@purpose Mutable state threaded through the multi-pass lowering process. Mirrors the checker's token-walking pattern. env_names/env_slots form a stack-based variable environment mapping names to temp register slots.
+@invariants pos must be within bounds of tokens array. current_func is only valid during function body lowering. loop_start/loop_end are -1 when not inside a loop.
+@notes The Lowerer struct is rebuilt on every mutation (Aria has immutable bindings, so functional update is required). The 11K-line lower.aria file does three passes: (1) _scan_consts collects compile-time constants, (2) _lower_bodies lowers all fn/entry/test blocks, (3) _lower_derives generates trait derive implementations, followed by _lower_mono_pass for generic monomorphization.
+@antipatterns Do not access current_func outside of a begin/finish function pair. Defer slots are fixed at 8 max -- exceeding the limit now emits an error message (previously silently dropped). Field access on unresolved struct types falls back to _field_index_any (first-match across all structs); type-aware resolution via _struct_name_for_type is preferred when the object's type is tracked.
+
+---
+
+@type LT
+@kind struct
+@fields
+  l: Lowerer -- Updated lowerer state
+  temp: i64 -- Result temp register
+@source_file src/codegen/lower.aria
+@source_line 67
+@purpose Return type for lowering expressions. Pairs the updated lowerer state with the temp register holding the expression's result. Equivalent to the checker's CE pattern.
+@notes Every _lower_expr* function returns an LT. The caller must use the returned l (not the original) to maintain state consistency.
+
+---
+
+@type LlvmGen
+@kind struct
+@fields
+  parts: [str] -- LLVM IR text parts
+  label_counter: i64 -- Next label ID
+  last_was_term: bool -- Whether last instruction was a terminator
+@source_file src/codegen/llvm.aria
+@source_line 176
+@purpose Accumulates LLVM IR text for a single function using an array of string parts. Parts are joined via divide-and-conquer _join() to avoid O(n^2) string concatenation.
+@invariants last_was_term tracks whether the previous instruction was a terminator (br, ret, unreachable) to avoid emitting unreachable code after terminators, which LLVM rejects.
+@notes The streaming file writer (_generate_llvm_ir_to_file_target) generates each function's IR independently, joins it, writes to disk, and discards -- avoiding holding the full 22MB+ IR in memory.
+
+---
+
+@type LT_label
+@kind struct
+@fields
+  g: LlvmGen -- Updated generator state
+  id: i64 -- Generated label ID
+@source_file src/codegen/llvm.aria
+@source_line 198
+@purpose Return type for fresh label allocation. Pairs updated LlvmGen state with the new label's numeric ID.
+
+---
+
+@type Emitter
+@kind struct
+@fields
+  code: [i64] -- Machine code words
+  label_offsets: [i64] -- Label to code offset mapping
+  pending_branches: [PendingBranch] -- Unresolved branches
+  pending_calls: [PendingCall] -- Unresolved call targets
+  pending_strings: [PendingString] -- Unresolved string references
+  frame_size: i64 -- Stack frame size
+  temp_count: i64 -- Number of temp registers
+@source_file src/codegen/emit.aria
+@source_line 11
+@purpose ARM64 machine code emitter state. Uses a spill-everything register allocation strategy: every IR temp gets a stack slot, loaded before use and stored after definition. Branch/call/string fixups are deferred and patched after all instructions are emitted.
+@invariants code[0] is sentinel (0). All pending_* arrays use index-0 sentinels. frame_size is always 16-byte aligned.
+@notes This is the dormant native-emission path. The primary compilation path uses LLVM IR + clang.
+
+---
+
+@type PendingBranch
+@kind struct
+@fields
+  code_index: i64 -- Position in code array
+  label_id: i64 -- Target label
+  is_cond: bool -- Whether conditional
+  cond: i64 -- Condition code
+  reg: i64 -- Register for CBZ/CBNZ
+  is_cbz: bool -- CBZ vs CBNZ
+@source_file src/codegen/emit.aria
+@source_line 21
+@purpose Records an unresolved branch instruction that needs its offset patched once the target label's position is known.
+
+---
+
+@type PendingCall
+@kind struct
+@fields
+  code_index: i64 -- Position in code array
+  target_name: str -- Target function name
+@source_file src/codegen/emit.aria
+@source_line 33
+@purpose Records an unresolved BL (branch-with-link) instruction. Patched by the linker/codegen once all function offsets are known.
+
+---
+
+@type PendingString
+@kind struct
+@fields
+  code_index: i64 -- Position in code array
+  string_id: i64 -- String constant ID
+  dest_temp: i64 -- Destination temp
+  str_len: i64 -- String length
+@source_file src/codegen/emit.aria
+@source_line 41
+@purpose Records an unresolved string constant load (ADR instruction placeholder). Patched once the cstring data section's position relative to the code is known.
+
+---
+
+@type RuntimeFunc
+@kind struct
+@fields
+  name: str -- Runtime function name
+  code: [i64] -- ARM64 machine code
+@source_file src/codegen/runtime.aria
+@source_line 14
+@purpose Pre-assembled ARM64 machine code for runtime support functions. Used by the dormant native Mach-O backend. The LLVM backend instead declares these as external symbols resolved by the C runtime library.
+@invariants code[0] is sentinel (0). name must match the symbol expected by the emitter (prefixed with _aria_).
+
+---
+
+@fn generate_from_source
+@sig (source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check, lower, generate_llvm_ir]
+@source_file src/codegen/codegen.aria
+@source_line 19
+@purpose Full single-file compilation pipeline: lex -> parse -> resolve -> typecheck -> lower -> LLVM IR -> clang. Returns diagnostics; an empty bag with no errors indicates success.
+@workflow Entry point for single-file compilation. Each stage bails early on errors.
+@effects Reads source file, writes .ll file, invokes clang via _ariaExec to produce native binary.
+@errors Returns DiagnosticBag with errors from any failed stage (lex, parse, resolve, check, or clang invocation). Clang failure produces error code E9000.
+@pre source must be valid UTF-8. runtime_path must point to the compiled C runtime library.
+@post On success, output_path contains a native executable and output_path.ll contains the LLVM IR.
+
+---
+
+@fn generate_from_module
+@sig (m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 49
+@purpose Generates LLVM IR from an already-lowered IrModule, writes it to a .ll file using streaming (to avoid 22MB+ memory spike), then invokes clang to compile and link against the runtime.
+@effects Writes output_path.ll via generate_llvm_ir_to_file. Executes clang via _ariaExec. Creates native binary at output_path.
+@errors E9000 if clang compilation fails (returns non-zero exit code).
+@notes Uses clang flags: -O1 for optimization, -Wno-override-module to suppress target triple warnings.
+
+---
+
+@fn generate_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@calls [generate_from_source]
+@source_file src/codegen/codegen.aria
+@source_line 121
+@purpose Multi-file compilation pipeline. Lexes each file independently, merges token streams (stripping duplicate mod/use headers), then runs the full pipeline on the merged tokens.
+@workflow Used by the CLI for multi-file builds. Token merging preserves file ordering and strips mod/use declarations from non-first files to produce a single unified token stream.
+@effects Reads all source files via _ariaReadFile. Writes .ll file and native binary.
+@pre files must have at least 2 elements (index 0 is sentinel, actual files start at index 1).
+@antipatterns Files must all declare the same module name. The merge strips mod/use from subsequent files but does not validate module name consistency.
+
+---
+
+@fn check_sources
+@sig (files: [str]) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check]
+@source_file src/codegen/codegen.aria
+@source_line 165
+@purpose Check-only mode: runs lex, parse, resolve, and typecheck without lowering or code generation. Used by the CLI `check` command.
+@effects Reads source files via _ariaReadFile.
+@post Returns diagnostics from the typecheck stage (or earlier if a stage fails).
+
+---
+
+@fn generate_tests_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 194
+@purpose Test compilation pipeline: same as generate_from_sources but uses lower_for_tests instead of lower. This compiles test blocks and generates a _main test runner that calls each test function, prints PASS/FAIL, and exits.
+@effects Reads files, writes .ll and binary.
+@notes Entry blocks are skipped during test lowering to avoid _main conflicts with the generated test runner.
+
+---
+
+@fn generate_bench_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 228
+@purpose Bench compilation pipeline. Currently uses the same lower_for_tests path (bench-specific lowering is not yet differentiated).
+
+---
+
+@fn ir_op_name
+@sig (op: IrOp) -> str
+@source_file src/codegen/ir.aria
+@source_line 88
+@purpose Converts an IrOp variant to its string name. Used extensively in the emitter and LLVM generator for dispatch (matching on string name rather than pattern matching, since the bootstrap codegen has limitations with sum type matching in some contexts).
+
+---
+
+@fn new_inst
+@sig (op: IrOp, dest: i64, arg1: i64, arg2: i64, s1: str, tid: i64) -> IrInst
+@source_file src/codegen/ir.aria
+@source_line 180
+@purpose Constructs an IrInst. Convenience wrapper over struct literal.
+
+---
+
+@fn new_ir_func
+@sig (name: str, param_count: i64, ret_type: i64) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 197
+@purpose Creates a new IrFunc with sentinel instruction at index 0, empty temp_types, and zero locals.
+@post insts contains exactly one sentinel OpNop. temp_types contains one sentinel 0.
+
+---
+
+@fn func_add_inst
+@sig (f: IrFunc, inst: IrInst) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 200
+@purpose Appends an instruction to the function's instruction list. Returns a new IrFunc (functional update).
+
+---
+
+@fn func_set_locals
+@sig (f: IrFunc, count: i64) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 205
+@purpose Sets the local variable count for the function. Used by the lowerer after all temps are allocated.
+
+---
+
+@fn func_set_temp_types
+@sig (f: IrFunc, types: [i64]) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 210
+@purpose Sets the per-temp type tracking array. Used by the lowerer to pass type info to the LLVM generator for GC root analysis.
+
+---
+
+@fn func_inst_count
+@sig (f: IrFunc) -> i64
+@source_file src/codegen/ir.aria
+@source_line 215
+@purpose Returns the number of real instructions (excluding the sentinel at index 0).
+
+---
+
+@fn new_ir_module
+@sig () -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 232
+@purpose Creates an empty IrModule with all sentinel elements in place.
+@post All arrays have exactly one sentinel element at index 0.
+
+---
+
+@fn mod_add_func
+@sig (m: IrModule, f: IrFunc) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 236
+@purpose Appends a function to the module. Returns updated module.
+
+---
+
+@fn mod_add_string
+@sig (m: IrModule, s: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 240
+@purpose Adds a string to the constant pool. Callers should check mod_find_string first to avoid duplicates.
+@antipatterns Does not deduplicate -- caller is responsible for checking mod_find_string before adding.
+
+---
+
+@fn mod_add_extern
+@sig (m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 244
+@purpose Registers an FFI extern function declaration. The LLVM generator emits a `declare` statement for each.
+
+---
+
+@fn mod_set_entry
+@sig (m: IrModule, name: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 249
+@purpose Sets the entry function name (typically "_main"). The LLVM generator uses this to emit the `main` wrapper that calls the entry function.
+
+---
+
+@fn mod_add_test
+@sig (m: IrModule, name: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 253
+@purpose Registers a test function. Increments test_count and appends the test name. Used by the test runner generator.
+
+---
+
+@fn mod_find_string
+@sig (m: IrModule, s: str) -> i64
+@source_file src/codegen/ir.aria
+@source_line 257
+@purpose Linear search for a string in the constant pool. Returns the 1-based index, or 0 if not found.
+@notes O(n) scan; acceptable because the constant pool is typically small relative to instruction count.
+
+---
+
+@fn mod_func_count
+@sig (m: IrModule) -> i64
+@source_file src/codegen/ir.aria
+@source_line 266
+@purpose Returns number of real functions (excluding sentinel).
+
+---
+
+@fn mod_find_func
+@sig (m: IrModule, name: str) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 268
+@purpose Linear search for a function by name. Returns sentinel function (empty name) if not found.
+
+---
+
+@fn _lower_derive_display
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11036
+@purpose Generates TypeName_display(self) -> str. Like Debug but without type prefix or field names — outputs comma-separated field values only.
+
+---
+
+@fn _lower_derive_default
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11080
+@purpose Generates TypeName_default() -> TypeName. Zero-initializes all fields: 0 for integers, "" for strings.
+
+---
+
+@fn _lower_derive_ord
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11113
+@purpose Generates TypeName_cmp(self, other) -> i64. Field-by-field lexicographic comparison returning -1, 0, or 1. Strings compared by equality then length.
+
+---
+
+@fn _lower_derive_hash
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11204
+@purpose Generates TypeName_hash(self) -> i64. Polynomial hash: hash = hash * 31 + field_value for each field. Strings hashed by length.
+
+---
+
+@fn lower
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
+@source_file src/codegen/lower.aria
+@source_line 11247
+@purpose Main lowering entry point. Runs four passes: (1) _scan_consts pre-scans compile-time constants, (2) _lower_bodies lowers all fn/entry/test bodies to IR, (3) _lower_derives generates trait derive implementations (Eq, Clone, Debug, Display, Default, Ord, Hash), (4) _lower_mono_pass generates monomorphized copies of generic functions.
+@workflow Called after check() succeeds. Produces an IrModule ready for LLVM IR generation.
+@pre All inputs must come from a successful check pass. tokens/pool/store/registry/treg/table must be consistent.
+@post Returns an IrModule with entry_func set, all functions lowered, and string constants populated.
+@notes Match lowering uses a peek-ahead to detect data sum types; named patterns (binding @ Variant) are handled by skipping past the binding and @ token to find the actual variant name. [src: lower.aria:9876-9895] Optional chaining (?.) resolves the inner struct type from the Optional's type_id for correct field index lookup. [src: lower.aria:4497-4504]
+
+---
+
+@fn lower_for_tests
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
+@source_file src/codegen/lower.aria
+@source_line 11258
+@purpose Test-mode lowering. Same as lower() but skips entry blocks (to avoid _main conflicts) and appends a generated test runner _main that calls each _test_N function, prints "PASS: <name>" for each, prints "all tests passed", and exits 0.
+@post entry_func is set to "_main" (the generated test runner). Each test block becomes _test_0, _test_1, etc.
+@notes The test runner calls _before/_after fixture functions (if they exist in the module) around each test invocation. Fixtures are lowered from `before { }` / `after { }` blocks in the source.
+
+---
+
+@fn generate_llvm_ir
+@sig (m: IrModule) -> str
+@source_file src/codegen/llvm.aria
+@source_line 265
+@purpose Generates complete LLVM IR text for the module as a single string. Delegates to _generate_llvm_ir_target with target "native" (arm64-apple-macosx14.0.0).
+@notes For large programs this can produce 22MB+ strings. Prefer generate_llvm_ir_to_file for production use.
+@antipatterns Holding the full IR string in memory can cause OOM for large programs. Use generate_llvm_ir_to_file instead.
+
+---
+
+@fn generate_llvm_ir_to_file
+@sig (m: IrModule, path: str) -> unit
+@source_file src/codegen/llvm.aria
+@source_line 272
+@purpose Streaming LLVM IR writer. Generates each function's IR independently, joins it via divide-and-conquer _join(), writes to disk via _ariaWriteFile, and discards. Avoids holding the entire IR in memory.
+@effects Writes LLVM IR text to the file at path.
+@notes Uses chunked string joining: groups of 64 parts joined first, then chunks joined. This gives O(L * N/64) instead of O(L * N) string concatenation.
+@workflow Called by generate_from_module as the primary code generation path.
+
+---
+
+@type Emitter
+@note_group ARM64 Emitter (dormant native path)
+
+@fn new_emitter
+@sig () -> Emitter
+@source_file src/codegen/emit.aria
+@source_line 51
+@purpose Creates an empty Emitter with all sentinel arrays in place.
+
+---
+
+@fn emit_function
+@sig (f: IrFunc) -> Emitter
+@calls [new_emitter]
+@source_file src/codegen/emit.aria
+@source_line 133
+@purpose Emits ARM64 machine code for a single IR function. Calculates frame size (16-byte aligned), emits prologue (STP x29/x30, set frame pointer, allocate stack), stores incoming arguments (x0-x7) to stack slots, emits each IR instruction via _emit_ir_inst, appends epilogue if needed, and resolves branch fixups. [src: emit.aria:133]
+@pre f must have valid instruction list with sentinel at index 0.
+@post Returns Emitter with complete machine code, resolved branches, and pending calls/strings for linker fixup.
+@notes Uses spill-everything register allocation: every temp is in a stack slot. Loads into x0/x1 before operations, stores result back. Simple but correct. ARM64 ABI: first 8 args in x0-x7.
+
+---
+
+@fn emitter_code
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 767
+@purpose Returns the raw machine code word array.
+
+---
+
+@fn emitter_code_size
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 769
+@purpose Returns number of 32-bit instruction words emitted.
+
+---
+
+@fn emitter_call_count
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 771
+@purpose Returns number of unresolved call sites (pending BL instructions needing offset patching).
+
+---
+
+@fn emitter_call_offsets
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 773
+@purpose Returns code-array indices of all pending BL instructions.
+
+---
+
+@fn emitter_string_count
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 783
+@purpose Returns number of unresolved string constant references.
+
+---
+
+@fn emitter_string_code_indices
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 785
+@purpose Returns code-array indices of all pending string load instructions (ADR placeholders).
+
+---
+
+@fn emitter_string_ids
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 795
+@purpose Returns string constant pool indices for all pending string references.
+
+---
+
+@fn emitter_call_targets
+@sig (e: Emitter) -> [str]
+@source_file src/codegen/emit.aria
+@source_line 805
+@purpose Returns target function names for all pending call sites.
+
+---
+
+# ARM64 Instruction Encoding
+# All enc_* functions are pure: parameters -> 32-bit instruction word (as i64).
+# They use _encode_field(val, width, shift) to place bit fields.
+# Reference: ARM Architecture Reference Manual for A-profile architecture.
+# All operate on 64-bit (X) registers (sf=1) unless noted.
+# [src: arm64.aria]
+
+# --- Move Wide ---
+
+@fn enc_movz
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 84
+@purpose MOVZ: Rd = imm16 << (hw * 16), zeroing other bits. First step in loading large immediates. hw selects which 16-bit halfword (0-3).
+@notes Encoding: sf=1 opc=10 100101 hw imm16 Rd. Base = 0xD2800000.
+
+---
+
+@fn enc_movk
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 91
+@purpose MOVK: Rd[hw*16 +: 16] = imm16, keeping other bits unchanged. Used after MOVZ to set additional 16-bit chunks.
+@notes Encoding: sf=1 opc=11 100101 hw imm16 Rd. Base = 0xF2800000.
+
+---
+
+@fn enc_movn
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 97
+@purpose MOVN: Rd = ~(imm16 << (hw * 16)). Used for small negative constants (e.g., -1 = MOVN x0, #0, 0).
+@notes Encoding: sf=1 opc=00 100101. Base = 0x92800000. Used in runtime for ~15 (alignment mask) and -1 (fd for mmap).
+
+---
+
+# --- Arithmetic Immediate ---
+
+@fn enc_add_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 104
+@purpose ADD immediate: Rd = Rn + imm12. 12-bit unsigned immediate.
+@pre imm12 must fit in 12 bits (0..4095).
+@notes Base = 0x91000000.
+
+---
+
+@fn enc_sub_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 111
+@purpose SUB immediate: Rd = Rn - imm12.
+@pre imm12 must fit in 12 bits.
+@notes Base = 0xD1000000. Used for stack frame allocation (SUB SP, SP, #framesize).
+
+---
+
+@fn enc_cmp_imm
+@sig (rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 117
+@purpose CMP immediate (alias of SUBS XZR, Rn, imm12): sets condition flags without storing result.
+@notes Destination is hardcoded to XZR. Base = 0xF1000000.
+
+---
+
+# --- Arithmetic Register ---
+
+@fn enc_add_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 128
+@purpose ADD register: Rd = Rn + Rm. No shift applied.
+@notes Base = 0x8B000000.
+
+---
+
+@fn enc_sub_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 134
+@purpose SUB register: Rd = Rn - Rm.
+@notes Base = 0xCB000000.
+
+---
+
+@fn enc_cmp_reg
+@sig (rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 140
+@purpose CMP register (alias of SUBS XZR, Rn, Rm): sets flags.
+@notes Base = 0xEB000000. Destination hardcoded to XZR.
+
+---
+
+@fn enc_mul
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 146
+@purpose MUL: Rd = Rn * Rm. Alias of MADD Rd, Rn, Rm, XZR.
+@notes Base = 0x9B007C00 (Ra=XZR baked in).
+
+---
+
+@fn enc_sdiv
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 152
+@purpose SDIV: Rd = Rn / Rm (signed division).
+@notes Base = 0x9AC00C00. Division by zero produces 0 on ARM64 (no trap).
+
+---
+
+@fn enc_mov_reg
+@sig (rd: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 158
+@purpose MOV register: Rd = Rm. Alias of ORR Rd, XZR, Rm.
+@notes Base = 0xAA0003E0.
+
+---
+
+# --- Bitwise Register ---
+
+@fn enc_and_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 164
+@purpose AND register: Rd = Rn & Rm. Base = 0x8A000000.
+
+---
+
+@fn enc_orr_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 170
+@purpose ORR register: Rd = Rn | Rm. Base = 0xAA000000.
+
+---
+
+@fn enc_eor_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 176
+@purpose EOR register: Rd = Rn ^ Rm (exclusive OR). Base = 0xCA000000.
+
+---
+
+@fn enc_lsl_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 182
+@purpose LSL register (alias of LSLV): Rd = Rn << Rm. Base = 0x9AC02000.
+
+---
+
+@fn enc_asr_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 188
+@purpose ASR register (alias of ASRV): Rd = Rn >> Rm (arithmetic/signed). Base = 0x9AC02800.
+@notes Arithmetic shift preserves sign bit. Used for Aria's >> operator (always signed).
+
+---
+
+@fn enc_neg
+@sig (rd: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 194
+@purpose NEG: Rd = -Rm. Alias of SUB Rd, XZR, Rm. Implemented by delegating to enc_sub_reg.
+
+---
+
+# --- Conditional ---
+
+@fn enc_cset
+@sig (rd: i64, cond: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 201
+@purpose CSET: Rd = (cond) ? 1 : 0. Alias of CSINC Rd, XZR, XZR, inverted_cond. Used after CMP to materialize comparison results.
+@notes The condition is inverted per ARM64 encoding: CSINC selects XZR+1=1 when inverted condition is false (i.e., original condition is true). Base = 0x9A9F07E0.
+
+---
+
+# --- Branch ---
+
+@fn enc_b
+@sig (offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 213
+@purpose B: unconditional branch. offset is in instructions (not bytes). 26-bit signed offset.
+@pre offset must fit in signed 26-bit range.
+@notes Base = 0x14000000.
+
+---
+
+@fn enc_bl
+@sig (offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 220
+@purpose BL: branch with link (function call). Saves return address in X30. offset in instructions.
+@notes Base = 0x94000000.
+
+---
+
+@fn enc_b_cond
+@sig (cond: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 227
+@purpose B.cond: conditional branch. 19-bit signed offset in instructions.
+@notes Base = 0x54000000. cond is a 4-bit condition code (COND_EQ, COND_NE, etc.).
+
+---
+
+@fn enc_cbz
+@sig (rt: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 234
+@purpose CBZ: branch if register is zero. 19-bit offset. Combines compare-and-branch in one instruction.
+@notes Base = 0xB4000000. Used in runtime loops for zero-length checks.
+
+---
+
+@fn enc_cbnz
+@sig (rt: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 240
+@purpose CBNZ: branch if register is not zero. Base = 0xB5000000.
+
+---
+
+@fn enc_ret
+@sig () -> i64
+@source_file src/codegen/arm64.aria
+@source_line 246
+@purpose RET: return to caller (branch to X30). Fixed encoding 0xD65F03C0.
+
+---
+
+@fn enc_br
+@sig (rn: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 249
+@purpose BR: unconditional branch to register (indirect jump). Base = 0xD61F0000.
+
+---
+
+@fn enc_blr
+@sig (rn: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 255
+@purpose BLR: branch with link to register (indirect call). Saves return address in X30. Used for closure dispatch.
+@notes Base = 0xD63F0000.
+
+---
+
+# --- Load/Store ---
+
+@fn enc_ldr_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 266
+@purpose LDR (unsigned offset): Rt = [Rn + imm12*8]. The immediate is scaled by 8 (64-bit loads).
+@notes Base = 0xF9400000. Used extensively for loading temps from stack slots.
+
+---
+
+@fn enc_str_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 273
+@purpose STR (unsigned offset): [Rn + imm12*8] = Rt. Scaled by 8.
+@notes Base = 0xF9000000. Used for storing temps to stack slots.
+
+---
+
+@fn enc_stp_pre
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 281
+@purpose STP pre-index: store pair and update base. Used in function prologues: STP x29, x30, [sp, #-16]!
+@notes imm7 is in units of 8 bytes (signed). -2 means -16 bytes. Base = 0xA9800000.
+
+---
+
+@fn enc_ldp_post
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 289
+@purpose LDP post-index: load pair then update base. Used in function epilogues: LDP x29, x30, [sp], #16
+@notes imm7 in units of 8 bytes. 2 means +16 bytes. Base = 0xA8C00000.
+
+---
+
+@fn enc_stp_offset
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 296
+@purpose STP signed offset: store pair without updating base register.
+@notes Base = 0xA9000000.
+
+---
+
+@fn enc_ldp_offset
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 303
+@purpose LDP signed offset: load pair without updating base register.
+@notes Base = 0xA9400000.
+
+---
+
+@fn enc_ldrb_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 309
+@purpose LDRB (unsigned offset): load byte, zero-extend to 64 bits. Unscaled (byte-addressed).
+@notes Base = 0x39400000. Used in memcpy and string operations.
+
+---
+
+@fn enc_strb_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 315
+@purpose STRB (unsigned offset): store low byte of register.
+@notes Base = 0x39000000.
+
+---
+
+# --- PC-Relative Addressing ---
+
+@fn enc_adrp
+@sig (rd: i64, imm21: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 326
+@purpose ADRP: Rd = PC page base + imm21 * 4096. Loads a page-aligned address. 21-bit immediate split into immhi (19 bits) and immlo (2 bits).
+@notes Base = 0x90000000. Typically paired with ADD or LDR to form a full address.
+
+---
+
+@fn enc_adr
+@sig (rd: i64, imm21: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 335
+@purpose ADR: Rd = PC + imm21. Byte-granularity PC-relative addressing. Used for string constant references.
+@notes Base = 0x10000000. Same immhi/immlo split as ADRP but without page alignment.
+
+---
+
+# --- System ---
+
+@fn enc_nop
+@sig () -> i64
+@source_file src/codegen/arm64.aria
+@source_line 347
+@purpose NOP: no operation. Fixed encoding 0xD503201F. Used as placeholder for deferred fixups.
+
+---
+
+@fn enc_svc
+@sig (imm16: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 350
+@purpose SVC: supervisor call (system call). On macOS ARM64, imm16=0x80 triggers a syscall with x16 as the syscall number.
+@notes Base = 0xD4000001. All runtime functions use SVC 0x80 for macOS syscalls.
+
+---
+
+@fn enc_brk
+@sig (imm16: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 356
+@purpose BRK: breakpoint exception. Used for debug traps.
+@notes Base = 0xD4200000.
+
+---
+
+# --- Post-Index Load/Store ---
+
+@fn enc_ldrb_post
+@sig (rt: i64, rn: i64, imm9: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 367
+@purpose LDRB post-index: Rt = [Rn]; Rn += imm9. Load byte then increment pointer. Used in memcpy loops.
+@notes Base = 0x38400400.
+
+---
+
+@fn enc_strb_post
+@sig (rt: i64, rn: i64, imm9: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 374
+@purpose STRB post-index: [Rn] = Rt low byte; Rn += imm9. Store byte then increment.
+@notes Base = 0x38000400.
+
+---
+
+# --- Flag-Setting Arithmetic ---
+
+@fn enc_subs_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 381
+@purpose SUBS immediate: Rd = Rn - imm12, setting condition flags. Used in loop counters (decrement and branch on flags).
+@notes Base = 0xF1000000.
+
+---
+
+@fn enc_subs_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 387
+@purpose SUBS register: Rd = Rn - Rm, setting condition flags.
+@notes Base = 0xEB000000.
+
+---
+
+# --- Register-Offset Load/Store ---
+
+@fn enc_ldr_reg
+@sig (rt: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 394
+@purpose LDR register offset: Rt = [Rn + Rm, LSL #3]. Loads 64-bit value with scaled register offset.
+@notes Base = 0xF8607800. LSL #3 (shift=3) is baked into the encoding for 8-byte element access.
+
+---
+
+@fn enc_str_reg
+@sig (rt: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 400
+@purpose STR register offset: [Rn + Rm, LSL #3] = Rt.
+@notes Base = 0xF8207800.
+
+---
+
+# --- Composite Helpers ---
+
+@fn enc_load_imm64
+@sig (rd: i64, val: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 410
+@purpose Loads an arbitrary 64-bit immediate into a register using the minimum number of instructions: MOVZ for values 0..65535, MOVN for values -1..-65536, or MOVZ + up to 3 MOVK for larger values.
+@post Returns 1-4 instruction words (plus sentinel at index 0).
+@notes Optimizes common cases: small positives need 1 instruction, small negatives need 1 instruction. Worst case (all four 16-bit chunks non-zero) needs 4 instructions.
+
+---
+
+@fn enc_prologue
+@sig (frame_size: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 439
+@purpose Generates function prologue: STP x29, x30 (save frame pointer and return address), MOV x29, sp (set frame pointer), SUB sp, sp, #frame_size (allocate stack frame).
+@pre frame_size must be a multiple of 16 (or 0 for leaf functions with no locals).
+@post Returns 2-3 instruction words. Stack is aligned to 16 bytes.
+
+---
+
+@fn enc_epilogue
+@sig (frame_size: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 453
+@purpose Generates function epilogue: ADD sp, sp, #frame_size (deallocate), LDP x29, x30 (restore), RET.
+@post Returns 2-3 instruction words.
+
+---
+
+# --- Mach-O Builder ---
+
+@fn build_macho
+@sig (code_words: [i64], cstring_data: [i64], entry_offset: i64) -> [i64]
+@source_file src/codegen/macho.aria
+@source_line 542
+@purpose Builds a complete Mach-O 64-bit ARM64 executable as a byte array. Includes all required load commands (13 total), __PAGEZERO, __TEXT segment with __text section, __LINKEDIT with chained fixups and exports trie, and an embedded ad-hoc SHA-256 code signature. No external tools needed. [src: macho.aria:542]
+@pre code_words[0] is sentinel. cstring_data[0] is sentinel. entry_offset is in instruction words (multiplied by 4 for byte offset).
+@post Returns byte array (with sentinel at index 0) ready to be written to disk as an executable.
+@effects Pure computation -- no I/O.
+@invariants MH flags must be MH_PIE | MH_TWOLEVEL | MH_DYLDLINK | MH_NOUNDEFS (0x200085). __TEXT segment is page-aligned. LINKEDIT has no gaps. Code signature covers all pages up to code_limit.
+@notes Load commands: __PAGEZERO, __TEXT, __LINKEDIT, LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_SYMTAB (empty), LC_DYSYMTAB, LC_LOAD_DYLINKER (/usr/lib/dyld), LC_UUID (deterministic), LC_BUILD_VERSION (macOS 26.0), LC_MAIN, LC_LOAD_DYLIB (libSystem.B.dylib), LC_CODE_SIGNATURE. Targets macOS 26 ARM64 specifically.
+@antipatterns Do not omit any of the 13 load commands -- the kernel silently SIGKILLs binaries missing required ones. LC_UUID must be present or dyld crashes.
+
+---
+
+@fn buf_size
+@sig (buf: [i64]) -> i64
+@source_file src/codegen/macho.aria
+@source_line 803
+@purpose Returns logical size of a byte buffer (array length minus sentinel).
+
+---
+
+# --- Runtime Function Builders ---
+# These build pre-assembled ARM64 machine code for the dormant native Mach-O backend.
+# They use macOS ARM64 syscall convention: x16 = syscall number, x0-x5 = args, SVC 0x80.
+# Syscall numbers: exit=1, write=4, read=3, open=5, close=6, chmod=15, mmap=197, fstat64=339.
+
+@fn build_exit_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 25
+@purpose Builds _aria_exit(code): terminates process via exit syscall (x16=1). Leaf function, never returns.
+@notes 2 instructions: MOVZ x16, #1; SVC 0x80. No prologue/epilogue needed since it never returns.
+
+---
+
+@fn build_write_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 35
+@purpose Builds _aria_write(fd, ptr, len): write syscall (x16=4). Leaf function -- no prologue needed. Returns bytes written in x0.
+@notes 3 instructions: MOVZ x16, #4; SVC 0x80; RET.
+
+---
+
+@fn build_println_str_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 48
+@purpose Builds _aria_println_str(ptr, len): writes string to stdout followed by a newline. Non-leaf (uses stack for locals). Performs two write syscalls: one for the string, one for the newline character stored on the stack.
+@notes 20 instructions. Allocates 32 bytes of stack. Writes to fd=1 (stdout).
+
+---
+
+@fn build_alloc_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 95
+@purpose Builds _aria_alloc(size): heap allocation via mmap syscall (x16=197). Each call independently mmaps a page-aligned region with PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON.
+@notes Simplified per-call mmap strategy (no bump allocator). Size is aligned to 16 bytes before mmap. Returns pointer in x0.
+@antipatterns Every allocation gets its own mmap -- wasteful for small allocations. Acceptable for the native backend which is dormant.
+
+---
+
+@fn build_memcpy_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 130
+@purpose Builds _aria_memcpy(dst, src, len): byte-by-byte copy loop using LDRB/STRB post-index. Leaf function.
+@notes 6 instructions. Handles zero-length with CBZ skip. Not optimized (byte-at-a-time), suitable for small copies.
+
+---
+
+@fn build_read_file_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 148
+@purpose Builds _aria_read_file(path_ptr, path_len) -> (ptr, len): reads entire file into memory. Copies path to stack and null-terminates it, then uses open (syscall 5), fstat64 (syscall 339) to get file size, mmap (syscall 197) to allocate buffer, read (syscall 3), and close (syscall 6). Returns fat pointer (ptr in x0, len in x1).
+@notes ~50 instructions. Allocates 256 bytes of stack for locals + stat buffer. File size extracted from stat_buf offset 96. Includes inline byte-copy for path (cannot call _aria_memcpy since runtime functions cannot reference each other).
+
+---
+
+@fn build_write_binary_file_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 249
+@purpose Builds _aria_write_binary_file(path_ptr, path_len, data_ptr, data_len): writes a byte array to a file. data_ptr is an Aria [i64] array where each element holds one byte value. Converts [i64] to byte buffer via mmap + loop, then writes. Uses open (O_WRONLY|O_CREAT|O_TRUNC, 0755), write, close, and chmod (syscall 15).
+@notes ~60 instructions. Skips sentinel element at array index 0. Sets file permissions to 0755 (executable).
+
+---
+
+@fn build_int_to_str_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 355
+@purpose Builds _aria_int_to_str(val) -> (ptr, len): converts i64 to decimal string. Handles negative numbers (prepends '-'). Extracts digits via repeated division by 10 into stack buffer (reverse order), then copies to mmap-allocated buffer. Returns fat pointer.
+@notes ~50 instructions. Handles zero as special case. Stack buffer at [sp+24..sp+47] holds up to 24 digits. Digit extraction: SDIV by 10, MUL back, subtract for remainder.
+
+---
+
+@fn build_args_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 450
+@purpose Builds _aria_args() -> array_ptr: returns the command-line args array. Simply returns X19, which is callee-saved and set by the entry trampoline via _aria_args_init.
+@notes 2 instructions: MOV x0, x19; RET. Leaf function.
+
+---
+
+@fn build_args_init_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 463
+@purpose Builds _aria_args_init(argc, argv) -> array_ptr: converts C argc/argv into an Aria [str] array. Allocates array header (24 bytes: length, capacity, data_ptr) + data ((argc+1) * 16 bytes for sentinel + elements). Each string element is a fat pointer (ptr, len). Computes string length via inline strlen loop (scan for null byte).
+@notes ~58 instructions. Array layout: header at base, data at base+24. data[0] is sentinel (0,0). data[1..argc] point directly to argv strings (no copy). String pointers are borrowed from the process argv (valid for program lifetime).
+
+---
+
+@fn build_runtime_funcs
+@sig () -> [RuntimeFunc]
+@calls [build_exit_runtime, build_write_runtime, build_println_str_runtime, build_alloc_runtime, build_memcpy_runtime, build_read_file_runtime, build_write_binary_file_runtime, build_int_to_str_runtime, build_args_runtime, build_args_init_runtime]
+@source_file src/codegen/runtime.aria
+@source_line 563
+@purpose Collects all runtime function builders into a single array. Used by the native Mach-O backend to embed runtime code.
+@post Returns array with sentinel at index 0, followed by 10 RuntimeFunc entries.
+
+---
+
+# --- Register Constants ---
+# ARM64 general-purpose registers X0-X28, frame pointer X29 (FP),
+# link register X30 (LR), zero register XZR, and stack pointer SP.
+# Note: XZR and SP share encoding 31 -- context determines which.
+
+@const X0
+@value_type i64
+@value 0
+@source_file src/codegen/arm64.aria
+@source_line 11
+
+---
+
+@const X29
+@value_type i64
+@value 29
+@source_file src/codegen/arm64.aria
+@source_line 40
+@purpose Frame pointer (FP). Callee-saved. Set in prologue: MOV x29, sp.
+
+---
+
+@const X30
+@value_type i64
+@value 30
+@source_file src/codegen/arm64.aria
+@source_line 41
+@purpose Link register (LR). Holds return address after BL/BLR. Saved/restored in prologue/epilogue.
+
+---
+
+@const XZR
+@value_type i64
+@value 31
+@source_file src/codegen/arm64.aria
+@source_line 42
+@purpose Zero register. Reads as 0, writes are discarded. Shares encoding 31 with SP.
+
+---
+
+@const SP
+@value_type i64
+@value 31
+@source_file src/codegen/arm64.aria
+@source_line 43
+@purpose Stack pointer. Shares encoding 31 with XZR. ARM64 instructions disambiguate by context: load/store base register uses SP, data processing uses XZR.
+
+---
+
+# --- Condition Codes ---
+# Used with B.cond and CSET. 4-bit encoding per ARM64 spec.
+
+@const COND_EQ
+@value_type i64
+@value 0
+@source_file src/codegen/arm64.aria
+@source_line 47
+@purpose Equal (Z=1). Used after CMP for == comparison.
+
+---
+
+@const COND_NE
+@value_type i64
+@value 1
+@source_file src/codegen/arm64.aria
+@source_line 48
+@purpose Not equal (Z=0). Used for != comparison.
+
+---
+
+@const COND_GE
+@value_type i64
+@value 10
+@source_file src/codegen/arm64.aria
+@source_line 57
+@purpose Signed greater than or equal (N=V).
+
+---
+
+@const COND_LT
+@value_type i64
+@value 11
+@source_file src/codegen/arm64.aria
+@source_line 58
+@purpose Signed less than (N!=V).
+
+---
+
+@const COND_GT
+@value_type i64
+@value 12
+@source_file src/codegen/arm64.aria
+@source_line 59
+@purpose Signed greater than (Z=0 && N=V).
+
+---
+
+@const COND_LE
+@value_type i64
+@value 13
+@source_file src/codegen/arm64.aria
+@source_line 60
+@purpose Signed less than or equal (Z=1 || N!=V).
+
+---
+
+# --- Mach-O Constants ---
+
+@const MH_MAGIC_64
+@value_type i64
+@value 0xFEEDFACF
+@source_file src/codegen/macho.aria
+@source_line 11
+@purpose Mach-O 64-bit magic number. First 4 bytes of every valid Mach-O 64-bit binary.
+
+---
+
+@const PAGE_SIZE
+@value_type i64
+@value 16384
+@source_file src/codegen/macho.aria
+@source_line 37
+@purpose ARM64 macOS page size (16KB). All segment sizes and offsets must be page-aligned.

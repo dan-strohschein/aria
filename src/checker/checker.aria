@@ -3109,19 +3109,19 @@ fn _check_primary(c: Checker) -> CE {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" {
                         if sig.has_io && fn_has_effect(caller_sig, "Io") == false {
-                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
+                            cc = _cwarning(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]")
                         }
                         if sig.has_fs && fn_has_effect(caller_sig, "Fs") == false {
-                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Fs] but " + cc.fn_current_name + " is missing [Fs]")
+                            cc = _cwarning(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
                         }
                         if sig.has_net && fn_has_effect(caller_sig, "Net") == false {
-                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Net] but " + cc.fn_current_name + " is missing [Net]")
+                            cc = _cwarning(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]")
                         }
                         if sig.has_ffi && fn_has_effect(caller_sig, "Ffi") == false {
-                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Ffi] but " + cc.fn_current_name + " is missing [Ffi]")
+                            cc = _cwarning(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]")
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
-                            cc = _cwarning(cc, "W0100", "function " + name + " requires effect [Async] but " + cc.fn_current_name + " is missing [Async]")
+                            cc = _cwarning(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
                         }
                     }
                 }
@@ -3147,7 +3147,12 @@ fn _check_primary(c: Checker) -> CE {
                 if builtin_eff != "" {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" && fn_has_effect(caller_sig, builtin_eff) == false {
-                        cc = _cwarning(cc, "W0100", name + " requires effect [" + builtin_eff + "] but " + cc.fn_current_name + " is missing [" + builtin_eff + "]")
+                        mut eff_code := "E0300"
+                        if builtin_eff == "Fs" { eff_code = "E0301" }
+                        if builtin_eff == "Net" { eff_code = "E0302" }
+                        if builtin_eff == "Ffi" { eff_code = "E0303" }
+                        if builtin_eff == "Async" { eff_code = "E0304" }
+                        cc = _cwarning(cc, eff_code, "'" + name + "' requires effect [" + builtin_eff + "] but '" + cc.fn_current_name + "' does not declare [" + builtin_eff + "]")
                     }
                 }
             }

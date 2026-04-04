@@ -1,0 +1,849 @@
+@module diagnostic
+@lang aria
+@aid_version 0.2
+@layer 2
+@purpose Diagnostic types, error codes, and rendering for compiler messages
+@depends []
+
+---
+
+@type Severity
+@kind sum
+@variants
+  Error — Compilation error, prevents codegen
+  Warning — Potential issue, does not prevent codegen
+  Info — Informational message
+  Hint — Suggestion for improvement
+@source_file src/diagnostic/diagnostic.aria
+@source_line 10
+@purpose Classifies diagnostic urgency. Only Error severity blocks compilation (checked via bag_has_errors); Warning/Info/Hint are advisory. Used throughout the pipeline to decide whether to halt after a phase.
+@workflow Every compiler phase (parser, resolver, checker) emits diagnostics with a Severity. The driver checks bag_has_errors after each phase to decide whether to proceed.
+
+---
+
+@type LabelStyle
+@kind sum
+@variants
+  Primary — Main diagnostic location
+  Secondary — Related/supporting location
+@source_file src/diagnostic/diagnostic.aria
+@source_line 25
+@purpose Distinguishes the main error site from supporting context locations in rendered output. Primary labels get caret underlines; secondary labels provide cross-reference context.
+
+---
+
+@type Applicability
+@kind sum
+@variants
+  MachineApplicable — Safe to auto-apply
+  MaybeIncorrect — May not be correct in all cases
+  HasPlaceholders — Contains placeholder text requiring user edits
+@source_file src/diagnostic/diagnostic.aria
+@source_line 36
+@purpose Controls whether a suggestion can be auto-applied by tooling. Modeled after Rust's rustc Applicability enum for IDE integration compatibility.
+
+---
+
+@type Span
+@kind struct
+@fields
+  file: str — Source file path
+  line: i64 — 1-based line number
+  col: i64 — 1-based column number
+  offset: i64 — Byte offset into source
+  length: i64 — Span length in bytes
+@source_file src/diagnostic/diagnostic.aria
+@source_line 49
+@purpose Locates a region in source code for error reporting. Carries both human-readable (file:line:col) and machine-usable (offset+length) coordinates. Dual representation avoids recomputation during rendering.
+@invariants line and col are 1-based (0 values indicate a sentinel/unknown span). length >= 0. offset is a byte offset from the start of the file content.
+@notes The sentinel span (file="", line=0, col=0, offset=0, length=0) is created by _sentinel_span() and used to initialize empty collections where the bootstrap compiler requires a non-empty array literal.
+
+---
+
+@type Label
+@kind struct
+@fields
+  span: Span — Location in source
+  message: str — Label text
+  style: LabelStyle — Primary or secondary
+@source_file src/diagnostic/diagnostic.aria
+@source_line 85
+@purpose Annotates a specific source location with a message, used to build rich multi-location diagnostics. Multiple labels on one diagnostic enable "defined here" / "used here" style messages.
+
+---
+
+@type Suggestion
+@kind struct
+@fields
+  message: str — Description of the fix
+  replacement: str — Replacement text
+  span: Span — Location to replace
+  applicability: Applicability — How safe to auto-apply
+@source_file src/diagnostic/diagnostic.aria
+@source_line 102
+@purpose Encodes a machine-applicable fix that tooling can offer or auto-apply. The span identifies what to replace; replacement is the new text.
+@notes Empty message (len == 0) is used as a sentinel to indicate "no real suggestion" — render_json_diagnostic skips suggestions with empty messages. [src: diagnostic.aria:488]
+
+---
+
+@type Diagnostic
+@kind struct
+@fields
+  code: str — Error code (e.g. E0001)
+  severity: Severity — Error, Warning, Info, or Hint
+  message: str — Human-readable message
+  span: Span — Primary source location
+  labels: [Label] — Annotated source locations
+  notes: [str] — Additional notes
+  suggestions: [Suggestion] — Suggested fixes
+@source_file src/diagnostic/diagnostic.aria
+@source_line 114
+@purpose The central error reporting type. Every compiler diagnostic — from syntax errors to type mismatches — is represented as a Diagnostic. Carries all information needed for both human-readable and JSON rendering.
+@invariants labels always contains at least one element (a primary label auto-created from span+message by new_diagnostic). notes and suggestions each contain at least one sentinel element due to bootstrap compiler limitations requiring non-empty array literals. [src: diagnostic.aria:132-134]
+@antipatterns Do not check labels/notes/suggestions length to determine if they have real content — they always have sentinel entries. Instead check if element message/text is non-empty.
+
+---
+
+@type DiagnosticBag
+@kind struct
+@fields
+  diagnostics: [Diagnostic] — Collected diagnostics
+  error_count: i64 — Number of errors
+  warning_count: i64 — Number of warnings
+@source_file src/diagnostic/diagnostic.aria
+@source_line 145
+@purpose Accumulator for diagnostics across a compilation phase. Tracks error/warning counts separately so bag_has_errors is O(1) without scanning the list.
+@invariants diagnostics[0] is always a sentinel error (empty code, empty message, sentinel span) — real diagnostics start at index 1. error_count and warning_count reflect only non-sentinel entries. [src: diagnostic.aria:153]
+@antipatterns Do not iterate diagnostics starting at index 0 — skip the sentinel. bag_merge and render_json_bag both start iteration at index 1. [src: diagnostic.aria:190, 511]
+
+---
+
+@fn severity_to_str
+@sig (s: Severity) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 16
+@purpose Converts Severity to its lowercase string name for rendering and severity comparison. Also used as a workaround for pattern matching on sum types — bag_add_diagnostic compares the string result rather than matching on the variant directly. [src: diagnostic.aria:163]
+
+---
+
+@fn label_style_to_str
+@sig (s: LabelStyle) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 29
+@purpose Converts LabelStyle to its string name for JSON serialization of labels.
+
+---
+
+@fn applicability_to_str
+@sig (a: Applicability) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 41
+@purpose Converts Applicability to its PascalCase string name for JSON serialization of suggestions.
+
+---
+
+@fn new_span
+@sig (file: str, line: i64, col: i64, offset: i64, length: i64) -> Span
+@source_file src/diagnostic/diagnostic.aria
+@source_line 57
+@purpose Constructor for Span. Thin wrapper around struct literal for API consistency.
+@pre line and col should be 1-based for real source locations; 0 indicates unknown/sentinel.
+
+---
+
+@fn span_end_offset
+@sig (s: Span) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 60
+@purpose Computes the exclusive end byte offset of a span (offset + length). Used in JSON rendering to emit the span as a [start, end) pair. [src: diagnostic.aria:444]
+
+---
+
+@fn i2s
+@sig (n: i64) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 64
+@purpose Integer-to-string conversion implemented from scratch because the bootstrap compiler stdlib does not provide one. Handles negatives via recursion and decomposes multi-digit numbers digit-by-digit.
+@notes Uses recursive decomposition: i2s(n/10) + i2s(n%10). The base case maps single digits 1-9 via an if-chain. This is intentionally simple, not optimized — it is only used for diagnostic rendering, not hot paths. [src: diagnostic.aria:64-79]
+
+---
+
+@fn format_span
+@sig (s: Span) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 81
+@purpose Formats a span as "file:line:col" for the human-readable diagnostic header (the "--> file:line:col" line). [src: diagnostic.aria:375]
+
+---
+
+@fn new_label
+@sig (span: Span, message: str, style: LabelStyle) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 91
+@purpose General-purpose Label constructor accepting an explicit style.
+
+---
+
+@fn primary_label
+@sig (span: Span, message: str) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 94
+@purpose Convenience constructor for a Primary-styled label. Used by new_diagnostic to auto-create the default label from the diagnostic's span and message. [src: diagnostic.aria:132]
+
+---
+
+@fn secondary_label
+@sig (span: Span, message: str) -> Label
+@source_file src/diagnostic/diagnostic.aria
+@source_line 97
+@purpose Convenience constructor for a Secondary-styled label. Used when adding "also defined here" or "previously declared here" context to a diagnostic.
+
+---
+
+@fn new_suggestion
+@sig (message: str, replacement: str, span: Span, applicability: Applicability) -> Suggestion
+@source_file src/diagnostic/diagnostic.aria
+@source_line 109
+@purpose Constructor for Suggestion. Also used to create sentinel suggestions (empty message/replacement) when initializing a Diagnostic. [src: diagnostic.aria:134]
+
+---
+
+@fn new_diagnostic
+@sig (code: str, severity: Severity, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 126
+@purpose Core Diagnostic constructor. Auto-populates labels with a primary label, notes with one empty sentinel string, and suggestions with one empty sentinel. This ensures array fields are never empty (a bootstrap compiler requirement for array type inference).
+@post labels has exactly 1 element (primary label). notes has exactly 1 element (empty string). suggestions has exactly 1 element (empty sentinel).
+@notes Callers that need additional labels, notes, or suggestions must construct the Diagnostic manually or modify fields after creation (Aria structs are value types, so this requires reassignment).
+
+---
+
+@fn new_error
+@sig (code: str, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 137
+@purpose Shorthand for creating an Error-severity diagnostic. The most commonly used constructor across the compiler.
+
+---
+
+@fn new_warning
+@sig (code: str, message: str, span: Span) -> Diagnostic
+@source_file src/diagnostic/diagnostic.aria
+@source_line 140
+@purpose Shorthand for creating a Warning-severity diagnostic.
+
+---
+
+@fn new_bag
+@sig () -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 151
+@purpose Creates an empty DiagnosticBag with zero counts and a sentinel diagnostic at index 0. The sentinel exists because the bootstrap compiler needs a non-empty array literal to infer the element type [Diagnostic].
+@post diagnostics.len() == 1 (sentinel only), error_count == 0, warning_count == 0.
+
+---
+
+@fn bag_add_diagnostic
+@sig (bag: DiagnosticBag, diag: Diagnostic) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 158
+@purpose Appends a diagnostic to the bag and increments the appropriate counter. Returns a new DiagnosticBag (immutable/functional style — Aria structs are values).
+@notes Severity dispatch uses string comparison via severity_to_str rather than pattern matching — this is a workaround for bootstrap compiler limitations. Only Error and Warning increment counters; Info and Hint are collected but not counted. [src: diagnostic.aria:163-168]
+@post error_count or warning_count is incremented by 1 if diag.severity is Error or Warning respectively. diagnostics.len() increases by 1.
+
+---
+
+@fn bag_add_error
+@sig (bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 176
+@purpose Convenience function combining new_error + bag_add_diagnostic into one call. The most common way diagnostics are added throughout the compiler.
+
+---
+
+@fn bag_add_warning
+@sig (bag: DiagnosticBag, code: str, message: str, span: Span) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 179
+@purpose Convenience function combining new_warning + bag_add_diagnostic into one call.
+
+---
+
+@fn bag_has_errors
+@sig (bag: DiagnosticBag) -> bool
+@source_file src/diagnostic/diagnostic.aria
+@source_line 182
+@purpose O(1) check for whether any errors were recorded. Used by the driver after each compilation phase to decide whether to proceed or abort.
+@workflow Called between pipeline phases: parse -> check errors -> resolve -> check errors -> typecheck -> check errors -> codegen.
+
+---
+
+@fn bag_error_count
+@sig (bag: DiagnosticBag) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 184
+@purpose Accessor for the cached error count. Used in format_summary for the final compilation report.
+
+---
+
+@fn bag_warning_count
+@sig (bag: DiagnosticBag) -> i64
+@source_file src/diagnostic/diagnostic.aria
+@source_line 186
+@purpose Accessor for the cached warning count. Used in format_summary for the final compilation report.
+
+---
+
+@fn bag_merge
+@sig (a: DiagnosticBag, b: DiagnosticBag) -> DiagnosticBag
+@source_file src/diagnostic/diagnostic.aria
+@source_line 188
+@purpose Merges bag b into bag a by iterating b's diagnostics (skipping index 0 sentinel) and adding each to a via bag_add_diagnostic. Used when combining diagnostics from separately-compiled modules or sequential phases.
+@pre Both bags must have been created via new_bag (i.e., have a sentinel at index 0).
+@notes Starts iteration at index 1 to skip b's sentinel. Counts are recomputed incrementally through bag_add_diagnostic, not copied from b. [src: diagnostic.aria:190]
+
+---
+
+@fn format_summary
+@sig (bag: DiagnosticBag) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 198
+@purpose Formats "N error(s), M warning(s)" summary string for end-of-compilation output.
+
+---
+
+@fn describe_code
+@sig (code: str) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 280
+@purpose Maps an error code string (e.g., "E0001") to a human-readable short description (e.g., "unexpected token"). Used in JSON rendering to populate the "description" field. [src: diagnostic.aria:445]
+@notes Implemented as a chain of if-statements comparing string equality (no map/dict in bootstrap stdlib). Returns "unknown error code" for unrecognized codes. One code (W0005) is compared as a string literal "W0005" rather than the constant — likely a minor inconsistency. [src: diagnostic.aria:327]
+@invariants Must be kept in sync with the error code constants defined at lines 206-278. Adding a new const without a describe_code entry will cause it to return "unknown error code".
+
+---
+
+@fn render_text
+@sig (diag: Diagnostic, source: str) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 371
+@purpose Renders a diagnostic as human-readable text with source context, caret underlines, and notes. Produces output similar to rustc's error format: severity[code]: message, file location, source line with carets.
+@pre source must be the full source text of the file referenced by diag.span.file. If source is empty or the line is out of range, the source context section is omitted gracefully.
+@notes Only renders the primary span's source line — does not render secondary labels' source lines. Underline length defaults to 1 if span.length < 1. Notes with empty strings (sentinels) are skipped. [src: diagnostic.aria:388-389, 400]
+@effects Pure — returns a string, no I/O.
+
+---
+
+@fn render_json_diagnostic
+@sig (diag: Diagnostic) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 440
+@purpose Serializes a single Diagnostic to a JSON object string. Includes code, severity, message, description (from describe_code), file location, span offsets, labels array, and suggestions array.
+@notes JSON is built via manual string concatenation — no JSON library in bootstrap stdlib. Braces are written as escaped strings ("\{" and "\}") because Aria uses {} for blocks. Labels and suggestions with empty messages are filtered out (sentinel skipping). [src: diagnostic.aria:448-449, 468, 488]
+@effects Pure — returns a string, no I/O.
+
+---
+
+@fn render_json_bag
+@sig (bag: DiagnosticBag) -> str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 504
+@purpose Serializes an entire DiagnosticBag to a JSON object containing a "diagnostics" array and a "summary" object with error/warning counts.
+@pre bag must have been created via new_bag (sentinel at index 0).
+@notes Starts iteration at index 1 to skip the sentinel diagnostic. [src: diagnostic.aria:511]
+@effects Pure — returns a string, no I/O.
+
+---
+
+@const E0001
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 206
+@purpose Syntax error: unexpected token
+
+---
+
+@const E0002
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 207
+@purpose Syntax error: unterminated string literal
+
+---
+
+@const E0003
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 208
+@purpose Syntax error: unterminated string interpolation
+
+---
+
+@const E0004
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 209
+@purpose Syntax error: invalid escape sequence
+
+---
+
+@const E0005
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 210
+@purpose Syntax error: expected expression
+
+---
+
+@const E0006
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 211
+@purpose Syntax error: expected type
+
+---
+
+@const E0007
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 212
+@purpose Syntax error: expected pattern
+
+---
+
+@const E0008
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 213
+@purpose Syntax error: expected identifier
+
+---
+
+@const E0009
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 214
+@purpose Syntax error: expected declaration
+
+---
+
+@const E0010
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 215
+@purpose Syntax error: invalid number literal
+
+---
+
+@const E0011
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 216
+@purpose Syntax error: expected closing delimiter
+
+---
+
+@const E0012
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 217
+@purpose Syntax error: expected opening delimiter
+
+---
+
+@const E0013
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 218
+@purpose Syntax error: unexpected end of file
+
+---
+
+@const E0014
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 219
+@purpose Syntax error: expected newline
+
+---
+
+@const E0015
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 220
+@purpose Syntax error: expected mod declaration
+
+---
+
+@const E0016
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 221
+@purpose Syntax error: expected function body
+
+---
+
+@const E0017
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 222
+@purpose Syntax error: expected match arm
+
+---
+
+@const E0018
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 223
+@purpose Syntax error: expected block
+
+---
+
+@const E0019
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 224
+@purpose Syntax error: invalid operator
+
+---
+
+@const E0020
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 225
+@purpose Syntax error: non-associative operator chaining
+
+---
+
+@const E0100
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 228
+@purpose Type error: type mismatch
+
+---
+
+@const E0101
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 229
+@purpose Type error: cannot infer type
+
+---
+
+@const E0102
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 230
+@purpose Type error: incompatible types in binary operation
+
+---
+
+@const E0103
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 231
+@purpose Type error: invalid unary operation
+
+---
+
+@const E0104
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 232
+@purpose Type error: not callable
+
+---
+
+@const E0105
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 233
+@purpose Type error: wrong number of arguments
+
+---
+
+@const E0106
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 234
+@purpose Type error: return type mismatch
+
+---
+
+@const E0107
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 235
+@purpose Type error: field not found
+
+---
+
+@const E0108
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 236
+@purpose Type error: not a struct type
+
+---
+
+@const E0109
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 237
+@purpose Type error: missing required field
+
+---
+
+@const E0110
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 238
+@purpose Type error: duplicate field
+
+---
+
+@const E0111
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 239
+@purpose Type error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0112
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 240
+@purpose Type error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0113
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 241
+@purpose Type error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0114
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 242
+@purpose Type error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0200
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 245
+@purpose Trait error: trait not satisfied
+
+---
+
+@const E0201
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 246
+@purpose Trait error: missing trait method
+
+---
+
+@const E0202
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 247
+@purpose Trait error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0203
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 248
+@purpose Trait error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0204
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 249
+@purpose Trait error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0205
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 250
+@purpose Trait error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0300
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 253
+@purpose Missing effect [Io] — calling a function that requires Io from a function that doesn't declare it
+
+---
+
+@const E0301
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 254
+@purpose Missing effect [Fs] — calling a function that requires Fs from a function that doesn't declare it
+
+---
+
+@const E0302
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 255
+@purpose Missing effect [Net] — calling a function that requires Net from a function that doesn't declare it
+
+---
+
+@const E0303
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 256
+@purpose Missing effect [Ffi] — calling a function that requires Ffi from a function that doesn't declare it
+
+---
+
+@const E0304
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 257
+@purpose Missing effect [Async] — calling a function that requires Async from a function that doesn't declare it
+
+---
+
+@const E0400
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 257
+@purpose Pattern error: non-exhaustive match
+
+---
+
+@const E0401
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 258
+@purpose Pattern error: unreachable pattern
+
+---
+
+@const E0402
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 259
+@purpose Pattern error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0403
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 260
+@purpose Pattern error (reserved, no describe_code entry — returns "unknown error code")
+
+---
+
+@const E0500
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 263
+@purpose Mutability error: immutable binding
+
+---
+
+@const E0700
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 266
+@purpose Module error: module not found
+
+---
+
+@const E0701
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 267
+@purpose Module error: unresolved name
+
+---
+
+@const E0702
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 268
+@purpose Module error: duplicate declaration
+
+---
+
+@const E0703
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 269
+@purpose Module error: import cycle
+
+---
+
+@const E0704
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 270
+@purpose Module error: private symbol
+
+---
+
+@const W0001
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 273
+@purpose Warning: unused variable
+
+---
+
+@const W0002
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 274
+@purpose Warning: unused function
+
+---
+
+@const W0003
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 275
+@purpose Warning: unused import
+
+---
+
+@const W0004
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 276
+@purpose Warning: shadowed variable
+
+---
+
+@const W0005
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 277
+@purpose Warning: use of deprecated function
+
+---
+
+@const W0100
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 278
+@purpose Warning: unreachable code

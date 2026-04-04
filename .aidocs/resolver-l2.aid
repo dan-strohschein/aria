@@ -1,0 +1,248 @@
+@module resolver
+@lang aria
+@layer 2
+@aid_version 0.2
+@purpose Name resolution, scope hierarchy, and symbol table construction
+@depends [lexer, parser, diagnostic]
+@workflow The resolver runs after parsing (lexer -> parser -> resolver -> checker -> codegen). It receives the token stream, a DeclIndex of top-level declarations, and a NodePool of AST nodes. It produces a SymbolTable mapping names to scopes and a DiagnosticBag of errors/warnings.
+@notes The resolver uses a two-pass design: Pass 1 collects all top-level declarations into the module scope (forward-declaration style), Pass 2 walks function/entry/test bodies to resolve identifier references. This allows mutual recursion between top-level functions without ordering constraints. The resolver operates in a purely functional style -- all state transitions return a new Resolver struct rather than mutating in place.
+@antipatterns Do not add symbols during Pass 2 for top-level declarations; they must be registered in Pass 1. Do not resolve identifiers that appear after a dot (field access) -- those are resolved by the checker, not the resolver.
+
+---
+
+@type SymbolKind
+@kind sum
+@variants
+  SkFunction — Function declaration
+  SkType — Type declaration (also used for generic type parameters)
+  SkEnum — Enum declaration
+  SkTrait — Trait declaration
+  SkConst — Constant declaration
+  SkVariable — Local variable binding (including for-loop vars, with-bindings, destructured names)
+  SkParameter — Function parameter (also used for closure params, catch error bindings, ? |e| error bindings)
+  SkVariant — Sum type or enum variant
+  SkModule — Module name (registered from `use` declarations)
+  SkBuiltin — Built-in symbol (types, functions, keywords, constructors)
+  SkNone — Sentinel / not found
+@source_file src/resolver/scope.aria
+@source_line 13
+@purpose Classifies what kind of declaration a symbol represents. Used by the resolver to decide whether an identifier in a pattern is a variant constructor (don't bind) or a new variable (bind), and by the checker for type-appropriate validation.
+@invariants SkNone is only used as the sentinel value in _sentinel_symbol(); no real declaration should have SkNone.
+
+---
+
+@type ScopeKind
+@kind sum
+@variants
+  ScUniverse — Top-level built-in scope (scope ID 1, contains all builtins)
+  ScModule — Module scope (scope ID 2, contains top-level declarations)
+  ScFunction — Function body scope (also used for closures, entry blocks, test blocks)
+  ScBlock — Block scope (if/for/while/match_arm/catch/select_arm/listcomp/with bodies)
+  ScNone — Sentinel (only in _sentinel_scope at index 0)
+@source_file src/resolver/scope.aria
+@source_line 72
+@purpose Classifies scope nesting level for the scope hierarchy. The scope chain always starts with ScNone(0) -> ScUniverse(1) -> ScModule(2) -> user scopes.
+@invariants Scope 0 is always the sentinel. Scope 1 is always ScUniverse. Scope 2 is always ScModule. All user-created scopes have ID >= 3.
+
+---
+
+@type Symbol
+@kind struct
+@fields
+  name: str — Symbol name (empty string in sentinel symbol means "not found")
+  kind: SymbolKind — Symbol classification
+  span: Span — Declaration location (file, line, col, offset, length)
+  scope_id: i64 — Scope where declared
+  is_mutable: bool — Whether binding is mutable (true only for `mut` bindings)
+  is_public: bool — Whether symbol is pub (only meaningful for top-level declarations)
+@source_file src/resolver/scope.aria
+@source_line 48
+@purpose Represents a single named declaration in the symbol table. The sentinel symbol (name="", kind=SkNone) is used as a "not found" return value from lookup functions.
+@invariants name="" implies this is the sentinel symbol. scope_id always refers to a valid scope in the SymbolTable.scopes array. is_public is only set for top-level declarations registered in Pass 1.
+@notes The span.file field is used for cross-module visibility checking: if a symbol's file differs from the resolver's current file and is_public is false, access is rejected with E0704.
+
+---
+
+@type Scope
+@kind struct
+@fields
+  kind: ScopeKind — Scope classification
+  parent: i64 — Parent scope ID (-1 for root, but in practice sentinel at 0 has parent 0)
+  name: str — Scope name (function name, "entry", "test", "closure", "for", "match_arm", "catch", "select_arm", "listcomp", or "" for anonymous blocks)
+  depth: i64 — Nesting depth (0 for sentinel, computed automatically by add_scope)
+@source_file src/resolver/scope.aria
+@source_line 89
+@purpose Represents a single scope in the scope hierarchy tree. Scopes form a tree via parent pointers, enabling name lookup to walk up the chain.
+
+---
+
+@type SymbolTable
+@kind struct
+@fields
+  scopes: [Scope] — All scopes in hierarchy (index 0 is sentinel)
+  symbols: [Symbol] — All declared symbols (index 0 is sentinel)
+@source_file src/resolver/scope.aria
+@source_line 104
+@purpose The resolver's primary output: a complete mapping of all scopes and symbols in the program. Both arrays use index 0 as a sentinel, so real entries start at index 1.
+@invariants scopes[0] is always the sentinel scope. symbols[0] is always the sentinel symbol. Both arrays grow monotonically (append-only). Scope IDs and symbol indices are stable once assigned.
+
+---
+
+@type Resolver
+@kind struct
+@fields
+  tokens: [Token] — Token stream from the lexer
+  pos: i64 — Current position in the token stream (used by legacy token-walking code)
+  table: SymbolTable — Symbol table being built (grows across both passes)
+  diagnostics: DiagnosticBag — Accumulated diagnostics (errors and warnings)
+  current_scope: i64 — Active scope ID (index into table.scopes)
+  file: str — Source file path (used for cross-module visibility checks)
+  is_public: bool — Whether current declaration is pub (set during Pass 1 scanning)
+  pool: NodePool — AST node pool from the parser (used by AST-based resolution in Pass 2)
+  index: DeclIndex — Declaration index from the parser (drives both passes)
+@source_file src/resolver/resolver.aria
+@source_line 15
+@purpose Immutable-style state object threaded through resolution. Every mutation returns a new Resolver with the changed field; the original is never modified.
+@notes All _rset_* helper functions create a new Resolver with one field changed. This functional style is required because Aria's bootstrap compiler does not support mutable struct field assignment.
+@antipatterns Never mutate the Resolver in place. Always use _rset_* helpers or construct a new Resolver struct.
+
+---
+
+@type ResolveResult
+@kind struct
+@fields
+  table: SymbolTable — Completed symbol table (passed to the checker)
+  diagnostics: DiagnosticBag — Resolution diagnostics (merged with checker diagnostics later)
+@source_file src/resolver/resolver.aria
+@source_line 42
+@purpose Return type of the public resolve() function. Packages the final symbol table and any accumulated diagnostics for the next pipeline stage.
+
+---
+
+@fn symbol_kind_name
+@sig (k: SymbolKind) -> str
+@source_file src/resolver/scope.aria
+@source_line 26
+@purpose Converts a SymbolKind variant to its human-readable string name. Used for display, debugging, and as the underlying mechanism for sk_eq comparison.
+
+---
+
+@fn sk_eq
+@sig (a: SymbolKind, b: SymbolKind) -> bool
+@source_file src/resolver/scope.aria
+@source_line 40
+@purpose Compares two SymbolKind values for equality by comparing their string names. This workaround exists because the bootstrap compiler does not support direct sum type equality.
+@notes This is a string-comparison-based equality check -- a bootstrap compiler limitation workaround. Uses symbol_kind_name internally.
+
+---
+
+@fn new_symbol
+@sig (name: str, kind: SymbolKind, span: Span, scope_id: i64, is_mutable: bool, is_public: bool) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 67
+@purpose Constructor for Symbol structs. Thin wrapper around struct literal.
+
+---
+
+@fn scope_kind_name
+@sig (k: ScopeKind) -> str
+@source_file src/resolver/scope.aria
+@source_line 79
+@purpose Converts a ScopeKind variant to its human-readable string name for display and debugging.
+
+---
+
+@fn new_scope
+@sig (kind: ScopeKind, parent: i64, name: str, depth: i64) -> Scope
+@source_file src/resolver/scope.aria
+@source_line 99
+@purpose Constructor for Scope structs. Thin wrapper around struct literal.
+
+---
+
+@fn new_table
+@sig () -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 109
+@purpose Creates a new SymbolTable pre-populated with sentinel entries at index 0 for both scopes and symbols. The sentinel ensures index 0 is never a valid reference, simplifying "not found" checks.
+@post scopes.len() == 1 and symbols.len() == 1 (both contain only sentinels).
+
+---
+
+@fn add_scope
+@sig (table: SymbolTable, kind: ScopeKind, parent: i64, name: str) -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 115
+@purpose Appends a new scope to the table, automatically computing its depth from the parent scope's depth + 1. Returns a new SymbolTable (functional style).
+@pre parent must be a valid scope ID (0 <= parent < table.scopes.len()), or 0 for top-level.
+@post The new scope's ID is table.scopes.len() - 1 in the returned table.
+@effects Allocates a new scopes array (append creates a copy).
+
+---
+
+@fn last_scope_id
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 127
+@purpose Returns the ID of the most recently added scope. Used immediately after add_scope to capture the new scope's ID for current_scope tracking.
+
+---
+
+@fn add_symbol
+@sig (table: SymbolTable, sym: Symbol) -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 129
+@purpose Appends a symbol to the table's symbol list. Returns a new SymbolTable (functional style). Does NOT check for duplicates -- callers must use _add_sym or _add_sym_warn_shadow for that.
+
+---
+
+@fn scope_count
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 135
+@purpose Returns the total number of scopes including the sentinel.
+
+---
+
+@fn symbol_count
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 137
+@purpose Returns the total number of symbols including the sentinel.
+
+---
+
+@fn lookup_local
+@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 142
+@purpose Searches for a symbol by name within a single specific scope only, without walking the parent chain. Returns the sentinel symbol (name="") if not found. Used for duplicate-declaration checking within the same scope.
+@pre scope_id must be a valid scope ID.
+@post Returns a Symbol with name="" if no match found; otherwise returns the first matching symbol.
+@notes Linear scan over all symbols, skipping sentinel at index 0. Performance is O(n) in total symbol count. Adequate for compiler-sized programs but would need optimization for very large codebases.
+
+---
+
+@fn lookup
+@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 157
+@purpose Searches for a symbol by walking up the scope chain from scope_id through all ancestor scopes to the universe scope. This is the primary name resolution mechanism. Returns the sentinel symbol if the name is not found in any enclosing scope.
+@pre scope_id must be a valid scope ID or 0.
+@post Returns the first matching symbol found in the nearest enclosing scope, or sentinel if not found anywhere.
+@notes Walks from the given scope to parent, grandparent, etc., calling lookup_local at each level. Stops when cur reaches 0 (sentinel scope, which has no symbols). Does NOT check scope 0 for symbols (the sentinel scope should never contain real symbols).
+
+---
+
+@fn resolve
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult
+@calls [new_table, add_scope, add_symbol, lookup, lookup_local]
+@source_file src/resolver/resolver.aria
+@source_line 2103
+@purpose Main entry point for name resolution. Performs the complete two-pass resolution algorithm: creates the scope hierarchy (universe -> module), populates builtins (including assertEqual, assertOk, assertErr, assertNear, dbg), collects top-level declarations (Pass 1), then resolves all identifier references in function/entry/test/const/impl bodies (Pass 2).
+@pre tokens must be a valid token stream from the lexer. index must be a valid DeclIndex from the parser. pool must be the NodePool from the parser. file must be the source file path.
+@post Returns a ResolveResult containing the complete SymbolTable and any diagnostics. The symbol table contains all scopes and symbols for the entire file.
+@effects Allocates the entire scope/symbol infrastructure. No I/O.
+@workflow Called by the compilation pipeline after parsing. The returned SymbolTable is passed to the checker along with the AST. Diagnostics are merged with checker diagnostics for final reporting.
+@errors E0701 "unresolved name" -- identifier not found in any enclosing scope (includes "did you mean?" suggestion via edit distance). E0702 "duplicate declaration" -- two declarations with the same name in the same scope. E0704 "symbol is private" -- accessing a non-pub symbol from a different file. W0004 "variable shadows previous declaration" -- a new binding shadows an existing non-builtin symbol in an enclosing scope.
+@notes Pass 1 iterates the DeclIndex to register: use (as SkModule), fn (as SkFunction, including extern fn blocks), type/struct (as SkType, plus SkVariant for sum type variants), enum (as SkEnum), trait (as SkTrait), const (as SkConst). Entry, test, and impl blocks are skipped in Pass 1. Pass 2 iterates the DeclIndex again: fn/entry/test/const/impl declarations are resolved using either AST-based walking (if node_idx > 0) or legacy token-walking fallback. Type/enum/trait/use declarations are skipped in Pass 2 (no body resolution needed). The AST-based walker (_resolve_expr_node) handles all expression kinds including bindings (:=), closures, match patterns, for loops, with statements, catch blocks, select expressions, list comprehensions, and string interpolation. The legacy token-walking path remains for impl methods and extern/fixture declarations that lack AST nodes.

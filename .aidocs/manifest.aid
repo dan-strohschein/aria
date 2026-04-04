@@ -1,0 +1,22 @@
+@manifest aria-selfhosting-compiler
+@aid_version 0.2
+@generated 2026-04-03
+
+@modules
+  project.aid — Project architecture, layer boundaries, coding conventions
+  main.aid — CLI entry point, command dispatch, pipeline orchestration
+  diagnostic.aid — Diagnostic types, error codes, text/JSON rendering
+  lexer.aid — Tokenizer: source text to token stream
+  parser.aid — Recursive descent parser: tokens to AST node pool + declaration index
+  resolver.aid — Name resolution: scope hierarchy, symbol table construction
+  checker.aid — Type checker: inference, traits, generics, effects
+  codegen.aid — Code generation: IR lowering, LLVM IR, ARM64 emission, Mach-O linking
+
+@layer2
+  main-l2.aid — L2 semantic annotations for main module
+  diagnostic-l2.aid — L2 semantic annotations for diagnostic module
+  lexer-l2.aid — L2 semantic annotations for lexer module
+  parser-l2.aid — L2 semantic annotations for parser module
+  resolver-l2.aid — L2 semantic annotations for resolver module
+  checker-l2.aid — L2 semantic annotations for checker module
+  codegen-l2.aid — L2 semantic annotations for codegen module

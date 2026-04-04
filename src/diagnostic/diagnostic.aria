@@ -252,6 +252,9 @@ const E0205: str = "E0205"
 // Effect Errors (E0300-E0399)
 const E0300: str = "E0300"
 const E0301: str = "E0301"
+const E0302: str = "E0302"
+const E0303: str = "E0303"
+const E0304: str = "E0304"
 
 // Pattern Errors (E0400-E0499)
 const E0400: str = "E0400"
@@ -311,7 +314,11 @@ fn describe_code(code: str) -> str {
     if code == E0110 { return "duplicate field" }
     if code == E0200 { return "trait not satisfied" }
     if code == E0201 { return "missing trait method" }
-    if code == E0300 { return "effect not declared" }
+    if code == E0300 { return "missing effect [Io]" }
+    if code == E0301 { return "missing effect [Fs]" }
+    if code == E0302 { return "missing effect [Net]" }
+    if code == E0303 { return "missing effect [Ffi]" }
+    if code == E0304 { return "missing effect [Async]" }
     if code == E0400 { return "non-exhaustive match" }
     if code == E0500 { return "immutable binding" }
     if code == E0401 { return "unreachable pattern" }

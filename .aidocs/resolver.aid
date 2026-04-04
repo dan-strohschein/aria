@@ -1,0 +1,199 @@
+@module resolver
+@lang aria
+@aid_version 0.2
+@purpose Name resolution, scope hierarchy, and symbol table construction
+@depends [lexer, parser, diagnostic]
+
+---
+
+@type SymbolKind
+@kind sum
+@variants
+  SkFunction — Function declaration
+  SkType — Type declaration
+  SkEnum — Enum declaration
+  SkTrait — Trait declaration
+  SkConst — Constant declaration
+  SkVariable — Local variable binding
+  SkParameter — Function parameter
+  SkVariant — Sum type or enum variant
+  SkModule — Module name
+  SkBuiltin — Built-in symbol
+  SkNone — Sentinel / not found
+@source_file src/resolver/scope.aria
+@source_line 13
+
+---
+
+@type ScopeKind
+@kind sum
+@variants
+  ScUniverse — Top-level built-in scope
+  ScModule — Module scope
+  ScFunction — Function body scope
+  ScBlock — Block scope (if, for, etc.)
+  ScNone — Sentinel
+@source_file src/resolver/scope.aria
+@source_line 72
+
+---
+
+@type Symbol
+@kind struct
+@fields
+  name: str — Symbol name
+  kind: SymbolKind — Symbol classification
+  span: Span — Declaration location
+  scope_id: i64 — Scope where declared
+  is_mutable: bool — Whether binding is mutable
+  is_public: bool — Whether symbol is pub
+@source_file src/resolver/scope.aria
+@source_line 48
+
+---
+
+@type Scope
+@kind struct
+@fields
+  kind: ScopeKind — Scope classification
+  parent: i64 — Parent scope ID (-1 for root)
+  name: str — Scope name (function name, module name)
+  depth: i64 — Nesting depth
+@source_file src/resolver/scope.aria
+@source_line 89
+
+---
+
+@type SymbolTable
+@kind struct
+@fields
+  scopes: [Scope] — All scopes in hierarchy
+  symbols: [Symbol] — All declared symbols
+@source_file src/resolver/scope.aria
+@source_line 104
+
+---
+
+@type Resolver
+@kind struct
+@fields
+  tokens: [Token] — Token stream
+  pos: i64 — Current position
+  table: SymbolTable — Symbol table being built
+  diagnostics: DiagnosticBag — Accumulated diagnostics
+  current_scope: i64 — Active scope ID
+  file: str — Source file path
+  is_public: bool — Whether current declaration is pub
+  pool: NodePool — AST node pool
+  index: DeclIndex — Declaration index
+@source_file src/resolver/resolver.aria
+@source_line 15
+
+---
+
+@type ResolveResult
+@kind struct
+@fields
+  table: SymbolTable — Completed symbol table
+  diagnostics: DiagnosticBag — Resolution diagnostics
+@source_file src/resolver/resolver.aria
+@source_line 42
+
+---
+
+@fn symbol_kind_name
+@sig (k: SymbolKind) -> str
+@source_file src/resolver/scope.aria
+@source_line 26
+
+---
+
+@fn sk_eq
+@sig (a: SymbolKind, b: SymbolKind) -> bool
+@source_file src/resolver/scope.aria
+@source_line 40
+
+---
+
+@fn new_symbol
+@sig (name: str, kind: SymbolKind, span: Span, scope_id: i64, is_mutable: bool, is_public: bool) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 67
+
+---
+
+@fn scope_kind_name
+@sig (k: ScopeKind) -> str
+@source_file src/resolver/scope.aria
+@source_line 79
+
+---
+
+@fn new_scope
+@sig (kind: ScopeKind, parent: i64, name: str, depth: i64) -> Scope
+@source_file src/resolver/scope.aria
+@source_line 99
+
+---
+
+@fn new_table
+@sig () -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 109
+
+---
+
+@fn add_scope
+@sig (table: SymbolTable, kind: ScopeKind, parent: i64, name: str) -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 115
+
+---
+
+@fn last_scope_id
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 127
+
+---
+
+@fn add_symbol
+@sig (table: SymbolTable, sym: Symbol) -> SymbolTable
+@source_file src/resolver/scope.aria
+@source_line 129
+
+---
+
+@fn scope_count
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 135
+
+---
+
+@fn symbol_count
+@sig (table: SymbolTable) -> i64
+@source_file src/resolver/scope.aria
+@source_line 137
+
+---
+
+@fn lookup_local
+@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 142
+
+---
+
+@fn lookup
+@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
+@source_file src/resolver/scope.aria
+@source_line 157
+
+---
+
+@fn resolve
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult
+@calls [new_table, add_scope, add_symbol, lookup, lookup_local]
+@source_file src/resolver/resolver.aria
+@source_line 2103

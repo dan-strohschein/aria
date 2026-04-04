@@ -1,0 +1,1022 @@
+@module checker
+@lang aria
+@aid_version 0.2
+@layer 2
+@purpose Type checking, trait resolution, generics, and effect verification for the Aria self-hosting compiler. Implements a three-pass architecture over a DeclIndex: (1) register types, (2) register function signatures, (3) check bodies. Uses an immutable-update pattern where every mutation returns a new Checker struct.
+@depends [lexer, parser, resolver, diagnostic]
+@workflow Runs after parsing and resolution. Receives tokens, DeclIndex, NodePool, and SymbolTable from earlier passes. Produces CheckResult containing TypeStore, TypeRegistry, TraitRegistry, and diagnostics for the lowerer/codegen stages.
+
+---
+
+@type TypeKind
+@kind sum
+@variants
+  TyI8 — 8-bit signed integer
+  TyI16 — 16-bit signed integer
+  TyI32 — 32-bit signed integer
+  TyI64 — 64-bit signed integer
+  TyU8 — 8-bit unsigned integer
+  TyU16 — 16-bit unsigned integer
+  TyU32 — 32-bit unsigned integer
+  TyU64 — 64-bit unsigned integer
+  TyF32 — 32-bit float
+  TyF64 — 64-bit float
+  TyBool — Boolean
+  TyStr — String
+  TyChar — Character
+  TyUnit — Unit type ()
+  TyArray — Array type [T]
+  TyFunction — Function type fn(A) -> B
+  TyNamed — Named/user-defined type
+  TyResult — Result type T ! E
+  TyOptional — Optional type T?
+  TyTypeVar — Generic type variable
+  TyTraitObject — Trait object
+  TyTuple — Tuple type
+  TyNever — Never type (diverges)
+  TyUnknown — Unknown / unresolved
+  TyNone — Sentinel
+@purpose Classifies every type in the system. Primitives have dedicated variants; compound types (Array, Function, Result, Optional, Tuple) store sub-type references via TypeInfo fields. TyNone is the sentinel for invalid/missing types at index 0. TyUnknown is used for graceful error recovery when a type cannot be resolved.
+@invariants TyNone only appears at TypeStore index 0. TyNever is assignable to any type (used for diverging expressions like return/panic). TyUnknown is treated as compatible with any type to prevent cascading errors.
+@source_file src/checker/types.aria
+@source_line 14
+
+---
+
+@type TypeInfo
+@kind struct
+@fields
+  kind: TypeKind — Type classification
+  name: str — Type name (for named types, type vars); comma-delimited type IDs for tuples
+  type_id: i64 — Primary associated type ID (element type for arrays, ok type for results, return for functions, inner for optionals)
+  type_id2: i64 — Secondary associated type ID (error type for results only)
+  param_start: i64 — Start index for function parameter types in the TypeStore
+  param_count: i64 — Number of function parameters; also tuple arity for TyTuple
+@purpose Flat representation of a type, avoiding recursive type definitions. All compound types encode their sub-types as integer IDs referencing other TypeStore entries. This design enables the bootstrap compiler to handle the type system without needing recursive data structures.
+@invariants For TyArray: type_id = element type ID. For TyResult: type_id = ok type, type_id2 = error type. For TyOptional: type_id = inner type. For TyTuple: name = comma-delimited type ID string, param_count = arity. For TyFunction: type_id = return type, param_start/param_count index into parameter list.
+@notes Tuples encode element type IDs as a comma-delimited string in the name field (e.g., "1,12,11") because the bootstrap compiler cannot handle recursive/variable-length type representations. This is parsed by _parse_int_from at access time. [src: types.aria:114]
+@source_file src/checker/types.aria
+@source_line 74
+
+---
+
+@type TypeStore
+@kind struct
+@fields
+  types: [TypeInfo] — All registered types
+@purpose Central type repository. Types are identified by their index (i64 ID) in this array. Well-known primitives occupy fixed indices 0-20, user-defined types start at index 21.
+@invariants Index 0 is always TyNone sentinel. Indices 1-14 are primitives (i64, i32, i16, i8, u64, u32, u16, u8, f64, f32, bool, str, char, unit). Index 15 = Never, 16 = Unknown, 17-20 = reserved concurrency types (Chan, Task, ChanSend, ChanRecv). Types are append-only; IDs are stable once assigned.
+@antipatterns Never access store.types directly by index without bounds checking; use store_get which returns the sentinel for out-of-range IDs.
+@source_file src/checker/types.aria
+@source_line 119
+
+---
+
+@type FieldInfo
+@kind struct
+@fields
+  name: str — Field name
+  type_id: i64 — Field type ID
+@purpose Represents a single field in a struct or sum type variant. Used in StructDef.fields and variant field arrays.
+@invariants Index 0 in any FieldInfo array is a sentinel with name="" and type_id=0.
+@source_file src/checker/types.aria
+@source_line 395
+
+---
+
+@type StructDef
+@kind struct
+@fields
+  name: str — Struct or sum type name
+  fields: [FieldInfo] — Struct fields (1-based; index 0 is sentinel)
+  is_sum: bool — Whether this is a sum type
+  variant_names: [str] — Sum type variant names (1-based; index 0 is sentinel)
+  variant_field_counts: [i64] — Fields per variant (1-based)
+  variant_field_names: [str] — Flat list of all variant field names
+  variant_field_types: [i64] — Flat list of all variant field type IDs
+  variant_field_offsets: [i64] — Start offset per variant into flat field lists
+  generic_count: i64 — Number of generic parameters (0-3)
+  generic_name_0: str — First generic parameter name
+  generic_name_1: str — Second generic parameter name
+  generic_name_2: str — Third generic parameter name
+@purpose Unified representation for structs, sum types, newtypes, and generic struct definitions. Sum type variant data uses a flat encoding scheme to avoid nested arrays (which the bootstrap compiler cannot handle).
+@invariants All arrays are 1-based with sentinel at index 0. For sum types: variant_field_offsets[i] points into variant_field_names/variant_field_types for variant i's fields. generic_count is capped at 3. For plain structs, variant_names has only the sentinel.
+@notes The flat encoding of variant fields (counts/names/types/offsets as parallel arrays) is a design constraint from the bootstrap compiler's lack of support for arrays-of-arrays. [src: types.aria:404]
+@source_file src/checker/types.aria
+@source_line 404
+
+---
+
+@type FnSig
+@kind struct
+@fields
+  name: str — Function name
+  param_names: [str] — Parameter names (1-based; index 0 is sentinel)
+  param_types: [i64] — Parameter type IDs (1-based; index 0 is sentinel 0)
+  return_type: i64 — Return type ID
+  error_type: i64 — Error type ID (0 = no error, function is infallible)
+  generic_count: i64 — Number of generic params (0-3)
+  generic_name_0: str — First generic name
+  generic_name_1: str — Second generic name
+  generic_name_2: str — Third generic name
+  generic_bound_0: str — First generic trait bound (supports multi-bounds: "Eq+Hash")
+  generic_bound_1: str — Second generic trait bound
+  generic_bound_2: str — Third generic trait bound
+  token_start: i64 — Token position of declaration (for generic body re-checking)
+  has_io: bool — Has IO effect
+  has_fs: bool — Has FS effect
+  has_net: bool — Has Net effect
+  has_ffi: bool — Has FFI effect
+  has_async: bool — Has Async effect
+@purpose Stores the complete signature of a function including parameter types, return/error types, generic parameters with trait bounds, and declared effects. Used for call-site type checking, generic monomorphization, and effect verification.
+@invariants param_names and param_types are parallel arrays, both 1-based. generic_count capped at 3. Trait bounds use "+" as separator for multi-bounds (e.g., "Eq+Hash+Clone"). error_type=0 means the function cannot fail.
+@notes Effect flags use boolean fields rather than an array because the bootstrap compiler has simpler codegen for booleans. Fs implies Io, Net implies Io (checked by fn_has_effect). [src: types.aria:557]
+@source_file src/checker/types.aria
+@source_line 513
+
+---
+
+@type MonoSpec
+@kind struct
+@fields
+  generic_name: str — Original generic function/type name
+  specialized_name: str — Monomorphized name (e.g., "identity_i64")
+  type_arg_0: i64 — First type argument ID
+  type_arg_1: i64 — Second type argument ID
+  type_arg_2: i64 — Third type argument ID
+@purpose Records a monomorphization specialization, mapping a generic function/type to its concrete instantiation. Used by codegen to emit specialized versions of generic code.
+@invariants specialized_name follows the pattern "basename_typesuffix0_typesuffix1". Sentinel has generic_name="" and specialized_name="".
+@notes Type arguments are capped at 3, matching the generic parameter limit. [src: types.aria:601]
+@source_file src/checker/types.aria
+@source_line 601
+
+---
+
+@type TypeRegistry
+@kind struct
+@fields
+  struct_defs: [StructDef] — All struct/sum type definitions (1-based)
+  fn_sigs: [FnSig] — All function signatures (1-based)
+  mono_specs: [MonoSpec] — Monomorphization records (1-based)
+  deprecated_names: [str] — Deprecated symbol names (1-based)
+  deprecated_msgs: [str] — Deprecation messages (parallel to deprecated_names)
+  cold_names: [str] — Cold-path function names (1-based)
+@purpose Central registry for all type and function definitions discovered during checking. Provides lookup-by-name for structs, functions, monomorphization specs, and annotation metadata. Passed through to codegen as part of CheckResult.
+@invariants All arrays are 1-based with sentinels at index 0. deprecated_names and deprecated_msgs are parallel arrays. Struct type IDs >= TY_STRUCT_BASE map to struct_defs via: index = type_id - TY_STRUCT_BASE + 1.
+@antipatterns Linear search is used for all lookups (reg_find_struct, reg_find_fn, etc.); adequate for compiler-sized programs but would not scale to very large registries.
+@source_file src/checker/types.aria
+@source_line 614
+
+---
+
+@type TraitDef
+@kind struct
+@fields
+  name: str — Trait name
+  method_names: [str] — Required method names (1-based)
+  parent_traits: [str] — Supertrait names (1-based)
+  assoc_type_names: [str] — Associated type names (1-based)
+  default_starts: [i64] — Token start for default method bodies (0 = no default)
+  default_ends: [i64] — Token end for default method bodies
+@purpose Defines a trait's interface: required methods, supertraits, associated types, and default method body locations. Used for trait bound checking and impl validation.
+@invariants All arrays are 1-based with sentinels at index 0. default_starts/default_ends are parallel to method_names.
+@source_file src/checker/traits.aria
+@source_line 13
+
+---
+
+@type ImplDef
+@kind struct
+@fields
+  trait_name: str — Trait being implemented
+  type_name: str — Type implementing the trait
+  assoc_type_names: [str] — Associated type names (1-based)
+  assoc_type_values: [str] — Associated type concrete values (parallel to assoc_type_names)
+@purpose Records that a specific type implements a specific trait. Used for operator trait validation (e.g., does i64 implement Add?) and generic trait bound checking.
+@source_file src/checker/traits.aria
+@source_line 28
+
+---
+
+@type TraitRegistry
+@kind struct
+@fields
+  trait_defs: [TraitDef] — All trait definitions (1-based)
+  impl_defs: [ImplDef] — All trait implementations (1-based)
+@purpose Stores all trait definitions and their implementations. Initialized with built-in traits (Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric, Clone, Debug, Display, Convert, TryConvert, Drop, Send, Share, error categories) and primitive type impls via populate_builtins.
+@invariants All arrays are 1-based with sentinels at index 0. Built-in traits and primitive impls are always present after populate_builtins.
+@source_file src/checker/traits.aria
+@source_line 43
+
+---
+
+@type Checker
+@kind struct
+@fields
+  tokens: [Token] — Token stream from lexer
+  pos: i64 — Current token position
+  store: TypeStore — Type store (grows as new types are encountered)
+  registry: TypeRegistry — Type/function registry
+  treg: TraitRegistry — Trait registry
+  diagnostics: DiagnosticBag — Accumulated diagnostics (errors and warnings)
+  table: SymbolTable — Symbol table from resolver (used for mutability checks)
+  current_scope: i64 — Active scope ID
+  file: str — Source file path (for diagnostic spans)
+  pool: NodePool — AST node pool from parser
+  env_names: [str] — Type environment variable names (parallel array, 1-based)
+  env_types: [i64] — Type environment variable type IDs (parallel array)
+  env_scopes: [i64] — Type environment variable scope IDs (parallel array)
+  fn_return_type: i64 — Current function's declared return type
+  fn_error_type: i64 — Current function's declared error type (0 = infallible)
+  fn_current_name: str — Current function name (for effect checking and Self resolution)
+  in_loop: bool — Whether currently inside a loop (for break/continue validation)
+@purpose Immutable state object threaded through all checking functions. Every mutation creates a new Checker via _cset_* helper functions. This functional-update pattern avoids mutable state issues and works within bootstrap compiler constraints.
+@invariants env_names, env_types, and env_scopes are parallel arrays. fn_return_type/fn_error_type are set per-function via _cset_fn_ctx. fn_current_name is "_entry" for entry blocks and "_test" for test blocks (these bypass effect checking).
+@notes The _cset_* helpers (_cset_pos, _cset_store, _cset_reg, _cset_diag, _cset_fn_ctx, _cset_treg, _cset_loop) each create a full copy of the Checker with one field changed. This is verbose but necessary because the bootstrap compiler cannot generate struct-update syntax. [src: checker.aria:97-144]
+@source_file src/checker/checker.aria
+@source_line 18
+
+---
+
+@type CE
+@kind struct
+@fields
+  c: Checker — Updated checker state
+  type_id: i64 — Type of checked expression
+@purpose Return type for all expression-checking functions. Bundles the updated Checker state with the inferred type ID of the expression. This is the checker's equivalent of a (state, value) pair from a state monad.
+@notes Every _check_* function that processes an expression returns CE. The caller must use ce.c (updated checker) for subsequent operations and ce.type_id for the expression's type.
+@source_file src/checker/checker.aria
+@source_line 42
+
+---
+
+@type CheckResult
+@kind struct
+@fields
+  store: TypeStore — Final type store with all discovered types
+  registry: TypeRegistry — Final type/function registry with all signatures and monomorphizations
+  treg: TraitRegistry — Final trait registry with all trait definitions and implementations
+  diagnostics: DiagnosticBag — All check diagnostics (errors and warnings)
+@purpose Output of the check() function. Contains everything the lowerer and codegen need: the complete type store, all struct/function definitions, trait information, and any diagnostic messages.
+@workflow Consumed by the lowerer (src/lowerer/) to generate IR, and by codegen for emitting native code. The diagnostics are rendered to the user if any errors are present.
+@source_file src/checker/checker.aria
+@source_line 49
+
+---
+
+@const TY_NONE
+@value_type i64
+@value 0
+@purpose Sentinel type ID representing an invalid/missing type. Always at TypeStore index 0.
+@source_file src/checker/types.aria
+@source_line 126
+
+---
+
+@const TY_I64
+@value_type i64
+@value 1
+@purpose Well-known type ID for i64. Default integer literal type in Aria.
+@source_file src/checker/types.aria
+@source_line 127
+
+---
+
+@const TY_I32
+@value_type i64
+@value 2
+@purpose Well-known type ID for i32.
+@source_file src/checker/types.aria
+@source_line 128
+
+---
+
+@const TY_I16
+@value_type i64
+@value 3
+@purpose Well-known type ID for i16.
+@source_file src/checker/types.aria
+@source_line 129
+
+---
+
+@const TY_I8
+@value_type i64
+@value 4
+@purpose Well-known type ID for i8.
+@source_file src/checker/types.aria
+@source_line 130
+
+---
+
+@const TY_U64
+@value_type i64
+@value 5
+@purpose Well-known type ID for u64.
+@source_file src/checker/types.aria
+@source_line 131
+
+---
+
+@const TY_U32
+@value_type i64
+@value 6
+@purpose Well-known type ID for u32.
+@source_file src/checker/types.aria
+@source_line 132
+
+---
+
+@const TY_U16
+@value_type i64
+@value 7
+@purpose Well-known type ID for u16.
+@source_file src/checker/types.aria
+@source_line 133
+
+---
+
+@const TY_U8
+@value_type i64
+@value 8
+@purpose Well-known type ID for u8.
+@source_file src/checker/types.aria
+@source_line 134
+
+---
+
+@const TY_F64
+@value_type i64
+@value 9
+@purpose Well-known type ID for f64. Default float literal type in Aria.
+@source_file src/checker/types.aria
+@source_line 135
+
+---
+
+@const TY_F32
+@value_type i64
+@value 10
+@purpose Well-known type ID for f32.
+@source_file src/checker/types.aria
+@source_line 136
+
+---
+
+@const TY_BOOL
+@value_type i64
+@value 11
+@purpose Well-known type ID for bool.
+@source_file src/checker/types.aria
+@source_line 137
+
+---
+
+@const TY_STR
+@value_type i64
+@value 12
+@purpose Well-known type ID for str.
+@source_file src/checker/types.aria
+@source_line 138
+
+---
+
+@const TY_CHAR
+@value_type i64
+@value 13
+@purpose Well-known type ID for char.
+@source_file src/checker/types.aria
+@source_line 139
+
+---
+
+@const TY_UNIT
+@value_type i64
+@value 14
+@purpose Well-known type ID for unit type. Default return type for functions without explicit return.
+@source_file src/checker/types.aria
+@source_line 140
+
+---
+
+@const TY_NEVER
+@value_type i64
+@value 15
+@purpose Well-known type ID for the Never type. Represents diverging expressions (return, panic). Assignable to any type via is_assignable.
+@source_file src/checker/types.aria
+@source_line 141
+
+---
+
+@const TY_UNKNOWN
+@value_type i64
+@value 16
+@purpose Well-known type ID for unknown/unresolved types. Used for error recovery: treated as compatible with any type to prevent cascading type errors.
+@source_file src/checker/types.aria
+@source_line 142
+
+---
+
+@const TY_CHAN
+@value_type i64
+@value 17
+@purpose Reserved type ID for channel type (concurrency). Not used in self-hosting bootstrap but reserved to prevent ID collisions.
+@source_file src/checker/types.aria
+@source_line 143
+
+---
+
+@const TY_TASK
+@value_type i64
+@value 18
+@purpose Reserved type ID for task type (concurrency).
+@source_file src/checker/types.aria
+@source_line 144
+
+---
+
+@const TY_CHAN_SEND
+@value_type i64
+@value 19
+@purpose Reserved type ID for send-only channel half.
+@source_file src/checker/types.aria
+@source_line 145
+
+---
+
+@const TY_CHAN_RECV
+@value_type i64
+@value 20
+@purpose Reserved type ID for receive-only channel half.
+@source_file src/checker/types.aria
+@source_line 146
+
+---
+
+@const TY_STRUCT_BASE
+@value_type i64
+@value 10000
+@purpose Offset for registry-based struct type IDs. Type IDs >= TY_STRUCT_BASE index into TypeRegistry.struct_defs via: index = type_id - TY_STRUCT_BASE + 1. This separates the TypeStore ID space from the registry's struct definition space.
+@notes User-defined types in the TypeStore start at index 21, but their struct definitions in the registry use IDs starting at 10000+. The two ID spaces serve different purposes: TypeStore IDs for type checking, struct_defs indices for field/variant access.
+@source_file src/checker/types.aria
+@source_line 151
+
+---
+
+@fn type_kind_name
+@sig (k: TypeKind) -> str
+@purpose Converts a TypeKind variant to its string representation. Used for type comparison (via tk_eq) and display formatting. Returns lowercase for primitives ("i64", "bool"), capitalized for compound types ("Array", "Named", "Result").
+@source_file src/checker/types.aria
+@source_line 41
+
+---
+
+@fn tk_eq
+@sig (a: TypeKind, b: TypeKind) -> bool
+@purpose Compares two TypeKind values for equality by comparing their string names. This workaround exists because the bootstrap compiler cannot generate direct sum-type variant comparison.
+@notes Uses string comparison rather than direct variant equality. [src: types.aria:70]
+@source_file src/checker/types.aria
+@source_line 69
+
+---
+
+@fn type_info_name
+@sig (ti: TypeInfo) -> str
+@purpose Accessor for TypeInfo.name. Exists to avoid field-name ambiguity in the bootstrap compiler's codegen when multiple structs share a "name" field.
+@source_file src/checker/types.aria
+@source_line 90
+
+---
+
+@fn type_info_kind
+@sig (ti: TypeInfo) -> TypeKind
+@purpose Accessor for TypeInfo.kind. Same disambiguation purpose as type_info_name.
+@source_file src/checker/types.aria
+@source_line 91
+
+---
+
+@fn type_info_type_id
+@sig (ti: TypeInfo) -> i64
+@purpose Accessor for TypeInfo.type_id. Same disambiguation purpose as type_info_name.
+@source_file src/checker/types.aria
+@source_line 92
+
+---
+
+@fn mk_array_type
+@sig (elem_id: i64) -> TypeInfo
+@purpose Creates a TypeInfo for an array type [T] with elem_id as the element type.
+@post Returns TypeInfo with kind=TyArray, type_id=elem_id.
+@source_file src/checker/types.aria
+@source_line 94
+
+---
+
+@fn mk_fn_type
+@sig (return_id: i64, param_start: i64, param_count: i64) -> TypeInfo
+@purpose Creates a TypeInfo for a function type fn(A,...) -> B.
+@post Returns TypeInfo with kind=TyFunction, type_id=return_id.
+@source_file src/checker/types.aria
+@source_line 97
+
+---
+
+@fn mk_named_type
+@sig (name: str) -> TypeInfo
+@purpose Creates a TypeInfo for a user-defined named type (struct, sum type, newtype, alias).
+@post Returns TypeInfo with kind=TyNamed, name=name.
+@source_file src/checker/types.aria
+@source_line 100
+
+---
+
+@fn mk_result_type
+@sig (ok_id: i64, err_id: i64) -> TypeInfo
+@purpose Creates a TypeInfo for a Result type T ! E.
+@post Returns TypeInfo with kind=TyResult, type_id=ok_id, type_id2=err_id.
+@source_file src/checker/types.aria
+@source_line 103
+
+---
+
+@fn mk_optional_type
+@sig (inner_id: i64) -> TypeInfo
+@purpose Creates a TypeInfo for an Optional type T?.
+@post Returns TypeInfo with kind=TyOptional, type_id=inner_id.
+@source_file src/checker/types.aria
+@source_line 106
+
+---
+
+@fn mk_typevar
+@sig (name: str) -> TypeInfo
+@purpose Creates a TypeInfo for a generic type variable (e.g., T, U). Registered in the TypeStore during generic function/struct signature parsing and resolved to concrete types during monomorphization.
+@post Returns TypeInfo with kind=TyTypeVar, name=name.
+@source_file src/checker/types.aria
+@source_line 109
+
+---
+
+@fn mk_tuple_type
+@sig (elem_ids: str, arity: i64) -> TypeInfo
+@purpose Creates a TypeInfo for a tuple type. Element type IDs are encoded as a comma-delimited string in the name field because the bootstrap compiler cannot handle variable-length type lists.
+@pre elem_ids is a comma-delimited string of integer type IDs (e.g., "1,12,11").
+@post Returns TypeInfo with kind=TyTuple, name=elem_ids, param_count=arity.
+@source_file src/checker/types.aria
+@source_line 114
+
+---
+
+@fn new_store
+@sig () -> TypeStore
+@purpose Creates a new TypeStore pre-populated with all well-known types at fixed indices 0-20: sentinel, 14 primitives, Never, Unknown, and 4 reserved concurrency types.
+@post TypeStore has exactly 21 entries. Indices match TY_* constants.
+@effects Allocates the initial types array.
+@source_file src/checker/types.aria
+@source_line 153
+
+---
+
+@fn store_add
+@sig (store: TypeStore, info: TypeInfo) -> TypeStore
+@purpose Appends a new type to the store and returns the updated store. The new type's ID is store.types.len() - 1 after the append (retrievable via store_last_id).
+@post New store has one additional entry. The type ID is the new last index.
+@source_file src/checker/types.aria
+@source_line 180
+
+---
+
+@fn store_get
+@sig (store: TypeStore, id: i64) -> TypeInfo
+@purpose Retrieves a TypeInfo by its ID (index). Returns the TyNone sentinel for out-of-range IDs, providing safe access without panicking.
+@post Returns the type at the given index, or sentinel TypeInfo{kind: TyNone} for invalid IDs.
+@source_file src/checker/types.aria
+@source_line 183
+
+---
+
+@fn store_last_id
+@sig (store: TypeStore) -> i64
+@purpose Returns the ID (index) of the most recently added type. Typically called immediately after store_add to capture the new type's ID.
+@source_file src/checker/types.aria
+@source_line 190
+
+---
+
+@fn store_size
+@sig (store: TypeStore) -> i64
+@purpose Returns the total number of types in the store.
+@source_file src/checker/types.aria
+@source_line 192
+
+---
+
+@fn format_type
+@sig (store: TypeStore, id: i64) -> str
+@purpose Formats a type ID as a human-readable string for diagnostic messages. Handles all TypeKind variants: primitives return their name, arrays return "[T]", results return "T ! E", optionals return "T?", tuples return "(ids)", functions return "fn(...)", trait objects return "dyn Trait".
+@pre id should be a valid TypeStore index; returns "<none>" for out-of-range.
+@source_file src/checker/types.aria
+@source_line 196
+
+---
+
+@fn is_numeric
+@sig (store: TypeStore, id: i64) -> bool
+@purpose Tests whether a type is any numeric type (all integer types + f32 + f64).
+@source_file src/checker/types.aria
+@source_line 221
+
+---
+
+@fn is_integer
+@sig (store: TypeStore, id: i64) -> bool
+@purpose Tests whether a type is any integer type (i8-i64, u8-u64). Excludes floats.
+@source_file src/checker/types.aria
+@source_line 229
+
+---
+
+@fn is_float
+@sig (store: TypeStore, id: i64) -> bool
+@purpose Tests whether a type is f32 or f64.
+@source_file src/checker/types.aria
+@source_line 236
+
+---
+
+@fn types_equal
+@sig (store: TypeStore, a: i64, b: i64) -> bool
+@purpose Structural type equality check. Returns true if both IDs reference the same type. For simple types, ID equality suffices. For compound types (Array, Result, Optional, Tuple), recurses into sub-types. Named types compare by name string.
+@notes Short-circuits on ID equality (a == b). Returns false for any ID <= 0 or out of range. Tuple equality compares the encoded name strings and arity. [src: types.aria:243]
+@source_file src/checker/types.aria
+@source_line 242
+
+---
+
+@fn substitute_type
+@sig (store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64) -> i64
+@purpose Substitutes a type variable with a concrete type within a type expression. Used during monomorphization to replace generic type parameters (e.g., T -> i64). Currently only handles direct TypeVar matches and array element substitution.
+@notes Limited substitution depth: only handles direct type variables and one level of array wrapping. The caller is responsible for adding any newly created types to the store. [src: types.aria:264]
+@source_file src/checker/types.aria
+@source_line 264
+
+---
+
+@fn tuple_elem_type
+@sig (store: TypeStore, tuple_id: i64, index: i64) -> i64
+@purpose Extracts the Nth element type ID from a tuple type's comma-delimited name field. Used for tuple destructuring and numeric field access (.0, .1, etc.).
+@pre tuple_id must reference a TyTuple type. index must be 0-based and < param_count.
+@post Returns the type ID at position index, or TY_UNKNOWN if out of range or not a tuple.
+@notes Parses the comma-delimited string using _parse_int_from for each segment. [src: types.aria:278]
+@source_file src/checker/types.aria
+@source_line 278
+
+---
+
+@fn is_assignable
+@sig (store: TypeStore, src: i64, dst: i64) -> bool
+@purpose Checks whether a value of type src can be assigned to a location of type dst. Uses structural equality, plus special rules: TY_NEVER is assignable to any type (diverging expressions), and TY_UNKNOWN is compatible with anything (error recovery).
+@notes This is more permissive than types_equal: it handles Never and Unknown coercion. Does not handle subtyping or trait-based conversions. [src: types.aria:354]
+@source_file src/checker/types.aria
+@source_line 354
+
+---
+
+@fn resolve_type_name
+@sig (store: TypeStore, name: str) -> i64
+@purpose Resolves a type name string to its TypeStore ID. Checks primitives first by name, then linear-scans user-defined types starting at index 21 (after reserved slots). Matches both TyNamed and TyTypeVar entries.
+@post Returns the type ID if found, or TY_UNKNOWN if the name is not registered.
+@notes Linear scan over the type store. Primitives use fast string comparison. [src: types.aria:363]
+@source_file src/checker/types.aria
+@source_line 363
+
+---
+
+@fn new_struct_def
+@sig (name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef
+@purpose Creates a new non-generic StructDef with the given fields and variant names. Used for plain structs and simple sum types without variant data.
+@post generic_count is 0. variant_field_* arrays contain only sentinels.
+@source_file src/checker/types.aria
+@source_line 431
+
+---
+
+@fn new_generic_struct_def
+@sig (name: str, fields: [FieldInfo], gc: i64, gn0: str, gn1: str, gn2: str) -> StructDef
+@purpose Creates a generic struct definition with up to 3 type parameters. The struct is not instantiated until monomorphization creates a specialized version.
+@post is_sum is false. variant_field_* arrays contain only sentinels.
+@source_file src/checker/types.aria
+@source_line 437
+
+---
+
+@fn struct_is_generic
+@sig (def: StructDef) -> bool
+@purpose Tests whether a StructDef has generic type parameters (generic_count > 0).
+@source_file src/checker/types.aria
+@source_line 443
+
+---
+
+@fn new_sum_def
+@sig (name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf_types: [i64], vf_offsets: [i64]) -> StructDef
+@purpose Creates a sum type definition with full variant data encoding. The flat arrays encode per-variant field names and types using an offset table.
+@pre All arrays must be 1-based with sentinels at index 0. vf_offsets[i] must be a valid index into vf_names/vf_types.
+@post is_sum is true, generic_count is 0.
+@source_file src/checker/types.aria
+@source_line 445
+
+---
+
+@fn variant_data_count
+@sig (def: StructDef, tag: i64) -> i64
+@purpose Returns the number of data fields for a sum type variant by its 1-based tag index. Returns 0 for out-of-range tags.
+@source_file src/checker/types.aria
+@source_line 452
+
+---
+
+@fn variant_field_name
+@sig (def: StructDef, tag: i64, fi: i64) -> str
+@purpose Returns the field name for a variant's field at index fi (0-based). Uses the flat encoding: looks up the offset for the variant tag, then indexes into the flat field names array.
+@source_file src/checker/types.aria
+@source_line 458
+
+---
+
+@fn variant_field_type
+@sig (def: StructDef, tag: i64, fi: i64) -> i64
+@purpose Returns the field type ID for a variant's field at index fi (0-based). Parallel to variant_field_name.
+@source_file src/checker/types.aria
+@source_line 467
+
+---
+
+@fn sum_alloc_size
+@sig (def: StructDef) -> i64
+@purpose Computes the total allocation slots needed for a sum type value: 1 slot for the tag + the maximum number of data slots across all variants. Strings take 2 slots (pointer + length). Used by codegen for memory layout.
+@notes String fields (type_id == 12, which is TY_STR) are counted as 2 slots. [src: types.aria:488]
+@source_file src/checker/types.aria
+@source_line 477
+
+---
+
+@fn sum_has_data
+@sig (def: StructDef) -> bool
+@purpose Checks if any variant in a sum type carries data fields. Used to determine whether the sum type needs data storage beyond the tag.
+@source_file src/checker/types.aria
+@source_line 502
+
+---
+
+@fn new_fn_sig
+@sig (name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig
+@purpose Creates a non-generic function signature with no effects.
+@post generic_count=0, all effect flags false, token_start=0.
+@source_file src/checker/types.aria
+@source_line 541
+
+---
+
+@fn new_generic_fn_sig
+@sig (name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64, gc: i64, gn0: str, gn1: str, gn2: str, gb0: str, gb1: str, gb2: str, tstart: i64) -> FnSig
+@purpose Creates a generic function signature with type parameters, trait bounds, and a token_start position for re-checking the body during monomorphization.
+@post All effect flags default to false; must be set separately via sig_set_effects.
+@source_file src/checker/types.aria
+@source_line 547
+
+---
+
+@fn fn_is_generic
+@sig (sig: FnSig) -> bool
+@purpose Tests whether a function signature has generic type parameters. Generic function bodies are skipped during pass 3 and instead checked per-specialization.
+@source_file src/checker/types.aria
+@source_line 553
+
+---
+
+@fn fn_has_effect
+@sig (sig: FnSig, effect: str) -> bool
+@purpose Checks if a function's declared effects include the given effect. Implements the effect hierarchy: Fs implies Io, Net implies Io. So a function with [Fs] automatically satisfies an [Io] requirement.
+@pre effect is one of "Io", "Fs", "Net", "Ffi", "Async".
+@source_file src/checker/types.aria
+@source_line 557
+
+---
+
+@fn fn_is_pure
+@sig (sig: FnSig) -> bool
+@purpose Returns true if the function has no declared effects (all effect flags are false). Pure functions cannot call effectful functions.
+@source_file src/checker/types.aria
+@source_line 566
+
+---
+
+@fn sig_set_effects
+@sig (sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e: bool) -> FnSig
+@purpose Returns a copy of the FnSig with effect flags updated. Used during pass 2 when parsing effect annotations on function declarations.
+@source_file src/checker/types.aria
+@source_line 590
+
+---
+
+@fn new_registry
+@sig () -> TypeRegistry
+@purpose Creates an empty TypeRegistry with sentinel entries at index 0 in all arrays.
+@source_file src/checker/types.aria
+@source_line 624
+
+---
+
+@fn reg_add_struct
+@sig (reg: TypeRegistry, def: StructDef) -> TypeRegistry
+@purpose Appends a struct/sum type definition to the registry. Returns a new registry (immutable update).
+@source_file src/checker/types.aria
+@source_line 634
+
+---
+
+@fn reg_add_fn
+@sig (reg: TypeRegistry, sig: FnSig) -> TypeRegistry
+@purpose Appends a function signature to the registry. Returns a new registry.
+@source_file src/checker/types.aria
+@source_line 637
+
+---
+
+@fn reg_add_mono
+@sig (reg: TypeRegistry, spec: MonoSpec) -> TypeRegistry
+@purpose Appends a monomorphization record to the registry. Returns a new registry.
+@source_file src/checker/types.aria
+@source_line 640
+
+---
+
+@fn reg_add_deprecated
+@sig (reg: TypeRegistry, name: str, msg: str) -> TypeRegistry
+@purpose Records that a symbol is deprecated with the given message. Warnings are emitted at call sites during pass 3.
+@source_file src/checker/types.aria
+@source_line 643
+
+---
+
+@fn reg_add_cold
+@sig (reg: TypeRegistry, name: str) -> TypeRegistry
+@purpose Marks a function as cold-path (rarely executed). Used by codegen for optimization hints.
+@source_file src/checker/types.aria
+@source_line 647
+
+---
+
+@fn reg_is_deprecated
+@sig (reg: TypeRegistry, name: str) -> bool
+@purpose Checks if a symbol name has been marked as deprecated. Linear scan over deprecated_names.
+@source_file src/checker/types.aria
+@source_line 651
+
+---
+
+@fn reg_deprecated_msg
+@sig (reg: TypeRegistry, name: str) -> str
+@purpose Returns the deprecation message for a symbol, or "" if not deprecated.
+@source_file src/checker/types.aria
+@source_line 660
+
+---
+
+@fn reg_is_cold
+@sig (reg: TypeRegistry, name: str) -> bool
+@purpose Checks if a function name has been marked as cold-path. Linear scan over cold_names.
+@source_file src/checker/types.aria
+@source_line 669
+
+---
+
+@fn reg_find_mono
+@sig (reg: TypeRegistry, specialized_name: str) -> MonoSpec
+@purpose Looks up a monomorphization record by its specialized name. Returns sentinel (specialized_name="") if not found. Used to avoid creating duplicate specializations.
+@source_file src/checker/types.aria
+@source_line 678
+
+---
+
+@fn reg_find_struct
+@sig (reg: TypeRegistry, name: str) -> StructDef
+@purpose Looks up a struct/sum type definition by name. Returns sentinel (name="") if not found. Linear scan over struct_defs.
+@source_file src/checker/types.aria
+@source_line 689
+
+---
+
+@fn reg_find_fn
+@sig (reg: TypeRegistry, name: str) -> FnSig
+@purpose Looks up a function signature by name. Returns sentinel (name="") if not found. Linear scan over fn_sigs.
+@source_file src/checker/types.aria
+@source_line 700
+
+---
+
+@fn reg_find_field
+@sig (reg: TypeRegistry, struct_name: str, field_name: str) -> FieldInfo
+@purpose Looks up a field by name within a struct. First finds the struct by name, then scans its fields array. Returns sentinel (name="") if either the struct or field is not found.
+@source_file src/checker/types.aria
+@source_line 711
+
+---
+
+@fn reg_has_variant
+@sig (reg: TypeRegistry, struct_name: str, variant_name: str) -> bool
+@purpose Checks if a named sum type has a specific variant. Returns false if the struct is not found or is not a sum type.
+@source_file src/checker/types.aria
+@source_line 724
+
+---
+
+@fn new_trait_registry
+@sig () -> TraitRegistry
+@purpose Creates an empty TraitRegistry with sentinel entries at index 0.
+@source_file src/checker/traits.aria
+@source_line 48
+
+---
+
+@fn treg_add_trait
+@sig (reg: TraitRegistry, def: TraitDef) -> TraitRegistry
+@purpose Appends a trait definition to the registry. Returns a new registry.
+@source_file src/checker/traits.aria
+@source_line 54
+
+---
+
+@fn treg_add_impl
+@sig (reg: TraitRegistry, def: ImplDef) -> TraitRegistry
+@purpose Records that a type implements a trait. Returns a new registry. Used both for built-in impls (populate_builtins) and user-declared derives/impls.
+@source_file src/checker/traits.aria
+@source_line 57
+
+---
+
+@fn treg_find_trait
+@sig (reg: TraitRegistry, name: str) -> TraitDef
+@purpose Looks up a trait definition by name. Returns sentinel (name="") if not found. Linear scan.
+@source_file src/checker/traits.aria
+@source_line 60
+
+---
+
+@fn treg_has_impl
+@sig (reg: TraitRegistry, type_name: str, trait_name: str) -> bool
+@purpose Checks if a type has an implementation of a given trait. Used for operator validation (does this type support +?), generic bound checking, and derives verification. Linear scan over impl_defs.
+@source_file src/checker/traits.aria
+@source_line 71
+
+---
+
+@fn populate_builtins
+@sig (reg: TraitRegistry) -> TraitRegistry
+@purpose Initializes the trait registry with all built-in traits and their primitive type implementations. Registers 20 traits (Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric, Clone, Debug, Display, Convert, TryConvert, Drop, Send, Share, Transient, Permanent, UserFault, SystemFault, Retryable) and impls for all integer types, floats, bool, str, and char.
+@effects Creates ~100+ ImplDef entries for primitive trait implementations.
+@notes Integer types get full numeric impls (Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric). Floats get the same minus Hash. Bool gets Eq+Hash. Str gets Eq+Ord+Hash+Add. All primitives get Send+Share. [src: traits.aria:112-194]
+@source_file src/checker/traits.aria
+@source_line 112
+
+---
+
+@fn op_requires_trait
+@sig (op: str) -> str
+@purpose Maps a binary operator to its required trait. Arithmetic operators map to Add/Sub/Mul/Div/Mod, comparison operators map to Eq or Ord. Returns "" for operators that don't require traits (logical, bitwise).
+@post Returns trait name string or "" if no trait is required.
+@source_file src/checker/traits.aria
+@source_line 199
+
+---
+
+@fn type_supports_op
+@sig (treg: TraitRegistry, store: TypeStore, type_id: i64, op: str) -> bool
+@purpose Checks whether a type supports a given binary operator. Logical operators (&&, ||) require bool. Bitwise operators (&, |, ^, <<, >>) require integers. Trait-based operators (+, -, *, /, %, ==, !=, <, >, <=, >=) check for the corresponding trait impl.
+@notes Returns true for unknown operators (trait_name == "") to avoid false negatives. [src: traits.aria:222]
+@source_file src/checker/traits.aria
+@source_line 211
+
+---
+
+@fn binary_result_type
+@sig (store: TypeStore, left: i64, op: str) -> i64
+@purpose Determines the result type of a binary operation. Comparison and logical operators always produce bool. Arithmetic and bitwise operators produce the same type as the left operand.
+@source_file src/checker/traits.aria
+@source_line 228
+
+---
+
+@fn check
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult
+@calls [new_store, new_registry, new_trait_registry, populate_builtins, _pass1_types, _pass2_fns, _pass3_bodies]
+@purpose Main entry point for the type checker. Runs three sequential passes over the DeclIndex: (1) register all type/enum declarations, (2) register all function signatures, trait declarations, and constants, (3) check all function/impl/entry/test bodies for type correctness. Returns the complete CheckResult for downstream compilation stages.
+@pre tokens must be the complete token stream. index must be a valid DeclIndex from the resolver. pool must contain AST nodes from the parser. table must be the resolved SymbolTable.
+@post CheckResult.diagnostics contains all type errors and warnings. CheckResult.store/registry/treg contain the full type information for codegen.
+@effects Accumulates diagnostics. Registers monomorphization specializations on-demand during pass 3.
+@workflow Called from the compiler's main pipeline after lexing, parsing, and resolution. Its output (CheckResult) feeds into the lowerer and codegen.
+@notes The three-pass architecture ensures forward references work: a function can reference a type declared later in the file (registered in pass 1) and call a function declared later (registered in pass 2). Generic function bodies are skipped in pass 3 and checked per-specialization when monomorphization is triggered by a call site. Effect violations use per-effect warning codes E0300 (Io), E0301 (Fs), E0302 (Net), E0303 (Ffi), E0304 (Async) for both user-declared and builtin function calls. [src: checker.aria:3107-3160]
+@source_file src/checker/checker.aria
+@source_line 4057

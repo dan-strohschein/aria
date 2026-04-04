@@ -272,12 +272,20 @@ fn _resolve_stdlib_files(files: [str]) -> [str] {
                 si = si + 1
             }
             if already == false {
-                lib_path := _stdlib_path(aria_home, mod_name)
-                // Check if file exists by trying to read it
-                content := _ariaReadFile(lib_path)
-                if content.len() > 0 {
-                    extra = extra.append(lib_path)
+                // Try local lib/<module>.aria first (works in dev without ARIA_HOME)
+                local_path := "lib/" + mod_name + ".aria"
+                local_content := _ariaReadFile(local_path)
+                if local_content.len() > 0 {
+                    extra = extra.append(local_path)
                     seen = seen.append(mod_name)
+                } else if aria_home != "/usr/local/lib/aria" {
+                    // Only try ARIA_HOME if it was explicitly set
+                    lib_path := _stdlib_path(aria_home, mod_name)
+                    content := _ariaReadFile(lib_path)
+                    if content.len() > 0 {
+                        extra = extra.append(lib_path)
+                        seen = seen.append(mod_name)
+                    }
                 }
             }
             mi = mi + 1
@@ -523,8 +531,7 @@ fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     }
 
     // Run the test binary
-    _ariaExec(output)
-    0
+    return _ariaExec(output)
 }
 
 // --- Explain command ---
@@ -644,8 +651,7 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
         return 1
     }
     // Run the bench binary
-    _ariaExec(output)
-    0
+    return _ariaExec(output)
 }
 
 // --- Entry point ---

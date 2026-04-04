@@ -1,0 +1,1072 @@
+@module codegen
+@lang aria
+@aid_version 0.2
+@purpose IR lowering, LLVM IR generation, ARM64 emission, and Mach-O linking
+@depends [lexer, parser, resolver, checker, diagnostic]
+
+---
+
+@type IrOp
+@kind sum
+@variants
+  OpConst — Integer constant
+  OpConstStr — String constant reference
+  OpAdd — Integer addition
+  OpSub — Integer subtraction
+  OpMul — Integer multiplication
+  OpDiv — Integer division
+  OpMod — Integer modulo
+  OpNeg — Integer negation
+  OpEq — Equality comparison
+  OpNeq — Inequality comparison
+  OpLt — Less than
+  OpGt — Greater than
+  OpLte — Less than or equal
+  OpGte — Greater than or equal
+  OpAnd — Logical AND
+  OpOr — Logical OR
+  OpNot — Logical NOT
+  OpBitAnd — Bitwise AND
+  OpBitOr — Bitwise OR
+  OpBitXor — Bitwise XOR
+  OpShl — Shift left
+  OpShr — Shift right
+  OpCall — Direct function call
+  OpCallIndirect — Indirect function call (closures)
+  OpFnRef — Function reference (for closures)
+  OpRet — Return with value
+  OpRetVoid — Return void
+  OpArg — Function argument reference
+  OpLocal — Local variable reference
+  OpStore — Store to local
+  OpLoad — Load from local
+  OpFieldGet — Struct field read
+  OpFieldSet — Struct field write
+  OpAlloc — Heap allocation
+  OpArrayNew — Create new array
+  OpArrayGet — Array element read
+  OpArraySet — Array element write
+  OpArrayLen — Array length
+  OpArrayAppend — Array append
+  OpStrLen — String length
+  OpStrConcat — String concatenation
+  OpStrEq — String equality
+  OpStrCharAt — Character at index
+  OpStrSubstring — Substring extraction
+  OpStrContains — String contains check
+  OpStrStartsWith — String starts-with check
+  OpStrEndsWith — String ends-with check
+  OpStrIndexOf — String index-of
+  OpStrTrim — String trim
+  OpStrReplace — String replace
+  OpStrToLower — String to lowercase
+  OpStrToUpper — String to uppercase
+  OpStrSplit — String split
+  OpIntToStr — Integer to string conversion
+  OpStrToInt — String to integer conversion
+  OpMapNew — Create new map
+  OpMapSet — Map set key-value
+  OpMapGet — Map get by key
+  OpMapContains — Map contains key check
+  OpMapLen — Map length
+  OpMapKeys — Map keys
+  OpSetNew — Create new set
+  OpSetAdd — Set add element
+  OpSetContains — Set contains check
+  OpSetLen — Set length
+  OpSetValues — Set values
+  OpSetRemove — Set remove element
+  OpJump — Unconditional jump
+  OpBranchTrue — Branch if true
+  OpBranchFalse — Branch if false
+  OpLabel — Label definition
+  OpTraitObject — Create trait object
+  OpVtableCall — Virtual dispatch call
+  OpArraySlice — Array slice operation
+  OpNop — No operation
+@source_file src/codegen/ir.aria
+@source_line 11
+
+---
+
+@type IrInst
+@kind struct
+@fields
+  op: IrOp — Operation code
+  dest: i64 — Destination temp register
+  arg1: i64 — First argument (temp or immediate)
+  arg2: i64 — Second argument
+  s1: str — String argument (function names, string constants)
+  type_id: i64 — Type ID for typed operations
+@source_file src/codegen/ir.aria
+@source_line 168
+
+---
+
+@type IrFunc
+@kind struct
+@fields
+  name: str — Function name
+  param_count: i64 — Number of parameters
+  insts: [IrInst] — Instruction list
+  return_type: i64 — Return type ID
+  local_count: i64 — Number of local variables
+  temp_types: [i64] — Type IDs for temporaries
+@source_file src/codegen/ir.aria
+@source_line 185
+
+---
+
+@type IrModule
+@kind struct
+@fields
+  funcs: [IrFunc] — All functions
+  string_constants: [str] — String constant pool
+  entry_func: str — Entry function name
+  test_count: i64 — Number of test functions
+  test_names: [str] — Test function names
+  extern_names: [str] — External function names
+  extern_param_counts: [i64] — External function param counts
+  extern_ret_types: [str] — External function return types
+  extern_libs: [str] — External library names
+@source_file src/codegen/ir.aria
+@source_line 219
+
+---
+
+@type Lowerer
+@kind struct
+@fields
+  tokens: [Token] — Token stream
+  pos: i64 — Current position
+  store: TypeStore — Type store from checker
+  registry: TypeRegistry — Type registry from checker
+  treg: TraitRegistry — Trait registry from checker
+  pool: NodePool — AST node pool
+  table: SymbolTable — Symbol table
+  file: str — Source file path
+  module: IrModule — Module being built
+  current_func: IrFunc — Current function being lowered
+  temp_counter: i64 — Next temp register ID
+  label_counter: i64 — Next label ID
+  env_names: [str] — Variable name environment
+  env_slots: [i64] — Variable slot mapping
+  loop_start: i64 — Current loop start label
+  loop_end: i64 — Current loop end label
+@source_file src/codegen/lower.aria
+@source_line 19
+
+---
+
+@type LT
+@kind struct
+@fields
+  l: Lowerer — Updated lowerer state
+  temp: i64 — Result temp register
+@source_file src/codegen/lower.aria
+@source_line 67
+
+---
+
+@type LlvmGen
+@kind struct
+@fields
+  parts: [str] — LLVM IR text parts
+  label_counter: i64 — Next label ID
+  last_was_term: bool — Whether last instruction was a terminator
+@source_file src/codegen/llvm.aria
+@source_line 176
+
+---
+
+@type LT_label
+@kind struct
+@fields
+  g: LlvmGen — Updated generator state
+  id: i64 — Generated label ID
+@source_file src/codegen/llvm.aria
+@source_line 198
+
+---
+
+@type Emitter
+@kind struct
+@fields
+  code: [i64] — Machine code words
+  label_offsets: [i64] — Label to code offset mapping
+  pending_branches: [PendingBranch] — Unresolved branches
+  pending_calls: [PendingCall] — Unresolved call targets
+  pending_strings: [PendingString] — Unresolved string references
+  frame_size: i64 — Stack frame size
+  temp_count: i64 — Number of temp registers
+@source_file src/codegen/emit.aria
+@source_line 11
+
+---
+
+@type PendingBranch
+@kind struct
+@fields
+  code_index: i64 — Position in code array
+  label_id: i64 — Target label
+  is_cond: bool — Whether conditional
+  cond: i64 — Condition code
+  reg: i64 — Register for CBZ/CBNZ
+  is_cbz: bool — CBZ vs CBNZ
+@source_file src/codegen/emit.aria
+@source_line 21
+
+---
+
+@type PendingCall
+@kind struct
+@fields
+  code_index: i64 — Position in code array
+  target_name: str — Target function name
+@source_file src/codegen/emit.aria
+@source_line 33
+
+---
+
+@type PendingString
+@kind struct
+@fields
+  code_index: i64 — Position in code array
+  string_id: i64 — String constant ID
+  dest_temp: i64 — Destination temp
+  str_len: i64 — String length
+@source_file src/codegen/emit.aria
+@source_line 41
+
+---
+
+@type RuntimeFunc
+@kind struct
+@fields
+  name: str — Runtime function name
+  code: [i64] — ARM64 machine code
+@source_file src/codegen/runtime.aria
+@source_line 14
+
+---
+
+@fn generate_from_source
+@sig (source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check, lower, generate_llvm_ir]
+@source_file src/codegen/codegen.aria
+@source_line 19
+
+---
+
+@fn generate_from_module
+@sig (m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 49
+
+---
+
+@fn generate_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@calls [generate_from_source]
+@source_file src/codegen/codegen.aria
+@source_line 121
+
+---
+
+@fn check_sources
+@sig (files: [str]) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check]
+@source_file src/codegen/codegen.aria
+@source_line 165
+
+---
+
+@fn generate_tests_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 194
+
+---
+
+@fn generate_bench_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
+@source_file src/codegen/codegen.aria
+@source_line 228
+
+---
+
+@fn ir_op_name
+@sig (op: IrOp) -> str
+@source_file src/codegen/ir.aria
+@source_line 88
+
+---
+
+@fn new_inst
+@sig (op: IrOp, dest: i64, arg1: i64, arg2: i64, s1: str, tid: i64) -> IrInst
+@source_file src/codegen/ir.aria
+@source_line 180
+
+---
+
+@fn new_ir_func
+@sig (name: str, param_count: i64, ret_type: i64) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 197
+
+---
+
+@fn func_add_inst
+@sig (f: IrFunc, inst: IrInst) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 200
+
+---
+
+@fn func_set_locals
+@sig (f: IrFunc, count: i64) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 205
+
+---
+
+@fn func_set_temp_types
+@sig (f: IrFunc, types: [i64]) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 210
+
+---
+
+@fn func_inst_count
+@sig (f: IrFunc) -> i64
+@source_file src/codegen/ir.aria
+@source_line 215
+
+---
+
+@fn new_ir_module
+@sig () -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 232
+
+---
+
+@fn mod_add_func
+@sig (m: IrModule, f: IrFunc) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 236
+
+---
+
+@fn mod_add_string
+@sig (m: IrModule, s: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 240
+
+---
+
+@fn mod_add_extern
+@sig (m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 244
+
+---
+
+@fn mod_set_entry
+@sig (m: IrModule, name: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 249
+
+---
+
+@fn mod_add_test
+@sig (m: IrModule, name: str) -> IrModule
+@source_file src/codegen/ir.aria
+@source_line 253
+
+---
+
+@fn mod_find_string
+@sig (m: IrModule, s: str) -> i64
+@source_file src/codegen/ir.aria
+@source_line 257
+
+---
+
+@fn mod_func_count
+@sig (m: IrModule) -> i64
+@source_file src/codegen/ir.aria
+@source_line 266
+
+---
+
+@fn mod_find_func
+@sig (m: IrModule, name: str) -> IrFunc
+@source_file src/codegen/ir.aria
+@source_line 268
+
+---
+
+@fn _lower_derive_display
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11036
+
+---
+
+@fn _lower_derive_default
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11080
+
+---
+
+@fn _lower_derive_ord
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11113
+
+---
+
+@fn _lower_derive_hash
+@sig (l: Lowerer, def: StructDef) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11204
+
+---
+
+@fn lower
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
+@source_file src/codegen/lower.aria
+@source_line 11247
+
+---
+
+@fn lower_for_tests
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
+@source_file src/codegen/lower.aria
+@source_line 11258
+
+---
+
+@fn generate_llvm_ir
+@sig (m: IrModule) -> str
+@source_file src/codegen/llvm.aria
+@source_line 265
+
+---
+
+@fn generate_llvm_ir_to_file
+@sig (m: IrModule, path: str) -> unit
+@source_file src/codegen/llvm.aria
+@source_line 272
+
+---
+
+@fn new_emitter
+@sig () -> Emitter
+@source_file src/codegen/emit.aria
+@source_line 51
+
+---
+
+@fn emit_function
+@sig (f: IrFunc) -> Emitter
+@calls [new_emitter]
+@source_file src/codegen/emit.aria
+@source_line 133
+
+---
+
+@fn emitter_code
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 767
+
+---
+
+@fn emitter_code_size
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 769
+
+---
+
+@fn emitter_call_count
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 771
+
+---
+
+@fn emitter_call_offsets
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 773
+
+---
+
+@fn emitter_string_count
+@sig (e: Emitter) -> i64
+@source_file src/codegen/emit.aria
+@source_line 783
+
+---
+
+@fn emitter_string_code_indices
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 785
+
+---
+
+@fn emitter_string_ids
+@sig (e: Emitter) -> [i64]
+@source_file src/codegen/emit.aria
+@source_line 795
+
+---
+
+@fn emitter_call_targets
+@sig (e: Emitter) -> [str]
+@source_file src/codegen/emit.aria
+@source_line 805
+
+---
+
+@fn enc_movz
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 84
+
+---
+
+@fn enc_movk
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 91
+
+---
+
+@fn enc_movn
+@sig (rd: i64, imm16: i64, hw: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 97
+
+---
+
+@fn enc_add_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 104
+
+---
+
+@fn enc_sub_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 111
+
+---
+
+@fn enc_cmp_imm
+@sig (rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 117
+
+---
+
+@fn enc_add_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 128
+
+---
+
+@fn enc_sub_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 134
+
+---
+
+@fn enc_cmp_reg
+@sig (rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 140
+
+---
+
+@fn enc_mul
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 146
+
+---
+
+@fn enc_sdiv
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 152
+
+---
+
+@fn enc_mov_reg
+@sig (rd: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 158
+
+---
+
+@fn enc_and_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 164
+
+---
+
+@fn enc_orr_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 170
+
+---
+
+@fn enc_eor_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 176
+
+---
+
+@fn enc_lsl_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 182
+
+---
+
+@fn enc_asr_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 188
+
+---
+
+@fn enc_neg
+@sig (rd: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 194
+
+---
+
+@fn enc_cset
+@sig (rd: i64, cond: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 201
+
+---
+
+@fn enc_b
+@sig (offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 213
+
+---
+
+@fn enc_bl
+@sig (offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 220
+
+---
+
+@fn enc_b_cond
+@sig (cond: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 227
+
+---
+
+@fn enc_cbz
+@sig (rt: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 234
+
+---
+
+@fn enc_cbnz
+@sig (rt: i64, offset: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 240
+
+---
+
+@fn enc_ret
+@sig () -> i64
+@source_file src/codegen/arm64.aria
+@source_line 246
+
+---
+
+@fn enc_br
+@sig (rn: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 249
+
+---
+
+@fn enc_blr
+@sig (rn: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 255
+
+---
+
+@fn enc_ldr_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 266
+
+---
+
+@fn enc_str_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 273
+
+---
+
+@fn enc_stp_pre
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 281
+
+---
+
+@fn enc_ldp_post
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 289
+
+---
+
+@fn enc_stp_offset
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 296
+
+---
+
+@fn enc_ldp_offset
+@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 303
+
+---
+
+@fn enc_ldrb_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 309
+
+---
+
+@fn enc_strb_imm
+@sig (rt: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 315
+
+---
+
+@fn enc_adrp
+@sig (rd: i64, imm21: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 326
+
+---
+
+@fn enc_adr
+@sig (rd: i64, imm21: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 335
+
+---
+
+@fn enc_nop
+@sig () -> i64
+@source_file src/codegen/arm64.aria
+@source_line 347
+
+---
+
+@fn enc_svc
+@sig (imm16: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 350
+
+---
+
+@fn enc_brk
+@sig (imm16: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 356
+
+---
+
+@fn enc_ldrb_post
+@sig (rt: i64, rn: i64, imm9: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 367
+
+---
+
+@fn enc_strb_post
+@sig (rt: i64, rn: i64, imm9: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 374
+
+---
+
+@fn enc_subs_imm
+@sig (rd: i64, rn: i64, imm12: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 381
+
+---
+
+@fn enc_subs_reg
+@sig (rd: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 387
+
+---
+
+@fn enc_ldr_reg
+@sig (rt: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 394
+
+---
+
+@fn enc_str_reg
+@sig (rt: i64, rn: i64, rm: i64) -> i64
+@source_file src/codegen/arm64.aria
+@source_line 400
+
+---
+
+@fn enc_load_imm64
+@sig (rd: i64, val: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 410
+
+---
+
+@fn enc_prologue
+@sig (frame_size: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 439
+
+---
+
+@fn enc_epilogue
+@sig (frame_size: i64) -> [i64]
+@source_file src/codegen/arm64.aria
+@source_line 453
+
+---
+
+@fn build_macho
+@sig (code_words: [i64], cstring_data: [i64], entry_offset: i64) -> [i64]
+@source_file src/codegen/macho.aria
+@source_line 542
+
+---
+
+@fn buf_size
+@sig (buf: [i64]) -> i64
+@source_file src/codegen/macho.aria
+@source_line 803
+
+---
+
+@fn build_exit_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 25
+
+---
+
+@fn build_write_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 35
+
+---
+
+@fn build_println_str_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 48
+
+---
+
+@fn build_alloc_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 95
+
+---
+
+@fn build_memcpy_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 130
+
+---
+
+@fn build_read_file_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 148
+
+---
+
+@fn build_write_binary_file_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 249
+
+---
+
+@fn build_int_to_str_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 355
+
+---
+
+@fn build_args_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 450
+
+---
+
+@fn build_args_init_runtime
+@sig () -> RuntimeFunc
+@source_file src/codegen/runtime.aria
+@source_line 463
+
+---
+
+@fn build_runtime_funcs
+@sig () -> [RuntimeFunc]
+@calls [build_exit_runtime, build_write_runtime, build_println_str_runtime, build_alloc_runtime, build_memcpy_runtime, build_read_file_runtime, build_write_binary_file_runtime, build_int_to_str_runtime, build_args_runtime, build_args_init_runtime]
+@source_file src/codegen/runtime.aria
+@source_line 563
+
+---
+
+@const X0
+@value_type i64
+@value 0
+@source_file src/codegen/arm64.aria
+@source_line 11
+
+---
+
+@const X29
+@value_type i64
+@value 29
+@source_file src/codegen/arm64.aria
+@source_line 40
+
+---
+
+@const X30
+@value_type i64
+@value 30
+@source_file src/codegen/arm64.aria
+@source_line 41
+
+---
+
+@const XZR
+@value_type i64
+@value 31
+@source_file src/codegen/arm64.aria
+@source_line 42
+
+---
+
+@const SP
+@value_type i64
+@value 31
+@source_file src/codegen/arm64.aria
+@source_line 43
+
+---
+
+@const COND_EQ
+@value_type i64
+@value 0
+@source_file src/codegen/arm64.aria
+@source_line 47
+
+---
+
+@const COND_NE
+@value_type i64
+@value 1
+@source_file src/codegen/arm64.aria
+@source_line 48
+
+---
+
+@const COND_GE
+@value_type i64
+@value 10
+@source_file src/codegen/arm64.aria
+@source_line 57
+
+---
+
+@const COND_LT
+@value_type i64
+@value 11
+@source_file src/codegen/arm64.aria
+@source_line 58
+
+---
+
+@const COND_GT
+@value_type i64
+@value 12
+@source_file src/codegen/arm64.aria
+@source_line 59
+
+---
+
+@const COND_LE
+@value_type i64
+@value 13
+@source_file src/codegen/arm64.aria
+@source_line 60
+
+---
+
+@const MH_MAGIC_64
+@value_type i64
+@value 0xFEEDFACF
+@source_file src/codegen/macho.aria
+@source_line 11
+
+---
+
+@const PAGE_SIZE
+@value_type i64
+@value 16384
+@source_file src/codegen/macho.aria
+@source_line 37

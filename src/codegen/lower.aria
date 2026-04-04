@@ -1716,7 +1716,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = _lemit(ll, new_inst(OpArrayAppend, arr_nt.temp, arr_nt.temp, elem.temp, "", elem_tid))
             ai = ai + 1
         }
-        // Track array type: 13 for [str], or store-based array type for others
+        // Track array type: 13 for [str]
         if arr_elem_type == 12 {
             ll = _lset_type(ll, arr_nt.temp, 13)
         }
@@ -2299,6 +2299,185 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
     }
 
     // --- Built-in functions ---
+
+    // assertEqual(a, b) — compare and print both values on failure
+    if name == "assertEqual" && node.list_count == 2 {
+        arg_a := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+        ll = arg_a.l
+        arg_b := _lower_expr_node(ll, pool_get(ll.pool, node.list_start + 1).c0)
+        ll = arg_b.l
+        at := _lget_type(ll, arg_a.temp)
+        ok_lbl := _lnew_label(ll)
+        ll = ok_lbl.l
+        if at == 12 {
+            eq_nt := _lnew_temp(ll)
+            ll = eq_nt.l
+            ll = _lemit(ll, new_inst(OpStrEq, eq_nt.temp, arg_a.temp, arg_b.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, eq_nt.temp, ok_lbl.temp, "", 0))
+        } else {
+            eq_nt := _lnew_temp(ll)
+            ll = eq_nt.l
+            ll = _lemit(ll, new_inst(OpEq, eq_nt.temp, arg_a.temp, arg_b.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, eq_nt.temp, ok_lbl.temp, "", 0))
+        }
+        // Print "assertEqual failed: a != b"
+        msg := _lower_string_const(ll, "assertEqual failed")
+        ll = msg.l
+        pnt := _lnew_temp(ll)
+        ll = pnt.l
+        ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+        exit_nt := _lnew_temp(ll)
+        ll = exit_nt.l
+        ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: 0}
+    }
+
+    // assertOk(result) — assert result is Ok (tag == 0)
+    if name == "assertOk" && node.list_count == 1 {
+        arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+        ll = arg.l
+        tag_nt := _lnew_temp(ll)
+        ll = tag_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, arg.temp, 0, "_tag", 0))
+        ok_lbl := _lnew_label(ll)
+        ll = ok_lbl.l
+        zero_nt := _lnew_temp(ll)
+        ll = zero_nt.l
+        ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+        cmp_nt := _lnew_temp(ll)
+        ll = cmp_nt.l
+        ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, tag_nt.temp, zero_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, ok_lbl.temp, "", 0))
+        msg := _lower_string_const(ll, "assertOk failed: got Err")
+        ll = msg.l
+        pnt := _lnew_temp(ll)
+        ll = pnt.l
+        ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+        exit_nt := _lnew_temp(ll)
+        ll = exit_nt.l
+        ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: 0}
+    }
+
+    // assertErr(result) — assert result is Err (tag != 0)
+    if name == "assertErr" && node.list_count == 1 {
+        arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+        ll = arg.l
+        tag_nt := _lnew_temp(ll)
+        ll = tag_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, arg.temp, 0, "_tag", 0))
+        ok_lbl := _lnew_label(ll)
+        ll = ok_lbl.l
+        zero_nt := _lnew_temp(ll)
+        ll = zero_nt.l
+        ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+        cmp_nt := _lnew_temp(ll)
+        ll = cmp_nt.l
+        ll = _lemit(ll, new_inst(OpNeq, cmp_nt.temp, tag_nt.temp, zero_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, ok_lbl.temp, "", 0))
+        msg := _lower_string_const(ll, "assertErr failed: got Ok")
+        ll = msg.l
+        pnt := _lnew_temp(ll)
+        ll = pnt.l
+        ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+        exit_nt := _lnew_temp(ll)
+        ll = exit_nt.l
+        ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: 0}
+    }
+
+    // assertNear(a, b, epsilon) — float approximate equality
+    if name == "assertNear" && node.list_count == 3 {
+        arg_a := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+        ll = arg_a.l
+        arg_b := _lower_expr_node(ll, pool_get(ll.pool, node.list_start + 1).c0)
+        ll = arg_b.l
+        arg_eps := _lower_expr_node(ll, pool_get(ll.pool, node.list_start + 2).c0)
+        ll = arg_eps.l
+        // |a - b| <= epsilon
+        diff := _lnew_temp(ll)
+        ll = diff.l
+        ll = _lemit(ll, new_inst(OpSub, diff.temp, arg_a.temp, arg_b.temp, "", 0))
+        // abs: if diff < 0, negate
+        neg_lbl := _lnew_label(ll)
+        ll = neg_lbl.l
+        done_lbl := _lnew_label(ll)
+        ll = done_lbl.l
+        abs_nt := _lnew_temp(ll)
+        ll = abs_nt.l
+        zero_nt := _lnew_temp(ll)
+        ll = zero_nt.l
+        ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+        lt_nt := _lnew_temp(ll)
+        ll = lt_nt.l
+        ll = _lemit(ll, new_inst(OpLt, lt_nt.temp, diff.temp, zero_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, lt_nt.temp, neg_lbl.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, abs_nt.temp, diff.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, done_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, neg_lbl.temp, 0, "", 0))
+        neg_diff := _lnew_temp(ll)
+        ll = neg_diff.l
+        ll = _lemit(ll, new_inst(OpNeg, neg_diff.temp, diff.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, abs_nt.temp, neg_diff.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, done_lbl.temp, 0, "", 0))
+        // Check abs <= epsilon
+        ok_lbl := _lnew_label(ll)
+        ll = ok_lbl.l
+        le_nt := _lnew_temp(ll)
+        ll = le_nt.l
+        ll = _lemit(ll, new_inst(OpLte, le_nt.temp, abs_nt.temp, arg_eps.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, le_nt.temp, ok_lbl.temp, "", 0))
+        msg := _lower_string_const(ll, "assertNear failed: values not within epsilon")
+        ll = msg.l
+        pnt := _lnew_temp(ll)
+        ll = pnt.l
+        ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+        exit_nt := _lnew_temp(ll)
+        ll = exit_nt.l
+        ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: 0}
+    }
+
+    // dbg(expr) — print [file:line] value, return value
+    if name == "dbg" && node.list_count == 1 {
+        arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+        ll = arg.l
+        at := _lget_type(ll, arg.temp)
+        // Build prefix "[file:line] "
+        prefix := "[" + ll.file + "] "
+        prefix_res := _lower_string_const(ll, prefix)
+        ll = prefix_res.l
+        // Convert value to string
+        if at == 12 {
+            // String: print prefix + value directly
+            cat := _lnew_str_temp(ll)
+            ll = cat.l
+            ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, prefix_res.temp, arg.temp, "", 0))
+            pnt := _lnew_temp(ll)
+            ll = pnt.l
+            ll = _lemit(ll, new_inst(OpCall, pnt.temp, cat.temp, 2, "_aria_println_str", 0))
+        } else {
+            // Numeric: convert to string first
+            vstr := _lnew_str_temp(ll)
+            ll = vstr.l
+            ll = _lemit(ll, new_inst(OpIntToStr, vstr.temp, arg.temp, 0, "", 0))
+            cat := _lnew_str_temp(ll)
+            ll = cat.l
+            ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, prefix_res.temp, vstr.temp, "", 0))
+            pnt := _lnew_temp(ll)
+            ll = pnt.l
+            ll = _lemit(ll, new_inst(OpCall, pnt.temp, cat.temp, 2, "_aria_println_str", 0))
+        }
+        return LT{l: ll, temp: arg.temp}
+    }
 
     if name == "println" || name == "print" || name == "eprintln" {
         if node.list_count > 0 {
@@ -3436,6 +3615,8 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
             ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 6)
         } else if dc == 7 {
             ll = _lset_defer(ll, dc + 1, defer_start, defer_end, 7)
+        } else {
+            println("error: too many deferred expressions (max 8 per function)")
         }
         return ll
     }
@@ -4499,10 +4680,14 @@ fn _lower_expr(l: Lowerer) -> LT {
                 inner := _lnew_temp(ll)
                 ll = inner.l
                 ll = _lemit(ll, new_inst(OpFieldGet, inner.temp, left, 1, "_val", 0))
-                // Access field on inner value
-                inner_type := _lget_type(ll, left)
-                // For now, use _field_index_any to find the field
-                fidx := _field_index_any(ll.registry, field)
+                // Access field on inner value — resolve Optional's inner struct type
+                opt_type := _lget_type(ll, left)
+                opt_info := store_get(ll.store, opt_type)
+                inner_sname := _struct_name_for_type(ll.store, ll.registry, type_info_type_id(opt_info))
+                mut fidx := 0
+                if inner_sname != "" {
+                    fidx = _field_index(ll.registry, inner_sname, field)
+                }
                 field_val := _lnew_temp(ll)
                 ll = field_val.l
                 ll = _lemit(ll, new_inst(OpFieldGet, field_val.temp, inner.temp, fidx, field, 0))
@@ -5200,6 +5385,128 @@ fn _lower_primary(l: Lowerer) -> LT {
                 return LT{l: ll, temp: nt_temp}
             }
             // Built-in function calls
+            if name == "dbg" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                at := _lget_type(ll, arg.temp)
+                prefix := "[" + ll.file + "] "
+                prefix_res := _lower_string_const(ll, prefix)
+                ll = prefix_res.l
+                if at == 12 {
+                    cat := _lnew_str_temp(ll)
+                    ll = cat.l
+                    ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, prefix_res.temp, arg.temp, "", 0))
+                    pnt := _lnew_temp(ll)
+                    ll = pnt.l
+                    ll = _lemit(ll, new_inst(OpCall, pnt.temp, cat.temp, 2, "_aria_println_str", 0))
+                } else {
+                    vstr := _lnew_str_temp(ll)
+                    ll = vstr.l
+                    ll = _lemit(ll, new_inst(OpIntToStr, vstr.temp, arg.temp, 0, "", 0))
+                    cat := _lnew_str_temp(ll)
+                    ll = cat.l
+                    ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, prefix_res.temp, vstr.temp, "", 0))
+                    pnt := _lnew_temp(ll)
+                    ll = pnt.l
+                    ll = _lemit(ll, new_inst(OpCall, pnt.temp, cat.temp, 2, "_aria_println_str", 0))
+                }
+                return LT{l: ll, temp: arg.temp}
+            }
+            if name == "assertEqual" {
+                ll = _ladv(ll)
+                arg_a := _lower_expr(ll)
+                ll = arg_a.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+                arg_b := _lower_expr(ll)
+                ll = arg_b.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                at := _lget_type(ll, arg_a.temp)
+                ok_lbl := _lnew_label(ll)
+                ll = ok_lbl.l
+                if at == 12 {
+                    eq_nt := _lnew_temp(ll)
+                    ll = eq_nt.l
+                    ll = _lemit(ll, new_inst(OpStrEq, eq_nt.temp, arg_a.temp, arg_b.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchTrue, 0, eq_nt.temp, ok_lbl.temp, "", 0))
+                } else {
+                    eq_nt := _lnew_temp(ll)
+                    ll = eq_nt.l
+                    ll = _lemit(ll, new_inst(OpEq, eq_nt.temp, arg_a.temp, arg_b.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchTrue, 0, eq_nt.temp, ok_lbl.temp, "", 0))
+                }
+                msg := _lower_string_const(ll, "assertEqual failed")
+                ll = msg.l
+                pnt := _lnew_temp(ll)
+                ll = pnt.l
+                ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+                exit_nt := _lnew_temp(ll)
+                ll = exit_nt.l
+                ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+                return LT{l: ll, temp: 0}
+            }
+            if name == "assertOk" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, arg.temp, 0, "_tag", 0))
+                ok_lbl := _lnew_label(ll)
+                ll = ok_lbl.l
+                zero_nt := _lnew_temp(ll)
+                ll = zero_nt.l
+                ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, tag_nt.temp, zero_nt.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, ok_lbl.temp, "", 0))
+                msg := _lower_string_const(ll, "assertOk failed: got Err")
+                ll = msg.l
+                pnt := _lnew_temp(ll)
+                ll = pnt.l
+                ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+                exit_nt := _lnew_temp(ll)
+                ll = exit_nt.l
+                ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+                return LT{l: ll, temp: 0}
+            }
+            if name == "assertErr" {
+                ll = _ladv(ll)
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, arg.temp, 0, "_tag", 0))
+                ok_lbl := _lnew_label(ll)
+                ll = ok_lbl.l
+                zero_nt := _lnew_temp(ll)
+                ll = zero_nt.l
+                ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpNeq, cmp_nt.temp, tag_nt.temp, zero_nt.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, ok_lbl.temp, "", 0))
+                msg := _lower_string_const(ll, "assertErr failed: got Ok")
+                ll = msg.l
+                pnt := _lnew_temp(ll)
+                ll = pnt.l
+                ll = _lemit(ll, new_inst(OpCall, pnt.temp, msg.temp, 2, "_aria_println_str", 0))
+                exit_nt := _lnew_temp(ll)
+                ll = exit_nt.l
+                ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+                return LT{l: ll, temp: 0}
+            }
             if name == "println" || name == "print" || name == "eprintln" {
                 ll = _ladv(ll)  // skip (
                 arg := _lower_expr(ll)
@@ -9867,9 +10174,17 @@ fn _lower_match(l: Lowerer) -> LT {
     while peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "NEWLINE" {
         peek_pos = peek_pos + 1
     }
-    // First token in arm should be a pattern name
+    // First token in arm should be a pattern name (or binding for named patterns)
     if peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "IDENT" {
-        first_pat := ll.tokens[peek_pos].text
+        mut first_pat := ll.tokens[peek_pos].text
+        // If followed by @, this is a named pattern (binding @ pattern) — skip to actual pattern
+        mut at_pos := peek_pos + 1
+        if at_pos < ll.tokens.len() && ll.tokens[at_pos].text == "@" {
+            pat_pos := at_pos + 1
+            if pat_pos < ll.tokens.len() && token_name(ll.tokens[pat_pos].kind) == "IDENT" {
+                first_pat = ll.tokens[pat_pos].text
+            }
+        }
         if first_pat != "_" {
             pat_parent := _variant_parent(ll.registry, first_pat)
             if pat_parent.name != "" && sum_has_data(pat_parent) {
@@ -10878,6 +11193,38 @@ fn _lower_derives(l: Lowerer) -> Lowerer {
                     ll = _lower_derive_debug(ll, def)
                 }
             }
+            // Check if this type has derived Display
+            if treg_has_impl(ll.treg, def.name, "Display") {
+                display_name := def.name + "_display"
+                existing := reg_find_fn(ll.registry, display_name)
+                if existing.name == "" {
+                    ll = _lower_derive_display(ll, def)
+                }
+            }
+            // Check if this type has derived Default
+            if treg_has_impl(ll.treg, def.name, "Default") {
+                default_name := def.name + "_default"
+                existing := reg_find_fn(ll.registry, default_name)
+                if existing.name == "" {
+                    ll = _lower_derive_default(ll, def)
+                }
+            }
+            // Check if this type has derived Ord
+            if treg_has_impl(ll.treg, def.name, "Ord") {
+                cmp_name := def.name + "_cmp"
+                existing := reg_find_fn(ll.registry, cmp_name)
+                if existing.name == "" {
+                    ll = _lower_derive_ord(ll, def)
+                }
+            }
+            // Check if this type has derived Hash
+            if treg_has_impl(ll.treg, def.name, "Hash") {
+                hash_name := def.name + "_hash"
+                existing := reg_find_fn(ll.registry, hash_name)
+                if existing.name == "" {
+                    ll = _lower_derive_hash(ll, def)
+                }
+            }
         }
         si = si + 1
     }
@@ -11020,6 +11367,271 @@ fn _lower_derive_debug(l: Lowerer, def: StructDef) -> Lowerer {
     ll
 }
 
+fn _lower_derive_display(l: Lowerer, def: StructDef) -> Lowerer {
+    // Generate: fn TypeName_display(self) -> str = "field1_val, field2_val, ..."
+    // Like Debug but without type name prefix and field names
+    fname := def.name + "_display"
+    mut ll := _lset_func(l, new_ir_func(fname, 1, 0))
+    self_nt := _lnew_temp(ll)
+    ll = self_nt.l
+    ll = _lemit(ll, new_inst(OpArg, self_nt.temp, 0, 0, "", 0))
+    // Build from empty string
+    empty_res := _lower_string_const(ll, "")
+    ll = empty_res.l
+    mut cur_str := empty_res.temp
+    mut fi := 1
+    mut slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+        if fi > 1 {
+            sep_res := _lower_string_const(ll, ", ")
+            ll = sep_res.l
+            cat_nt := _lnew_str_temp(ll)
+            ll = cat_nt.l
+            ll = _lemit(ll, new_inst(OpStrConcat, cat_nt.temp, cur_str, sep_res.temp, "", 0))
+            cur_str = cat_nt.temp
+        }
+        if ft == 12 {
+            fval := _lnew_str_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp + 1, self_nt.temp, slot + 1, "", 0))
+            cat3 := _lnew_str_temp(ll)
+            ll = cat3.l
+            ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cur_str, fval.temp, "", 0))
+            cur_str = cat3.temp
+            slot = slot + 2
+        } else {
+            fval := _lnew_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            fstr := _lnew_str_temp(ll)
+            ll = fstr.l
+            ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, fval.temp, 0, "", 0))
+            cat3 := _lnew_str_temp(ll)
+            ll = cat3.l
+            ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cur_str, fstr.temp, "", 0))
+            cur_str = cat3.temp
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+    ll = _lemit(ll, new_inst(OpRet, 0, cur_str, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
+fn _lower_derive_default(l: Lowerer, def: StructDef) -> Lowerer {
+    // Generate: fn TypeName_default() -> TypeName = zero-initialized struct
+    fname := def.name + "_default"
+    mut ll := _lset_func(l, new_ir_func(fname, 0, 0))
+    alloc_size := def.fields.len() - 1
+    new_nt := _lnew_temp(ll)
+    ll = new_nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, new_nt.temp, alloc_size, 0, def.name, 0))
+    // Zero-initialize each field
+    mut fi := 1
+    mut slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+        if ft == 12 {
+            // String: empty string
+            empty_res := _lower_string_const(ll, "")
+            ll = empty_res.l
+            ll = _lemit(ll, new_inst(OpFieldSet, new_nt.temp, empty_res.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, new_nt.temp, empty_res.temp + 1, slot + 1, "", 0))
+            slot = slot + 2
+        } else {
+            // Numeric: zero
+            zero_nt := _lnew_temp(ll)
+            ll = zero_nt.l
+            ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, new_nt.temp, zero_nt.temp, slot, fld.name, 0))
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+    ll = _lemit(ll, new_inst(OpRet, 0, new_nt.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
+fn _lower_derive_ord(l: Lowerer, def: StructDef) -> Lowerer {
+    // Generate: fn TypeName_cmp(self, other) -> i64 = field-by-field comparison (-1, 0, 1)
+    fname := def.name + "_cmp"
+    mut ll := _lset_func(l, new_ir_func(fname, 2, 0))
+    self_nt := _lnew_temp(ll)
+    ll = self_nt.l
+    ll = _lemit(ll, new_inst(OpArg, self_nt.temp, 0, 0, "", 0))
+    other_nt := _lnew_temp(ll)
+    ll = other_nt.l
+    ll = _lemit(ll, new_inst(OpArg, other_nt.temp, 1, 0, "", 0))
+    // Compare fields lexicographically: for each field, if a < b return -1, if a > b return 1, else continue
+    mut fi := 1
+    mut slot := 0
+    end_lbl := _lnew_temp(ll)
+    ll = end_lbl.l
+    result_nt := _lnew_temp(ll)
+    ll = result_nt.l
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+        if ft == 12 {
+            // String comparison — use strcmp-like approach (compare lengths and content)
+            // For simplicity, use string equality + length comparison
+            a_str := _lnew_str_temp(ll)
+            ll = a_str.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_str.temp, self_nt.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, a_str.temp + 1, self_nt.temp, slot + 1, "", 0))
+            b_str := _lnew_str_temp(ll)
+            ll = b_str.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_str.temp, other_nt.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, b_str.temp + 1, other_nt.temp, slot + 1, "", 0))
+            // If not equal, compare by length as approximation
+            eq_nt := _lnew_temp(ll)
+            ll = eq_nt.l
+            ll = _lemit(ll, new_inst(OpStrEq, eq_nt.temp, a_str.temp, b_str.temp, "", 0))
+            skip_lbl := _lnew_temp(ll)
+            ll = skip_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, skip_lbl.temp, eq_nt.temp, "", 0))
+            // Not equal: compare lengths
+            lt_nt := _lnew_temp(ll)
+            ll = lt_nt.l
+            ll = _lemit(ll, new_inst(OpLt, lt_nt.temp, a_str.temp + 1, b_str.temp + 1, "", 0))
+            neg_lbl := _lnew_temp(ll)
+            ll = neg_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, neg_lbl.temp, lt_nt.temp, "", 0))
+            // a >= b in length, return 1
+            one_nt := _lnew_temp(ll)
+            ll = one_nt.l
+            ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, one_nt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            // a < b in length, return -1
+            ll = _lemit(ll, new_inst(OpLabel, 0, neg_lbl.temp, 0, "", 0))
+            neg_one := _lnew_temp(ll)
+            ll = neg_one.l
+            ll = _lemit(ll, new_inst(OpConst, neg_one.temp, 0 - 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, neg_one.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, skip_lbl.temp, 0, "", 0))
+            slot = slot + 2
+        } else {
+            // Numeric: compare a_field vs b_field
+            a_val := _lnew_temp(ll)
+            ll = a_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_val.temp, self_nt.temp, slot, fld.name, 0))
+            b_val := _lnew_temp(ll)
+            ll = b_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_val.temp, other_nt.temp, slot, fld.name, 0))
+            // if a < b, return -1
+            lt_nt := _lnew_temp(ll)
+            ll = lt_nt.l
+            ll = _lemit(ll, new_inst(OpLt, lt_nt.temp, a_val.temp, b_val.temp, "", 0))
+            neg_lbl := _lnew_temp(ll)
+            ll = neg_lbl.l
+            skip1_lbl := _lnew_temp(ll)
+            ll = skip1_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, neg_lbl.temp, lt_nt.temp, "", 0))
+            // if a > b, return 1
+            gt_nt := _lnew_temp(ll)
+            ll = gt_nt.l
+            ll = _lemit(ll, new_inst(OpGt, gt_nt.temp, a_val.temp, b_val.temp, "", 0))
+            pos_lbl := _lnew_temp(ll)
+            ll = pos_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, pos_lbl.temp, gt_nt.temp, "", 0))
+            // Equal — continue to next field
+            ll = _lemit(ll, new_inst(OpJump, 0, skip1_lbl.temp, 0, "", 0))
+            // a < b path
+            ll = _lemit(ll, new_inst(OpLabel, 0, neg_lbl.temp, 0, "", 0))
+            neg_one := _lnew_temp(ll)
+            ll = neg_one.l
+            ll = _lemit(ll, new_inst(OpConst, neg_one.temp, 0 - 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, neg_one.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            // a > b path
+            ll = _lemit(ll, new_inst(OpLabel, 0, pos_lbl.temp, 0, "", 0))
+            one_nt := _lnew_temp(ll)
+            ll = one_nt.l
+            ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, one_nt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            // Continue
+            ll = _lemit(ll, new_inst(OpLabel, 0, skip1_lbl.temp, 0, "", 0))
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+    // All fields equal — return 0
+    zero_nt := _lnew_temp(ll)
+    ll = zero_nt.l
+    ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, zero_nt.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpRet, 0, result_nt.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
+fn _lower_derive_hash(l: Lowerer, def: StructDef) -> Lowerer {
+    // Generate: fn TypeName_hash(self) -> i64 = XOR of field hashes
+    fname := def.name + "_hash"
+    mut ll := _lset_func(l, new_ir_func(fname, 1, 0))
+    self_nt := _lnew_temp(ll)
+    ll = self_nt.l
+    ll = _lemit(ll, new_inst(OpArg, self_nt.temp, 0, 0, "", 0))
+    // Start with hash = 0
+    hash_nt := _lnew_temp(ll)
+    ll = hash_nt.l
+    ll = _lemit(ll, new_inst(OpConst, hash_nt.temp, 0, 0, "", 0))
+    mut fi := 1
+    mut slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+        if ft == 12 {
+            // String: use length as hash (simple)
+            flen := _lnew_temp(ll)
+            ll = flen.l
+            ll = _lemit(ll, new_inst(OpFieldGet, flen.temp, self_nt.temp, slot + 1, "", 0))
+            // hash = hash * 31 + len
+            mul_nt := _lnew_temp(ll)
+            ll = mul_nt.l
+            c31 := _lnew_temp(ll)
+            ll = c31.l
+            ll = _lemit(ll, new_inst(OpConst, c31.temp, 31, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpMul, mul_nt.temp, hash_nt.temp, c31.temp, "", 0))
+            new_hash := _lnew_temp(ll)
+            ll = new_hash.l
+            ll = _lemit(ll, new_inst(OpAdd, new_hash.temp, mul_nt.temp, flen.temp, "", 0))
+            hash_nt = new_hash
+            slot = slot + 2
+        } else {
+            // Numeric: hash = hash * 31 + field_value
+            fval := _lnew_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            mul_nt := _lnew_temp(ll)
+            ll = mul_nt.l
+            c31 := _lnew_temp(ll)
+            ll = c31.l
+            ll = _lemit(ll, new_inst(OpConst, c31.temp, 31, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpMul, mul_nt.temp, hash_nt.temp, c31.temp, "", 0))
+            new_hash := _lnew_temp(ll)
+            ll = new_hash.l
+            ll = _lemit(ll, new_inst(OpAdd, new_hash.temp, mul_nt.temp, fval.temp, "", 0))
+            hash_nt = new_hash
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+    ll = _lemit(ll, new_inst(OpRet, 0, hash_nt.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
 fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
@@ -11103,6 +11715,11 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
             label_str_idx = mod_find_string(ll.module, label_text)
         }
 
+        // Call before fixture if it exists
+        before_fn := mod_find_func(ll.module, "_before")
+        if before_fn.name != "" {
+            ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_before", 0))
+        }
         // Call the test function
         ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, test_fn_name, 0))
 
@@ -11138,6 +11755,11 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
             ll = _lemit(ll, new_inst(OpCall, 0, concat_nt.temp, 2, "_aria_println_str", 0))
         } else {
             ll = _lemit(ll, new_inst(OpCall, 0, pass_nt.temp, 2, "_aria_println_str", 0))
+        }
+        // Call after fixture if it exists
+        after_fn := mod_find_func(ll.module, "_after")
+        if after_fn.name != "" {
+            ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_after", 0))
         }
 
         ti = ti + 1
