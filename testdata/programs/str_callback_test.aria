@@ -1,0 +1,16 @@
+// test-expect: str_callback_test passed
+
+fn apply(f: fn(str) -> str, x: str) -> str = f(x)
+
+fn twice(f: fn(str) -> str, x: str) -> str = f(f(x))
+
+entry {
+    bang := fn(s: str) -> str => s + "!"
+    assert apply(bang, "hi") == "hi!"
+    assert twice(bang, "yo") == "yo!!"
+
+    wrap := fn(s: str) -> str => "<" + s + ">"
+    assert apply(wrap, "x") == "<x>"
+
+    println("str_callback_test passed")
+}

@@ -340,7 +340,7 @@ fn _parse_type_ann(c: Checker) -> CE {
         return CE{c: cc, type_id: store_last_id(cc.store)}
     }
     if k == "fn" {
-        // Function type fn(A, B) -> R
+        // Function type fn(A, B) -> R — construct a TyFunction with return type preserved
         mut cc := _cadv(c)
         // Optional `once`
         if _ck2(cc) == "IDENT" && _ccur(cc).text == "once" { cc = _cadv(cc) }
@@ -360,7 +360,9 @@ fn _parse_type_ann(c: Checker) -> CE {
             cc = rr.c
             ret = rr.type_id
         }
-        return CE{c: cc, type_id: ret}
+        new_st := store_add(cc.store, mk_fn_type(ret, 0, 0))
+        cc = _cset_store(cc, new_st)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
     }
     if k == "(" {
         // Tuple type (T1, T2, ...) or grouped type (T)

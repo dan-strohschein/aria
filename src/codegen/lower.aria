@@ -6797,27 +6797,59 @@ fn _lower_primary(l: Lowerer) -> LT {
                 env_ptr_nt := _lnew_temp(ll)
                 ll = env_ptr_nt.l
                 ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, closure_nt.temp, 1, "_env", 0))
-                // Collect args
+                // Collect args — track each arg's type to expand str args to 2 slots
                 ll = _ladv(ll)  // skip (
                 ll = _lskip_nl(ll)
                 mut first_arg := -1
                 mut ic_arg_count := 0
+                mut ic_reg_count := 0
+                mut arg_is_str_0 := false
+                mut arg_is_str_1 := false
+                mut arg_is_str_2 := false
+                mut arg_is_str_3 := false
                 while _lk(ll) != ")" && _lk(ll) != "EOF" {
                     ll = _lskip_nl(ll)
                     arg := _lower_expr(ll)
                     ll = arg.l
                     if ic_arg_count == 0 { first_arg = arg.temp }
+                    atid := _lget_type(ll, arg.temp)
+                    if atid == 12 {
+                        if ic_arg_count == 0 { arg_is_str_0 = true }
+                        if ic_arg_count == 1 { arg_is_str_1 = true }
+                        if ic_arg_count == 2 { arg_is_str_2 = true }
+                        if ic_arg_count == 3 { arg_is_str_3 = true }
+                        ic_reg_count = ic_reg_count + 2
+                    } else {
+                        ic_reg_count = ic_reg_count + 1
+                    }
                     ic_arg_count = ic_arg_count + 1
                     ll = _lskip_nl(ll)
                     if _lk(ll) == "," { ll = _ladv(ll) }
                 }
                 if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Determine return type to allocate proper result temp
+                mut is_str_ret := false
+                fn_tid_pre := _lget_type(ll, fn_slot)
+                if fn_tid_pre > 0 {
+                    ti_pre := store_get(ll.store, fn_tid_pre)
+                    if type_kind_name(ti_pre.kind) == "Function" && type_info_type_id(ti_pre) == 12 {
+                        is_str_ret = true
+                    }
+                }
                 // Store env_ptr as first arg, then user args follow
                 // We use OpStore to pack: env_ptr at first_arg-1 position
                 // Actually: emit CallIndirect with env_ptr and user args
                 // The function expects (env_ptr, arg0, arg1, ...)
-                nt := _lnew_temp(ll)
-                ll = nt.l
+                mut nt_temp := 0
+                if is_str_ret {
+                    nt_s := _lnew_str_temp(ll)
+                    ll = nt_s.l
+                    nt_temp = nt_s.temp
+                } else {
+                    nt_r := _lnew_temp(ll)
+                    ll = nt_r.l
+                    nt_temp = nt_r.temp
+                }
                 mut fa := env_ptr_nt.temp
                 // CallIndirect: fn_ptr, arg_count+1 (including env), first_arg = env_ptr
                 // The user args follow env_ptr in consecutive temps
@@ -6829,23 +6861,47 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = pack_start.l
                 ll = _lemit(ll, new_inst(OpStore, pack_start.temp, env_ptr_nt.temp, 0, "", 0))
                 mut pack_idx := 1
+                mut src_off := 0
                 if ic_arg_count > 0 && first_arg >= 0 {
                     mut ai := 0
                     while ai < ic_arg_count {
+                        mut this_is_str := false
+                        if ai == 0 { this_is_str = arg_is_str_0 }
+                        if ai == 1 { this_is_str = arg_is_str_1 }
+                        if ai == 2 { this_is_str = arg_is_str_2 }
+                        if ai == 3 { this_is_str = arg_is_str_3 }
                         pack_t := _lnew_temp(ll)
                         ll = pack_t.l
-                        ll = _lemit(ll, new_inst(OpLoad, pack_t.temp, first_arg + ai, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpLoad, pack_t.temp, first_arg + src_off, 0, "", 0))
                         ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, pack_t.temp, 0, "", 0))
                         pack_idx = pack_idx + 1
+                        src_off = src_off + 1
+                        if this_is_str {
+                            pack_t2 := _lnew_temp(ll)
+                            ll = pack_t2.l
+                            ll = _lemit(ll, new_inst(OpLoad, pack_t2.temp, first_arg + src_off, 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, pack_t2.temp, 0, "", 0))
+                            pack_idx = pack_idx + 1
+                            src_off = src_off + 1
+                        }
                         ai = ai + 1
                     }
                 }
-                total_args := ic_arg_count + 1
-                // Note: LLVM CallIndirect supports str return via s1="str", but
-                // fn-type param tracking doesn't currently preserve return type
-                // (fn(str)->str params get typed as plain str). Follow-up needed.
-                ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, total_args, "", pack_start.temp))
-                return LT{l: ll, temp: nt.temp}
+                total_args := ic_reg_count + 1
+                // If fn_slot's type is TyFunction, propagate its return type hint.
+                // A str-returning closure needs s1="str" so LLVM extracts {ptr,len}.
+                mut ret_hint := ""
+                fn_tid := _lget_type(ll, fn_slot)
+                if fn_tid > 0 {
+                    ti := store_get(ll.store, fn_tid)
+                    if type_kind_name(ti.kind) == "Function" {
+                        ret_type := type_info_type_id(ti)
+                        if ret_type == 12 { ret_hint = "str" }
+                        ll = _lset_type(ll, nt_temp, ret_type)
+                    }
+                }
+                ll = _lemit(ll, new_inst(OpCallIndirect, nt_temp, fn_ptr_nt.temp, total_args, ret_hint, pack_start.temp))
+                return LT{l: ll, temp: nt_temp}
             }
             // Truly unknown — skip args
             ll = _ladv(ll)
@@ -9411,12 +9467,16 @@ fn _lower_closure(l: Lowerer) -> LT {
     // Generate unique closure name based on module function count
     closure_name := "_closure_" + i2s(ll.module.funcs.len())
 
-    // Parse parameter names and count
+    // Parse parameter names and count; track which params are str-typed
     mut param_count := 0
     mut pname_0 := ""
     mut pname_1 := ""
     mut pname_2 := ""
     mut pname_3 := ""
+    mut pstr_0 := false
+    mut pstr_1 := false
+    mut pstr_2 := false
+    mut pstr_3 := false
     if _lk(ll) == "(" {
         ll = _ladv(ll)  // skip (
         while _lk(ll) != ")" && _lk(ll) != "EOF" {
@@ -9426,15 +9486,21 @@ fn _lower_closure(l: Lowerer) -> LT {
                 if param_count == 1 { pname_1 = ptext }
                 if param_count == 2 { pname_2 = ptext }
                 if param_count == 3 { pname_3 = ptext }
-                param_count = param_count + 1
                 ll = _ladv(ll)
-                // Skip type annotation
+                // Parse type annotation — detect "str" to allocate 2 slots
                 if _lk(ll) == ":" {
                     ll = _ladv(ll)
+                    if _lk(ll) == "IDENT" && _lcur(ll).text == "str" {
+                        if param_count == 0 { pstr_0 = true }
+                        if param_count == 1 { pstr_1 = true }
+                        if param_count == 2 { pstr_2 = true }
+                        if param_count == 3 { pstr_3 = true }
+                    }
                     while _lk(ll) != "," && _lk(ll) != ")" && _lk(ll) != "EOF" {
                         ll = _ladv(ll)
                     }
                 }
+                param_count = param_count + 1
             } else {
                 ll = _ladv(ll)
             }
@@ -9442,10 +9508,12 @@ fn _lower_closure(l: Lowerer) -> LT {
         }
         if _lk(ll) == ")" { ll = _ladv(ll) }
     }
-    // Skip return type annotation
+    // Parse return type annotation — detect "str"
+    mut ret_is_str := false
     lb2 := "\{"
     if _lk(ll) == "->" {
         ll = _ladv(ll)
+        if _lk(ll) == "IDENT" && _lcur(ll).text == "str" { ret_is_str = true }
         while _lk(ll) != "=>" && _lk(ll) != lb2 && _lk(ll) != "EOF" { ll = _ladv(ll) }
     }
     // Skip =>
@@ -9556,26 +9624,50 @@ fn _lower_closure(l: Lowerer) -> LT {
         scan_pos = scan_pos + 1
     }
 
-    // Create closure function: param_count + 1 (extra env_ptr as first param)
-    actual_params := param_count + 1
-    ll = _lset_func(ll, new_ir_func(closure_name, actual_params, 1))
+    // Create closure function: env_ptr + str-params take 2 regs each
+    mut actual_params := 1
+    mut reg_pi := 0
+    while reg_pi < param_count {
+        mut ps := false
+        if reg_pi == 0 { ps = pstr_0 }
+        if reg_pi == 1 { ps = pstr_1 }
+        if reg_pi == 2 { ps = pstr_2 }
+        if reg_pi == 3 { ps = pstr_3 }
+        if ps { actual_params = actual_params + 2 } else { actual_params = actual_params + 1 }
+        reg_pi = reg_pi + 1
+    }
+    mut ret_type := 1
+    if ret_is_str { ret_type = 12 }
+    ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
 
     // First param is env_ptr
     env_param := _lnew_temp(ll)
     ll = env_param.l
     ll = _lenv_add(ll, "_env", env_param.temp)
 
-    // Register closure parameters (after env_ptr)
+    // Register closure parameters (after env_ptr); str params allocate 2 consecutive slots
     mut pi := 0
     while pi < param_count {
-        nt := _lnew_temp(ll)
-        ll = nt.l
+        mut ps := false
+        if pi == 0 { ps = pstr_0 }
+        if pi == 1 { ps = pstr_1 }
+        if pi == 2 { ps = pstr_2 }
+        if pi == 3 { ps = pstr_3 }
         mut pn := ""
         if pi == 0 { pn = pname_0 }
         if pi == 1 { pn = pname_1 }
         if pi == 2 { pn = pname_2 }
         if pi == 3 { pn = pname_3 }
-        ll = _lenv_add(ll, pn, nt.temp)
+        if ps {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, pn, nt.temp)
+            ll = _lset_type(ll, nt.temp, 12)
+        } else {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, pn, nt.temp)
+        }
         pi = pi + 1
     }
 
