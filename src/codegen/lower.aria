@@ -2649,7 +2649,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
                     if resolved_count > 0 && resolved_tv_0 == tv_name { already = true }
                     if resolved_count > 1 && resolved_tv_1 == tv_name { already = true }
                     if already == false {
-                        suffix := _type_name_suffix(ll.store, at)
+                        suffix := _type_name_suffix_l(ll.store, ll.registry, at)
                         if resolved_count == 0 { resolved_tv_0 = tv_name }
                         if resolved_count == 0 { resolved_ty_0 = suffix }
                         if resolved_count == 1 { resolved_tv_1 = tv_name }
@@ -5530,7 +5530,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                                 if resolved_count > 1 && resolved_tv_1 == tv_name { already = true }
                                 if resolved_count > 2 && resolved_tv_2 == tv_name { already = true }
                                 if already == false {
-                                    suffix := _type_name_suffix(ll.store, at)
+                                    suffix := _type_name_suffix_l(ll.store, ll.registry, at)
                                     if resolved_count == 0 {
                                         resolved_tv_0 = tv_name
                                         resolved_ty_0 = suffix
@@ -8227,6 +8227,16 @@ fn _struct_name_from_type(reg: TypeRegistry, type_id: i64) -> str {
         return reg.struct_defs[idx].name
     }
     return ""
+}
+
+// Lowerer-side type-name suffix: handles TY_STRUCT_BASE+N registry ids
+// in addition to primitive and store-based type ids.
+fn _type_name_suffix_l(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
+    if tid >= TY_STRUCT_BASE {
+        sname := _struct_name_from_type(reg, tid)
+        if sname != "" { return sname }
+    }
+    _type_name_suffix(store, tid)
 }
 
 fn _struct_type_id(reg: TypeRegistry, struct_name: str) -> i64 {
