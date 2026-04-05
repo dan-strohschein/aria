@@ -278,6 +278,8 @@ const W0002: str = "W0002"
 const W0003: str = "W0003"
 const W0004: str = "W0004"
 const W0005: str = "W0005"
+const W0008: str = "W0008"
+const W0009: str = "W0009"
 const W0100: str = "W0100"
 
 fn describe_code(code: str) -> str {
@@ -332,6 +334,8 @@ fn describe_code(code: str) -> str {
     if code == W0003 { return "unused import" }
     if code == W0004 { return "shadowed variable" }
     if code == "W0005" { return "use of deprecated function" }
+    if code == W0008 { return "once closure called multiple times" }
+    if code == W0009 { return "orphan impl across packages" }
     if code == W0100 { return "unreachable code" }
     return "unknown error code"
 }

@@ -43,19 +43,56 @@ fn _mk_impl(tname: str, typename: str) -> ImplDef =
 struct TraitRegistry {
     trait_defs: [TraitDef]
     impl_defs: [ImplDef]
+    // Parallel to impl_defs: the package (directory) where each impl was registered.
+    // Empty string means builtin or unknown origin. Used for orphan rule enforcement.
+    impl_pkgs: [str]
 }
 
 fn new_trait_registry() -> TraitRegistry =
     TraitRegistry{
         trait_defs: [_sentinel_trait_def()],
-        impl_defs: [_sentinel_impl_def()]
+        impl_defs: [_sentinel_impl_def()],
+        impl_pkgs: [""]
     }
 
 fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs}
+    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs, impl_pkgs: reg.impl_pkgs}
 
 fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def)}
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append("")}
+
+// Add impl with package tracking (for orphan rule enforcement)
+fn treg_add_impl_pkg(reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry =
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(pkg)}
+
+// Extract directory (package) portion of a file path.
+// Returns "" for no-slash paths, "<builtin>" for the builtin marker.
+fn _pkg_from_path(path: str) -> str {
+    if path == "" { return "" }
+    if path == "<builtin>" { return "<builtin>" }
+    mut last_slash := 0 - 1
+    mut i := 0
+    while i < path.len() {
+        if path.charAt(i) == "/" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "" }
+    path.substring(0, last_slash)
+}
+
+// Query: returns the package of the first impl of (type_name, trait_name), or "".
+fn treg_impl_pkg(reg: TraitRegistry, type_name: str, trait_name: str) -> str {
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.type_name == type_name && imp.trait_name == trait_name {
+            if i < reg.impl_pkgs.len() { return reg.impl_pkgs[i] }
+            return ""
+        }
+        i = i + 1
+    }
+    ""
+}
 
 fn treg_find_trait(reg: TraitRegistry, name: str) -> TraitDef {
     mut i := 1

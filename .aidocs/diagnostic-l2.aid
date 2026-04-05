@@ -842,6 +842,22 @@
 
 ---
 
+@const W0008
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 281
+@purpose Warning: once closure called multiple times. Emitted by the Checker's Pass 4 once-consumption scanner when a `name := fn once(...)` binding is followed by more than one `name(` call in the same function body.
+
+---
+
+@const W0009
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 282
+@purpose Warning: orphan impl across packages. Emitted by _register_impl_fns when an impl's trait and type both originate in packages different from the current compilation unit's package. Part of Sprint v0.2-4 multi-package support.
+
+---
+
 @const W0100
 @value_type str
 @source_file src/diagnostic/diagnostic.aria

@@ -717,6 +717,20 @@
 
 ---
 
+@const W0008
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 281
+
+---
+
+@const W0009
+@value_type str
+@source_file src/diagnostic/diagnostic.aria
+@source_line 282
+
+---
+
 @const W0100
 @value_type str
 @source_file src/diagnostic/diagnostic.aria

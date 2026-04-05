@@ -1816,7 +1816,48 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
             q := _q()
             cc = _cerror(cc, E0200, "unknown trait " + q + impl_trait + q + " in impl declaration")
         }
-        cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(impl_trait, impl_type)))
+        current_pkg := _pkg_from_path(cc.file)
+        // Orphan rule (warning-level v0.2 MVP):
+        // If the trait has existing impls for other types AND the type has
+        // existing impls for other traits, AND both originate in packages
+        // different from the current package, warn that this is an orphan impl.
+        // Builtin impls (pkg == "") are exempted.
+        if current_pkg != "" && impl_trait != "" && impl_type != "" {
+            // Find first impl of this trait (for any type) to learn trait's "home" package
+            mut trait_pkg := ""
+            mut ti := 1
+            while ti < cc.treg.impl_defs.len() {
+                imp := cc.treg.impl_defs[ti]
+                if imp.trait_name == impl_trait && ti < cc.treg.impl_pkgs.len() {
+                    p := cc.treg.impl_pkgs[ti]
+                    if p != "" {
+                        trait_pkg = p
+                        ti = cc.treg.impl_defs.len()
+                    }
+                }
+                ti = ti + 1
+            }
+            // Find first impl of this type (for any trait) to learn type's "home" package
+            mut type_pkg := ""
+            mut yi := 1
+            while yi < cc.treg.impl_defs.len() {
+                imp := cc.treg.impl_defs[yi]
+                if imp.type_name == impl_type && yi < cc.treg.impl_pkgs.len() {
+                    p := cc.treg.impl_pkgs[yi]
+                    if p != "" {
+                        type_pkg = p
+                        yi = cc.treg.impl_defs.len()
+                    }
+                }
+                yi = yi + 1
+            }
+            // Orphan: trait and type both have home packages different from current
+            if trait_pkg != "" && trait_pkg != current_pkg && type_pkg != "" && type_pkg != current_pkg {
+                q := _q()
+                cc = _cwarning(cc, "W0009", "orphan impl: trait " + q + impl_trait + q + " and type " + q + impl_type + q + " both defined in other packages")
+            }
+        }
+        cc = _cset_treg(cc, treg_add_impl_pkg(cc.treg, _mk_impl(impl_trait, impl_type), current_pkg))
         // Check supertrait requirements
         tdef := treg_find_trait(cc.treg, impl_trait)
         if tdef.name != "" {
@@ -4144,6 +4185,85 @@ fn _check_loop(c: Checker) -> CE {
 // Public API
 // ============================================================
 
+// Scan a token range for once-closure double-consumption.
+// Detects `name := fn once ...` and counts subsequent `name(` calls
+// within the same token range. Warns if count > 1.
+// Note: linear scan; does not track scope boundaries or branches.
+fn _check_once_consumption(c: Checker, start: i64, end_tok: i64) -> Checker {
+    mut cc := c
+    mut i := start
+    // Collect once-closure binding names and their positions
+    mut once_names := [""]
+    mut once_positions := [0]
+    while i < end_tok && i < cc.tokens.len() {
+        tk := token_name(cc.tokens[i].kind)
+        if tk == "IDENT" && i + 2 < end_tok {
+            next := i + 1
+            nextk := token_name(cc.tokens[next].kind)
+            if nextk == ":=" {
+                // Check if RHS starts with `fn once`
+                rhs := i + 2
+                if rhs + 1 < end_tok && token_name(cc.tokens[rhs].kind) == "fn" {
+                    rhs2 := rhs + 1
+                    if token_name(cc.tokens[rhs2].kind) == "IDENT" && cc.tokens[rhs2].text == "once" {
+                        once_names = once_names.append(cc.tokens[i].text)
+                        once_positions = once_positions.append(i)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    // For each once binding, count `name(` calls after binding_position
+    mut oi := 1
+    while oi < once_names.len() {
+        oname := once_names[oi]
+        opos := once_positions[oi]
+        mut call_count := 0
+        mut first_call_line := 0
+        mut second_call_line := 0
+        mut j := opos + 1
+        while j < end_tok && j + 1 < cc.tokens.len() {
+            tk := token_name(cc.tokens[j].kind)
+            if tk == "IDENT" && cc.tokens[j].text == oname {
+                nextk := token_name(cc.tokens[j + 1].kind)
+                if nextk == "(" {
+                    call_count = call_count + 1
+                    if call_count == 1 { first_call_line = cc.tokens[j].line }
+                    if call_count == 2 { second_call_line = cc.tokens[j].line }
+                }
+            }
+            j = j + 1
+        }
+        if call_count > 1 {
+            q := _q()
+            line_str := i2s(first_call_line)
+            msg := "once closure " + q + oname + q + " called multiple times (first at line " + line_str + ")"
+            cc = _cwarning(cc, "W0008", msg)
+        }
+        oi = oi + 1
+    }
+    cc
+}
+
+// Run once-closure consumption check on all function/entry/test bodies
+fn _pass4_once_check(c: Checker, index: DeclIndex) -> Checker {
+    mut cc := c
+    mut i := 1
+    while i < decl_index_len(index) {
+        decl := decl_index_get(index, i)
+        // Only check fn, entry, test decls with bodies
+        kn := decl_kind_name(decl.kind)
+        if kn == "fn" || kn == "entry" || kn == "test" {
+            if decl.body_start > 0 && decl.body_end > decl.body_start {
+                cc = _check_once_consumption(cc, decl.body_start, decl.body_end)
+            }
+        }
+        i = i + 1
+    }
+    cc
+}
+
 fn check(tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult {
     mut c := _new_checker(tokens, pool, table, file)
 
@@ -4155,6 +4275,9 @@ fn check(tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, 
 
     // Pass 3: check bodies
     c = _pass3_bodies(c, index)
+
+    // Pass 4: once-closure consumption check (post-pass, linear scan)
+    c = _pass4_once_check(c, index)
 
     CheckResult{store: c.store, registry: c.registry, treg: c.treg, diagnostics: c.diagnostics}
 }

@@ -177,6 +177,7 @@
 @fields
   trait_defs: [TraitDef] — All trait definitions
   impl_defs: [ImplDef] — All trait implementations
+  impl_pkgs: [str] — Package per impl (parallel to impl_defs)
 @source_file src/checker/traits.aria
 @source_line 43
 
@@ -833,6 +834,34 @@
 
 ---
 
+@fn treg_add_impl_pkg
+@sig (reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 65
+
+---
+
+@fn _pkg_from_path
+@sig (path: str) -> str
+@source_file src/checker/traits.aria
+@source_line 70
+
+---
+
+@fn treg_impl_pkg
+@sig (reg: TraitRegistry, type_name: str, trait_name: str) -> str
+@source_file src/checker/traits.aria
+@source_line 84
+
+---
+
+@fn treg_types_implementing
+@sig (reg: TraitRegistry, bound: str) -> [str]
+@source_file src/checker/traits.aria
+@source_line 123
+
+---
+
 @fn populate_builtins
 @sig (reg: TraitRegistry) -> TraitRegistry
 @source_file src/checker/traits.aria
@@ -893,6 +922,20 @@
 @sig (c: Checker, node_idx: i64) -> Checker
 @source_file src/checker/checker.aria
 @source_line 1748
+
+---
+
+@fn _check_once_consumption
+@sig (c: Checker, start: i64, end_tok: i64) -> Checker
+@source_file src/checker/checker.aria
+@source_line 4151
+
+---
+
+@fn _pass4_once_check
+@sig (c: Checker, index: DeclIndex) -> Checker
+@source_file src/checker/checker.aria
+@source_line 4209
 
 ---
 

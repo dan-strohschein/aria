@@ -204,8 +204,9 @@
 @fields
   trait_defs: [TraitDef] — All trait definitions (1-based)
   impl_defs: [ImplDef] — All trait implementations (1-based)
+  impl_pkgs: [str] — Parallel to impl_defs: package (directory) where each impl was registered. Empty = builtin/unknown.
 @purpose Stores all trait definitions and their implementations. Initialized with built-in traits (Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric, Clone, Debug, Display, Convert, TryConvert, Drop, Send, Share, error categories) and primitive type impls via populate_builtins.
-@invariants All arrays are 1-based with sentinels at index 0. Built-in traits and primitive impls are always present after populate_builtins.
+@invariants All arrays are 1-based with sentinels at index 0. impl_pkgs is parallel to impl_defs (same length, same indexing). Built-in traits and primitive impls are always present after populate_builtins.
 @source_file src/checker/traits.aria
 @source_line 43
 
@@ -985,6 +986,41 @@
 
 ---
 
+@fn treg_add_impl_pkg
+@sig (reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry
+@source_file src/checker/traits.aria
+@source_line 65
+@purpose Registers an ImplDef with package tracking. Appends both to impl_defs and the parallel impl_pkgs array. Used by the checker's _register_impl_fns to record which package (directory) each impl originates from, enabling orphan rule enforcement.
+@notes Part of Sprint v0.2-4 multi-package support. Extends the existing treg_add_impl (which passes empty pkg) to carry package info for cross-package validation.
+
+---
+
+@fn _pkg_from_path
+@sig (path: str) -> str
+@source_file src/checker/traits.aria
+@source_line 70
+@purpose Extracts the directory (package) portion of a file path. Returns "" if no slash, "<builtin>" for the builtin marker. Used to derive package names from source file paths for orphan rule checks and future pub(pkg) enforcement.
+@notes Path canonicalization is the caller's responsibility — this function accepts paths as-given. For v0.2 MVP, works with simple unix-style paths.
+
+---
+
+@fn treg_impl_pkg
+@sig (reg: TraitRegistry, type_name: str, trait_name: str) -> str
+@source_file src/checker/traits.aria
+@source_line 84
+@purpose Query function: returns the package where the first impl of (type_name, trait_name) was registered, or "" if not found. Enables future orphan rule expansion and cross-package diagnostic messages.
+
+---
+
+@fn treg_types_implementing
+@sig (reg: TraitRegistry, bound: str) -> [str]
+@source_file src/checker/traits.aria
+@source_line 123
+@purpose Returns list of concrete type names that implement a given bound trait. Skips blanket markers (type_name starts with "*"). Deduplicates results. Used by blanket impl monomorphization to enumerate concrete types for eager specialization.
+@notes Part of Sprint v0.2-2 blanket impl infrastructure.
+
+---
+
 @fn populate_builtins
 @sig (reg: TraitRegistry) -> TraitRegistry
 @purpose Initializes the trait registry with all built-in traits and their primitive type implementations. Registers 20 traits (Eq, Ord, Hash, Add, Sub, Mul, Div, Mod, Numeric, Clone, Debug, Display, Convert, TryConvert, Drop, Send, Share, Transient, Permanent, UserFault, SystemFault, Retryable) and impls for all integer types, floats, bool, str, and char.
@@ -1068,10 +1104,29 @@
 
 ---
 
+@fn _check_once_consumption
+@sig (c: Checker, start: i64, end_tok: i64) -> Checker
+@source_file src/checker/checker.aria
+@source_line 4151
+@purpose Linear-scan post-pass detector for once-closure double-consumption. Walks a token range collecting `name := fn once ...` bindings, then counts subsequent `name(` calls. Emits W0008 warning if any once-binding is called more than once in the same function body.
+@notes Linear scan only — no branch merging, no scope tracking beyond function boundaries. Catches common double-call cases reliably. Full flow-sensitive analysis (merging consumption state across if/match branches) deferred to v0.3.
+@effects Appends W0008 warnings to the Checker's diagnostic bag.
+
+---
+
+@fn _pass4_once_check
+@sig (c: Checker, index: DeclIndex) -> Checker
+@source_file src/checker/checker.aria
+@source_line 4209
+@purpose Checker Pass 4: iterates all fn/entry/test declarations in the DeclIndex and runs _check_once_consumption on each body's token range. Called from check() after Pass 3 (body checking) completes.
+@workflow Runs after type checking. The 4-pass architecture: (1) types, (2) fn sigs, (3) bodies, (4) once-consumption.
+
+---
+
 @fn check
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult
-@calls [new_store, new_registry, new_trait_registry, populate_builtins, _pass1_types, _pass2_fns, _pass3_bodies]
-@purpose Main entry point for the type checker. Runs three sequential passes over the DeclIndex: (1) register all type/enum declarations, (2) register all function signatures, trait declarations, and constants, (3) check all function/impl/entry/test bodies for type correctness. Returns the complete CheckResult for downstream compilation stages.
+@calls [new_store, new_registry, new_trait_registry, populate_builtins, _pass1_types, _pass2_fns, _pass3_bodies, _pass4_once_check]
+@purpose Main entry point for the type checker. Runs four sequential passes over the DeclIndex: (1) register all type/enum declarations, (2) register all function signatures, trait declarations, and constants, (3) check all function/impl/entry/test bodies for type correctness, (4) scan for once-closure double-consumption. Returns the complete CheckResult for downstream compilation stages.
 @pre tokens must be the complete token stream. index must be a valid DeclIndex from the resolver. pool must contain AST nodes from the parser. table must be the resolved SymbolTable.
 @post CheckResult.diagnostics contains all type errors and warnings. CheckResult.store/registry/treg contain the full type information for codegen.
 @effects Accumulates diagnostics. Registers monomorphization specializations on-demand during pass 3.
