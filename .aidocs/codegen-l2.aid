@@ -53,6 +53,7 @@
   OpStrLen -- String length
   OpStrConcat -- String concatenation
   OpStrEq -- String equality
+  OpStrCmp -- Lexicographic string comparison returning -1/0/1 (for <,<=,>,>=)
   OpStrCharAt -- Character at index
   OpStrSubstring -- Substring extraction
   OpStrContains -- String contains check
