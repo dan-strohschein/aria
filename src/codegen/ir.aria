@@ -51,6 +51,7 @@ type IrOp =
     | OpStrLen
     | OpStrConcat
     | OpStrEq
+    | OpStrCmp
     | OpStrCharAt
     | OpStrSubstring
     | OpStrContains
@@ -128,6 +129,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrLen => "StrLen"
     OpStrConcat => "StrConcat"
     OpStrEq => "StrEq"
+    OpStrCmp => "StrCmp"
     OpStrCharAt => "StrCharAt"
     OpStrSubstring => "StrSubstring"
     OpStrContains => "StrContains"

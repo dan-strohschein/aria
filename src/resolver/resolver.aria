@@ -55,6 +55,12 @@ fn _rcur(r: Resolver) -> Token {
 
 fn _rk(r: Resolver) -> str = token_name(_rcur(r).kind)
 
+fn _rk2(r: Resolver, pos: i64) -> str {
+    if pos < 0 { return "" }
+    if pos >= r.tokens.len() { return "" }
+    token_name(r.tokens[pos].kind)
+}
+
 fn _radv(r: Resolver) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos + 1, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
@@ -1438,6 +1444,24 @@ fn _resolve_ident(r: Resolver) -> Resolver {
 // --- AST-based identifier resolution ---
 
 fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
+    // Method refs produce synthetic names like Type_method (PascalCase_ident).
+    // These aren't in the symbol table but exist in the checker's registry.
+    // Skip resolution if name looks like a qualified impl method name — the
+    // checker and lowerer will verify the symbol exists.
+    if name.len() > 0 {
+        c0 := name.charAt(0)
+        is_upper := c0 >= "A" && c0 <= "Z"
+        if is_upper {
+            // Check for underscore (indicating qualified name)
+            mut ci := 1
+            while ci < name.len() {
+                if name.charAt(ci) == "_" {
+                    return r
+                }
+                ci = ci + 1
+            }
+        }
+    }
     found := lookup(r.table, r.current_scope, name)
     if found.name == "" {
         q := _q()

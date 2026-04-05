@@ -910,6 +910,17 @@ aria_int _aria_str_eq(char *a_ptr, aria_int a_len, char *b_ptr, aria_int b_len) 
     return memcmp(a_ptr, b_ptr, (size_t)a_len) == 0 ? 1 : 0;
 }
 
+aria_int _aria_str_cmp(char *a_ptr, aria_int a_len, char *b_ptr, aria_int b_len) {
+    aria_int min_len = a_len < b_len ? a_len : b_len;
+    if (min_len > 0) {
+        int r = memcmp(a_ptr, b_ptr, (size_t)min_len);
+        if (r != 0) return r < 0 ? -1 : 1;
+    }
+    if (a_len < b_len) return -1;
+    if (a_len > b_len) return 1;
+    return 0;
+}
+
 // Static pool of 256 single-character strings — avoids malloc per charAt call.
 static char _char_pool[256][2];
 static int _char_pool_init = 0;

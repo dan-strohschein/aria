@@ -96,7 +96,7 @@ fn _is_definitely_scalar_op(op: str) -> bool =
     op == "Gt" || op == "Lte" || op == "Gte" || op == "And" || op == "Or" ||
     op == "Not" || op == "BitAnd" || op == "BitOr" || op == "BitXor" ||
     op == "Shl" || op == "Shr" || op == "ArrayLen" || op == "StrLen" ||
-    op == "StrEq" || op == "StrContains" || op == "StrStartsWith" ||
+    op == "StrEq" || op == "StrCmp" || op == "StrContains" || op == "StrStartsWith" ||
     op == "StrEndsWith" || op == "StrIndexOf" || op == "MapContains" ||
     op == "MapLen" || op == "SetContains" || op == "SetLen" ||
     op == "BranchTrue" || op == "BranchFalse" || op == "Label" || op == "Jump"
@@ -314,6 +314,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_cmp(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
     p = p.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
@@ -602,6 +603,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) {
     h = h.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_cmp(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
     h = h.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
@@ -1259,12 +1261,16 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         // Indirect call through function pointer (fat pointer convention)
         // inst.dest = result, inst.arg1 = fn_ptr temp, inst.arg2 = total arg count (env + user args)
         // inst.type_id = first_arg temp (env_ptr, then user args in consecutive temps)
+        // inst.s1 = "str" if return type is str (struct return), "" for i64 return
         mut gg := g
         fn_ptr := "%icall_ptr_" + i2s(idx)
         gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + _t(inst.arg1))
         fn_cast := "%icall_fn_" + i2s(idx)
-        // Build function type signature: i64 (i64, i64, ...) with N args
-        mut sig := "i64 ("
+        is_str_ret := inst.s1 == "str"
+        // Build function type signature
+        mut ret_ty := "i64"
+        if is_str_ret { ret_ty = _struct_i64_i64() }
+        mut sig := ret_ty + " ("
         mut si := 0
         while si < inst.arg2 {
             if si > 0 { sig = sig + ", " }
@@ -1283,9 +1289,21 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             args = args + "i64 " + av
             ai = ai + 1
         }
-        result := "%icall_r_" + i2s(idx)
-        gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(" + args + ")")
-        gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        if is_str_ret {
+            si64 := _struct_i64_i64()
+            result := "%icall_r_" + i2s(idx)
+            gg = _lg_emit(gg, result + " = call " + si64 + " " + fn_cast + "(" + args + ")")
+            rptr := "%icall_rptr_" + i2s(idx)
+            rlen := "%icall_rlen_" + i2s(idx)
+            gg = _lg_emit(gg, rptr + " = extractvalue " + si64 + " " + result + ", 0")
+            gg = _lg_emit(gg, rlen + " = extractvalue " + si64 + " " + result + ", 1")
+            gg = _lg_emit(gg, "store i64 " + rptr + ", i64* " + _t(inst.dest))
+            gg = _lg_emit(gg, "store i64 " + rlen + ", i64* " + _t(inst.dest + 1))
+        } else {
+            result := "%icall_r_" + i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(" + args + ")")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        }
         return gg
     }
 
@@ -1535,6 +1553,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "StrConcat" { return _gen_str_binop_returning_str(g, "@_aria_str_concat", inst, idx) }
     if op == "StrEq" { return _gen_str_binop_returning_i64(g, "@_aria_str_eq", inst, idx) }
+    if op == "StrCmp" { return _gen_str_binop_returning_i64(g, "@_aria_str_cmp", inst, idx) }
 
     if op == "StrCharAt" {
         mut gg := g

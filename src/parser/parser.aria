@@ -1487,10 +1487,20 @@ fn _parse_prefix(p: Parser) -> PR {
     if k == "IDENT" || k == "Self" || k == "self" {
         name := _cur(p).text
         span := _pspan(p)
-        pp := _adv(p)
+        mut pp := _adv(p)
         lb := "\{"
         // Only parse struct literal if name starts with uppercase (type names are PascalCase)
         if _ck(pp) == lb && _is_upper_start(name) { return _parse_struct_lit(pp, name, span) }
+        // Method ref: Type::method — rewrite as qualified name Type_method
+        if _ck(pp) == ":" && _pk(pp) == ":" {
+            pp = _adv(pp)  // skip first :
+            pp = _adv(pp)  // skip second :
+            if _ck(pp) == "IDENT" {
+                meth := _cur(pp).text
+                pp = _adv(pp)
+                return PR{p: pp, e: mk_ident(name + "_" + meth, span)}
+            }
+        }
         return PR{p: pp, e: mk_ident(name, span)}
     }
 
@@ -1852,6 +1862,16 @@ fn _parse_pattern(p: Parser) -> PR {
             qual := _cur(pp).text
             pp = _adv(pp)
             return PR{p: pp, e: mk_ident(name + "." + qual, span)}
+        }
+        // Method ref: Type::method — produce qualified name Type_method
+        if _ck(pp) == ":" && _pk(pp) == ":" {
+            pp = _adv(pp)  // skip first :
+            pp = _adv(pp)  // skip second :
+            if _ck(pp) == "IDENT" {
+                meth := _cur(pp).text
+                pp = _adv(pp)
+                return PR{p: pp, e: mk_ident(name + "_" + meth, span)}
+            }
         }
         return PR{p: pp, e: mk_ident(name, span)}
     }

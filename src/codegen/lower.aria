@@ -1395,7 +1395,20 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             if _is_float_type(left_type) || _is_float_type(right_type) {
                 ll = _lemit(ll, new_inst(_cmp_op(op), nt.temp, left.temp, right.temp, "f64", 0))
             } else {
-                ll = _lemit(ll, new_inst(_cmp_op(op), nt.temp, left.temp, right.temp, "", 0))
+                if left_type == 12 {
+                    // str ordering: compute lex cmp, then compare result against 0
+                    cmp_nt := _lnew_temp(ll)
+                    ll = cmp_nt.l
+                    ll = _lemit(ll, new_inst(OpStrCmp, cmp_nt.temp, left.temp, right.temp, "", 0))
+                    ll = _lset_type(ll, cmp_nt.temp, 1)
+                    zero_nt := _lnew_temp(ll)
+                    ll = zero_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                    ll = _lset_type(ll, zero_nt.temp, 1)
+                    ll = _lemit(ll, new_inst(_cmp_op(op), nt.temp, cmp_nt.temp, zero_nt.temp, "", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(_cmp_op(op), nt.temp, left.temp, right.temp, "", 0))
+                }
             }
             ll = _lset_type(ll, nt.temp, 1)
             return LT{l: ll, temp: nt.temp}
@@ -4286,6 +4299,17 @@ fn _lower_comparison(l: Lowerer) -> LT {
         } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
             ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
             left = nt.temp
+        } else if left_type == 12 {
+            cmp_nt := _lnew_temp(ll)
+            ll = cmp_nt.l
+            ll = _lemit(ll, new_inst(OpStrCmp, cmp_nt.temp, left, right.temp, "", 0))
+            ll = _lset_type(ll, cmp_nt.temp, 1)
+            zero_nt := _lnew_temp(ll)
+            ll = zero_nt.l
+            ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+            ll = _lset_type(ll, zero_nt.temp, 1)
+            ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, cmp_nt.temp, zero_nt.temp, "", 0))
+            left = nt.temp
         } else {
             ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
             left = nt.temp
@@ -4387,6 +4411,17 @@ fn _lower_expr(l: Lowerer) -> LT {
                 }
             } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
+                left = nt.temp
+            } else if left_type == 12 {
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpStrCmp, cmp_nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, cmp_nt.temp, 1)
+                zero_nt := _lnew_temp(ll)
+                ll = zero_nt.l
+                ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                ll = _lset_type(ll, zero_nt.temp, 1)
+                ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, cmp_nt.temp, zero_nt.temp, "", 0))
                 left = nt.temp
             } else {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
@@ -5233,6 +5268,37 @@ fn _lower_primary(l: Lowerer) -> LT {
     if k == "IDENT" || is_kw_fn_call {
         name := _lcur(l).text
         mut ll := _ladv(l)
+
+        // Method reference: Type::method — rewrite as Type_method fn-value ref
+        if _lk(ll) == ":" {
+            next_pos := ll.pos + 1
+            if next_pos < ll.tokens.len() && token_name(ll.tokens[next_pos].kind) == ":" {
+                third_pos := ll.pos + 2
+                if third_pos < ll.tokens.len() && token_name(ll.tokens[third_pos].kind) == "IDENT" {
+                    meth_name := ll.tokens[third_pos].text
+                    qualified := name + "_" + meth_name
+                    // Advance past :: and method name
+                    ll = _ladv(_ladv(_ladv(ll)))
+                    // Check if qualified name resolves to a function
+                    fsig := reg_find_fn(ll.registry, qualified)
+                    if fsig.name != "" {
+                        ll = _lset_reg(ll, reg_add_fn_value_ref(ll.registry, qualified))
+                        clos := _lnew_temp(ll)
+                        ll = clos.l
+                        ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+                        fn_ref := _lnew_temp(ll)
+                        ll = fn_ref.l
+                        ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, "_tramp_" + qualified, 0))
+                        ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+                        null_env := _lnew_temp(ll)
+                        ll = null_env.l
+                        ll = _lemit(ll, new_inst(OpConst, null_env.temp, 0, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, null_env.temp, 1, "_env", 0))
+                        return LT{l: ll, temp: clos.temp}
+                    }
+                }
+            }
+        }
 
         // Function call or variant construction with data
         if _lk(ll) == "(" {
@@ -6775,6 +6841,9 @@ fn _lower_primary(l: Lowerer) -> LT {
                     }
                 }
                 total_args := ic_arg_count + 1
+                // Note: LLVM CallIndirect supports str return via s1="str", but
+                // fn-type param tracking doesn't currently preserve return type
+                // (fn(str)->str params get typed as plain str). Follow-up needed.
                 ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, total_args, "", pack_start.temp))
                 return LT{l: ll, temp: nt.temp}
             }
@@ -8429,6 +8498,17 @@ fn _lower_if_cond(l: Lowerer) -> LT {
                 }
             } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
+                left = nt.temp
+            } else if left_type == 12 {
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpStrCmp, cmp_nt.temp, left, right.temp, "", 0))
+                ll = _lset_type(ll, cmp_nt.temp, 1)
+                zero_nt := _lnew_temp(ll)
+                ll = zero_nt.l
+                ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                ll = _lset_type(ll, zero_nt.temp, 1)
+                ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, cmp_nt.temp, zero_nt.temp, "", 0))
                 left = nt.temp
             } else {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
