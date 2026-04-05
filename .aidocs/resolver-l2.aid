@@ -234,6 +234,24 @@
 
 ---
 
+@fn _rskip_pub
+@sig (r: Resolver) -> Resolver
+@source_file src/resolver/resolver.aria
+@source_line 64
+@purpose Advances past a pub modifier and its optional (pkg) scope qualifier. Used by all pub-aware parse sites in Pass 2 to normalize handling of pub vs pub(pkg) declarations.
+@notes pub(pkg) is treated identically to pub for single-package compilation (v0.1 scope). The distinction becomes meaningful only when cross-package imports exist.
+
+---
+
+@fn _stdlib_module_for_name
+@sig (name: str) -> str
+@source_file src/resolver/resolver.aria
+@source_line 1383
+@purpose Returns the stdlib module name (json, http, db) that exports the given identifier, or "" if unknown. Used to suggest `use <module>` when the user references an unresolved name that matches a known stdlib export.
+@notes Covers core exports of json, http, and db modules. When _find_similar_name finds no typo match, the resolver falls back to this to produce "Did you forget \"use json\"?" style hints.
+
+---
+
 @fn resolve
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult
 @calls [new_table, add_scope, add_symbol, lookup, lookup_local]

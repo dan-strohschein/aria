@@ -60,6 +60,20 @@ fn _radv(r: Resolver) -> Resolver =
              diagnostics: r.diagnostics, current_scope: r.current_scope,
              file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
 
+// Skip pub modifier, including optional (pkg) scope qualifier
+fn _rskip_pub(r: Resolver) -> Resolver {
+    mut rr := r
+    if _rk(rr) == "pub" {
+        rr = _radv(rr)
+        if _rk(rr) == "(" {
+            rr = _radv(rr)
+            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+    }
+    rr
+}
+
 fn _rset_pos(r: Resolver, pos: i64) -> Resolver =
     Resolver{tokens: r.tokens, pos: pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
@@ -380,7 +394,7 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
                 mut _skip := 0
             } else {
                 // Regular function
-                if _rk(rr) == "pub" { rr = _radv(rr) }
+                rr = _rskip_pub(rr)
                 // Skip annotations
                 if _rk(rr) == "@" {
                     rr = _radv(rr)
@@ -410,7 +424,7 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
                 }
             } else {
                 // type/struct declaration
-                if _rk(rr) == "pub" { rr = _radv(rr) }
+                rr = _rskip_pub(rr)
                 rr = _radv(rr)  // skip "type"/"struct"
                 if _rk(rr) == "IDENT" {
                     name := _rcur(rr).text
@@ -421,7 +435,7 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
                 }
             }
         } else if kname == "enum" {
-            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _rskip_pub(rr)
             rr = _radv(rr)  // skip "enum"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
@@ -429,7 +443,7 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
                 rr = _add_sym(rr, name, SkEnum, span, false, is_pub)
             }
         } else if kname == "trait" {
-            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _rskip_pub(rr)
             rr = _radv(rr)  // skip "trait"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
@@ -437,7 +451,7 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
                 rr = _add_sym(rr, name, SkTrait, span, false, is_pub)
             }
         } else if kname == "const" {
-            if _rk(rr) == "pub" { rr = _radv(rr) }
+            rr = _rskip_pub(rr)
             rr = _radv(rr)  // skip "const"
             if _rk(rr) == "IDENT" {
                 name := _rcur(rr).text
@@ -524,7 +538,7 @@ fn _pass2(r: Resolver, index: DeclIndex) -> Resolver {
         rr = _rset_pos(rr, decl.token_start)
 
         // Skip pub keyword if present
-        if _rk(rr) == "pub" { rr = _radv(rr) }
+        rr = _rskip_pub(rr)
 
         if kname == "fn" {
             if decl.name == "_extern" {
@@ -819,7 +833,7 @@ fn _resolve_impl(r: Resolver) -> Resolver {
     rb := "\}"
     while _rk(rr) != rb && _rk(rr) != "EOF" {
         rr = _rskip_nl(rr)
-        if _rk(rr) == "pub" { rr = _radv(rr) }
+        rr = _rskip_pub(rr)
         if _rk(rr) == "fn" {
             rr = _resolve_fn(rr)
         } else if _rk(rr) == rb || _rk(rr) == "EOF" {
@@ -1366,6 +1380,26 @@ fn _edit_distance(a: str, b: str) -> i64 {
     diff
 }
 
+// Returns a stdlib module name if the identifier is a known export, or ""
+fn _stdlib_module_for_name(name: str) -> str {
+    // json module exports
+    if name == "json_parse" || name == "json_emit" || name == "json_kind" { return "json" }
+    if name == "json_str_val" || name == "json_int_val" || name == "json_bool_val" { return "json" }
+    if name == "json_array_len" || name == "json_array_get" || name == "json_object_get" { return "json" }
+    if name == "json_new_null" || name == "json_new_bool" || name == "json_new_int" || name == "json_new_string" { return "json" }
+    if name == "json_get_str" || name == "json_get_int" || name == "json_get_bool" { return "json" }
+    // http module exports
+    if name == "http_response" || name == "http_response_json" || name == "http_add_header" { return "http" }
+    if name == "http_parse_request" || name == "http_parse_query" || name == "http_get_param" { return "http" }
+    if name == "http_serialize_response" || name == "HttpRequest" || name == "HttpResponse" { return "http" }
+    // db module exports
+    if name == "db_connect" || name == "db_connected" || name == "db_error" || name == "db_close" { return "db" }
+    if name == "db_exec" || name == "db_query" || name == "db_clear" || name == "db_ok" { return "db" }
+    if name == "db_result_error" || name == "db_rows" || name == "db_field_name" { return "db" }
+    if name == "db_get" || name == "db_is_null" || name == "db_row" || name == "db_row_get" { return "db" }
+    ""
+}
+
 fn _resolve_ident(r: Resolver) -> Resolver {
     name := _rcur(r).text
     found := lookup(r.table, r.current_scope, name)
@@ -1375,6 +1409,12 @@ fn _resolve_ident(r: Resolver) -> Resolver {
         mut msg := "unresolved name " + q + name + q
         if suggestion != "" {
             msg = msg + ". Did you mean " + q + suggestion + q + "?"
+        } else {
+            // Check if it's a known stdlib export
+            sm := _stdlib_module_for_name(name)
+            if sm != "" {
+                msg = msg + ". Did you forget " + q + "use " + sm + q + "?"
+            }
         }
         rr := _rerror(r, E0701, msg)
         return _radv(rr)
@@ -1405,6 +1445,11 @@ fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
         mut msg := "unresolved name " + q + name + q
         if suggestion != "" {
             msg = msg + ". Did you mean " + q + suggestion + q + "?"
+        } else {
+            sm := _stdlib_module_for_name(name)
+            if sm != "" {
+                msg = msg + ". Did you forget " + q + "use " + sm + q + "?"
+            }
         }
         mut espan := span
         if espan.file == "" { espan = Span{file: r.file, line: span.line, col: span.col, offset: span.offset, length: span.length} }
@@ -2004,6 +2049,8 @@ fn _resolve_with(r: Resolver) -> Resolver {
 fn _resolve_closure(r: Resolver) -> Resolver {
     parent_scope := r.current_scope
     mut rr := _radv(r)  // skip "fn"
+    // Optional `once` keyword
+    if _rk(rr) == "IDENT" && _rcur(rr).text == "once" { rr = _radv(rr) }
     rr = _push_scope(rr, ScFunction, "closure")
 
     if _rk(rr) == "(" {

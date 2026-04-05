@@ -490,6 +490,23 @@
 
 ---
 
+@fn _lskip_pub
+@sig (l: Lowerer) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 114
+@purpose Advances past a pub modifier and its optional (pkg) scope qualifier. Used at all decl-parsing sites in the token-walking lowerer paths.
+@notes pub(pkg) treated identically to pub for single-package v0.1 compilation.
+
+---
+
+@fn _is_trait_object_type
+@sig (store: TypeStore, tid: i64) -> bool
+@source_file src/codegen/lower.aria
+@source_line 321
+@purpose Returns true if a type_id refers to a TyTraitObject (dyn Trait). Used when setting up function parameter types so dyn Trait parameters get the type-500 marker for downstream dispatch routing.
+
+---
+
 @fn _lower_derive_display
 @sig (l: Lowerer, def: StructDef) -> Lowerer
 @source_file src/codegen/lower.aria
@@ -530,7 +547,7 @@
 @workflow Called after check() succeeds. Produces an IrModule ready for LLVM IR generation.
 @pre All inputs must come from a successful check pass. tokens/pool/store/registry/treg/table must be consistent.
 @post Returns an IrModule with entry_func set, all functions lowered, and string constants populated.
-@notes Match lowering uses a peek-ahead to detect data sum types; named patterns (binding @ Variant) are handled by skipping past the binding and @ token to find the actual variant name. [src: lower.aria:9876-9895] Optional chaining (?.) resolves the inner struct type from the Optional's type_id for correct field index lookup. [src: lower.aria:4497-4504]
+@notes Match lowering uses a peek-ahead to detect data sum types; named patterns (binding @ Variant) are handled by skipping past the binding and @ token to find the actual variant name. [src: lower.aria:9876-9895] Optional chaining (?.) resolves the inner struct type from the Optional's type_id for correct field index lookup. [src: lower.aria:4497-4504] Trait object dispatch: dyn Trait parameters get type marker 500, OpVtableCall encodes return type in instruction.type_id for correct LLVM function signature (i64 vs {i64,i64} for str returns), vtable construction uses OpFieldSet(dest=vt, value=fn_ptr, slot=idx). Map methods (get/set/has/keys) guarded by obj_type==300 to avoid collision with user-defined methods. `once` keyword accepted in closure syntax `fn once(...)` and type annotations `fn once(...)` — parsed but semantic consumption tracking deferred to v0.2. Blanket impl `impl[T: Bound] Trait for T` — generic params skipped, methods register as `_methodName`, dispatch falls through to blanket when direct lookup fails (concrete-type monomorphization deferred to v0.2).
 
 ---
 

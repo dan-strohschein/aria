@@ -685,9 +685,9 @@
 
 @fn resolve_type_name
 @sig (store: TypeStore, name: str) -> i64
-@purpose Resolves a type name string to its TypeStore ID. Checks primitives first by name, then linear-scans user-defined types starting at index 21 (after reserved slots). Matches both TyNamed and TyTypeVar entries.
-@post Returns the type ID if found, or TY_UNKNOWN if the name is not registered.
-@notes Linear scan over the type store. Primitives use fast string comparison. [src: types.aria:363]
+@purpose Resolves a type name string to its TypeStore ID. Checks primitives first by name, then linear-scans user-defined types starting at index 21 (after reserved slots). Matches both TyNamed and TyTypeVar entries. Follows alias chains: a TyNamed with type_id2==1 is an alias, and its type_id field points to the underlying type which is returned directly (transparent substitution).
+@post Returns the type ID if found (or its alias target if it's an alias), or TY_UNKNOWN if the name is not registered.
+@notes Linear scan over the type store. Primitives use fast string comparison. Aliases are distinguished from newtypes via type_id2: aliases have type_id2=1 (no StructDef in registry), newtypes have type_id2=0 (StructDef with 'value' field). [src: types.aria:363-395]
 @source_file src/checker/types.aria
 @source_line 363
 
@@ -1006,6 +1006,44 @@
 @purpose Determines the result type of a binary operation. Comparison and logical operators always produce bool. Arithmetic and bitwise operators produce the same type as the left operand.
 @source_file src/checker/traits.aria
 @source_line 228
+
+---
+
+@fn _cskip_pub
+@sig (c: Checker) -> Checker
+@source_file src/checker/checker.aria
+@source_line 98
+@purpose Advances past a pub modifier and its optional (pkg) scope qualifier. Used at all decl-parsing sites in the checker's body passes to normalize pub vs pub(pkg) handling.
+@notes pub(pkg) treated identically to pub for single-package v0.1 compilation.
+
+---
+
+@fn _struct_name_for_tid
+@sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> str
+@source_file src/checker/checker.aria
+@source_line 111
+@purpose Resolves a type_id to its struct/newtype name for type-aware dispatch. Returns "" for primitives or non-Named types.
+@notes Used by trait object coercion — concrete types are assignable to dyn Trait when the concrete struct name has a corresponding impl of the trait in treg.
+
+---
+
+@fn _register_alias_decl
+@sig (c: Checker) -> Checker
+@source_file src/checker/checker.aria
+@source_line 516
+@purpose Registers a type alias (alias Name = Type) in the TypeStore. Creates a TyNamed entry with type_id pointing to the underlying type and type_id2=1 as the alias marker.
+@notes The alias marker (type_id2=1) distinguishes aliases from newtypes (which use type_id2=0 and have a StructDef). resolve_type_name uses this marker to transparently unwrap aliases during type resolution.
+@effects Adds one TypeInfo entry to the TypeStore.
+
+---
+
+@fn _register_impl_fns
+@sig (c: Checker, node_idx: i64) -> Checker
+@source_file src/checker/checker.aria
+@source_line 1748
+@purpose Registers all method function signatures declared inside an `impl` block. Handles three impl forms: inherent (`impl Type {}`), trait (`impl Trait for Type {}`), and blanket (`impl[T: Bound] Trait for T {}`). Validates that the trait (if any) exists in the trait registry. Registers associated types (type Name = ConcreteType) and verifies supertrait requirements.
+@errors E0200 "unknown trait" when impl references a trait not in the registry. E0200 also for missing supertrait impls.
+@notes Blanket impls have `impl[T: Bound]` prefix — generic params are skipped, impl_type is cleared (empty prefix gives function names like "_methodName"), and a blanket marker ImplDef{trait_name, type_name: "*" + bound} is stored in the trait registry for runtime dispatch routing. Non-blanket impls register ImplDef{trait_name, type_name} normally.
 
 ---
 

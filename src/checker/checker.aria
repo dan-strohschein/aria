@@ -94,6 +94,29 @@ fn _cadv(c: Checker) -> Checker =
             env_names: c.env_names, env_types: c.env_types, env_scopes: c.env_scopes,
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop}
 
+// Skip pub modifier, including optional (pkg) scope qualifier
+fn _cskip_pub(c: Checker) -> Checker {
+    mut cc := c
+    if _ck2(cc) == "pub" {
+        cc = _cadv(cc)
+        if _ck2(cc) == "(" {
+            cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+        }
+    }
+    cc
+}
+
+// Resolve a type_id to its struct/newtype name (empty string if not a named struct)
+fn _struct_name_for_tid(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
+    if tid <= 16 { return "" }
+    if tid >= store.types.len() { return "" }
+    info := store.types[tid]
+    if type_kind_name(info.kind) == "Named" { return info.name }
+    return ""
+}
+
 fn _cset_pos(c: Checker, pos: i64) -> Checker =
     Checker{tokens: c.tokens, pos: pos, store: c.store, registry: c.registry,
             treg: c.treg, diagnostics: c.diagnostics, table: c.table,
@@ -310,6 +333,8 @@ fn _parse_type_ann(c: Checker) -> CE {
     if k == "fn" {
         // Function type fn(A, B) -> R
         mut cc := _cadv(c)
+        // Optional `once`
+        if _ck2(cc) == "IDENT" && _ccur(cc).text == "once" { cc = _cadv(cc) }
         if _ck2(cc) == "(" {
             cc = _cadv(cc)
             while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
@@ -391,6 +416,8 @@ fn _skip_type_toks(c: Checker) -> Checker {
     }
     if k == "fn" {
         cc = _cadv(cc)
+        // Optional `once`
+        if _ck2(cc) == "IDENT" && _ccur(cc).text == "once" { cc = _cadv(cc) }
         if _ck2(cc) == "(" {
             cc = _cadv(cc)
             while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
@@ -434,7 +461,7 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
 
         if kname == "type" {
             cc = _cset_pos(cc, decl.token_start)
-            if _ck2(cc) == "pub" { cc = _cadv(cc) }
+            cc = _cskip_pub(cc)
             if decl.name.startsWith("_alias:") {
                 // alias declaration
                 cc = _register_alias_decl(cc)
@@ -450,7 +477,7 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
                 cc = _register_enum_decl_ast(cc, decl.node_idx)
             } else {
                 cc = _cset_pos(cc, decl.token_start)
-                if _ck2(cc) == "pub" { cc = _cadv(cc) }
+                cc = _cskip_pub(cc)
                 cc = _register_enum_decl(cc)
             }
         }
@@ -509,9 +536,9 @@ fn _register_alias_decl(c: Checker) -> Checker {
     // Parse underlying type
     ft := _parse_type_ann(cc)
     cc = ft.c
-    // Register alias as a named type pointing to the underlying type
-    // The alias type_id field stores the underlying type's ID
-    alias_info := TypeInfo{kind: TyNamed, name: name, type_id: ft.type_id, type_id2: 0, param_start: 0, param_count: 0}
+    // Register alias as a named type pointing to the underlying type.
+    // Set type_id2 = 1 as an alias marker (distinguishes from newtypes which use type_id2 = 0).
+    alias_info := TypeInfo{kind: TyNamed, name: name, type_id: ft.type_id, type_id2: 1, param_start: 0, param_count: 0}
     new_st := store_add(cc.store, alias_info)
     cc = _cset_store(cc, new_st)
     cc
@@ -978,7 +1005,7 @@ fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
         kname := decl_kind_name(decl.kind)
 
         cc = _cset_pos(cc, decl.token_start)
-        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        cc = _cskip_pub(cc)
 
         // Parse annotations before declarations
         mut ann_deprecated := ""
@@ -1724,6 +1751,30 @@ fn _register_fn_sig(c: Checker) -> Checker {
 
 fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
     mut cc := _cadv(c)  // skip impl
+    // Skip generic params [T: Bound, ...] for blanket impls
+    mut is_blanket := false
+    mut blanket_bound := ""
+    if _ck2(cc) == "[" {
+        is_blanket = true
+        cc = _cadv(cc)  // skip [
+        // Extract bound from "T: Bound" — we only handle the single-param case for now
+        if _ck2(cc) == "IDENT" { cc = _cadv(cc) }  // skip T
+        if _ck2(cc) == ":" {
+            cc = _cadv(cc)
+            if _ck2(cc) == "IDENT" {
+                blanket_bound = _ccur(cc).text
+                cc = _cadv(cc)
+            }
+        }
+        // Skip to matching ]
+        mut depth := 1
+        while depth > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { depth = depth + 1 }
+            if _ck2(cc) == "]" { depth = depth - 1 }
+            if depth > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
     // Capture names: "impl TypeName {" or "impl TraitName for TypeName {"
     mut first_name := ""
     mut impl_type := ""
@@ -1742,8 +1793,20 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
             cc = _cadv(cc)
         }
     }
+    // Blanket impl: register as special marker
+    if is_blanket && impl_trait != "" {
+        // Store blanket impl with trait_name=impl_trait, type_name="*" + bound
+        // This signals "any T where T: bound implements impl_trait"
+        cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(impl_trait, "*" + blanket_bound)))
+    }
     // Register trait impl in trait registry
     if impl_trait != "" && impl_type != "" {
+        // Verify the trait exists (orphan rule: trait must be known)
+        tdef_check := treg_find_trait(cc.treg, impl_trait)
+        if tdef_check.name == "" {
+            q := _q()
+            cc = _cerror(cc, E0200, "unknown trait " + q + impl_trait + q + " in impl declaration")
+        }
         cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(impl_trait, impl_type)))
         // Check supertrait requirements
         tdef := treg_find_trait(cc.treg, impl_trait)
@@ -1760,6 +1823,9 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
         }
     }
 
+    // For blanket impls, prefix method names with "_" so dispatch knows they're blanket
+    mut reg_prefix := impl_type
+    if is_blanket { reg_prefix = "" }
     // AST path: iterate method children from the EkImplDecl node
     if node_idx > 0 {
         impl_node := pool_get(cc.pool, node_idx)
@@ -1774,7 +1840,7 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
             // Method nodes are EkFnDecl; their span points to the fn keyword
             // We need to find the token index for this method
             // Since we have the method node in the pool, use token_start from a scan
-            cc = _register_impl_fn_sig_ast(cc, impl_type, method_idx)
+            cc = _register_impl_fn_sig_ast(cc, reg_prefix, method_idx)
             mi = mi + 1
         }
         // Still need to handle associated types — scan tokens for those
@@ -1786,7 +1852,7 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
         rb := "\}"
         while _ck2(cc) != rb && _ck2(cc) != "EOF" {
             cc = _cskip_nl(cc)
-            if _ck2(cc) == "pub" { cc = _cadv(cc) }
+            cc = _cskip_pub(cc)
             if _ck2(cc) == "fn" {
                 // Skip fn — already registered via AST
                 cc = _cadv(cc)
@@ -1833,7 +1899,7 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
     rb := "\}"
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         cc = _cskip_nl(cc)
-        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        cc = _cskip_pub(cc)
         if _ck2(cc) == "fn" {
             cc = _register_impl_fn_sig(cc, impl_type)
         } else if _ck2(cc) == "type" {
@@ -2126,7 +2192,7 @@ fn _pass3_bodies(c: Checker, index: DeclIndex) -> Checker {
         kname := decl_kind_name(decl.kind)
 
         cc = _cset_pos(cc, decl.token_start)
-        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        cc = _cskip_pub(cc)
 
         // Skip annotations
         if _ck2(cc) == "@" {
@@ -2303,7 +2369,7 @@ fn _check_impl_d(c: Checker, decl: DeclInfo) -> Checker {
     rb := "\}"
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         cc = _cskip_nl(cc)
-        if _ck2(cc) == "pub" { cc = _cadv(cc) }
+        cc = _cskip_pub(cc)
         if _ck2(cc) == "fn" {
             cc = _check_impl_fn(cc, impl_type)
         } else if _ck2(cc) == rb || _ck2(cc) == "EOF" {
@@ -3272,6 +3338,8 @@ fn _check_primary(c: Checker) -> CE {
     if k == "fn" {
         // Closure — skip and return Unknown for now
         mut cc := _cadv(c)
+        // Optional `once` keyword
+        if _ck2(cc) == "IDENT" && _ccur(cc).text == "once" { cc = _cadv(cc) }
         if _ck2(cc) == "(" {
             cc = _cadv(cc)
             while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -3338,7 +3406,15 @@ fn _check_call_args_sig(c: Checker, sig: FnSig) -> CE {
                 if res_info.type_id == TY_UNKNOWN && (res_kn == "Optional" || res_kn == "Result" || res_kn == "Array") { should_check = false }
                 if exp_info.type_id == TY_UNKNOWN && (exp_kn == "Optional" || exp_kn == "Result" || exp_kn == "Array") { should_check = false }
                 if should_check {
-                    if is_assignable(cc.store, result.type_id, expected) == false {
+                    mut ok := is_assignable(cc.store, result.type_id, expected)
+                    // Trait object coercion: concrete type assignable to dyn Trait if it implements the trait
+                    if ok == false && exp_kn == "TraitObject" {
+                        res_name := _struct_name_for_tid(cc.store, cc.registry, result.type_id)
+                        if res_name != "" && treg_has_impl(cc.treg, res_name, exp_info.name) {
+                            ok = true
+                        }
+                    }
+                    if ok == false {
                         q := _q()
                         pname := ""
                         if arg_idx < sig.param_names.len() { pname = sig.param_names[arg_idx] }

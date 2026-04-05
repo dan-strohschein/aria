@@ -380,6 +380,10 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {
+            // If this is an alias (marked by type_id2 == 1), return the underlying type
+            if info.type_id2 == 1 && info.type_id > 0 {
+                return info.type_id
+            }
             return i
         }
         if type_kind_name(info.kind) == "TypeVar" && info.name == name {

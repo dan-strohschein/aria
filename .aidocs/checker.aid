@@ -852,6 +852,34 @@
 
 ---
 
+@fn _cskip_pub
+@sig (c: Checker) -> Checker
+@source_file src/checker/checker.aria
+@source_line 98
+
+---
+
+@fn _struct_name_for_tid
+@sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> str
+@source_file src/checker/checker.aria
+@source_line 111
+
+---
+
+@fn _register_alias_decl
+@sig (c: Checker) -> Checker
+@source_file src/checker/checker.aria
+@source_line 516
+
+---
+
+@fn _register_impl_fns
+@sig (c: Checker, node_idx: i64) -> Checker
+@source_file src/checker/checker.aria
+@source_line 1748
+
+---
+
 @fn check
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult
 @calls [new_store, new_registry, new_trait_registry, populate_builtins]

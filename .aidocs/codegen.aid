@@ -407,6 +407,20 @@
 
 ---
 
+@fn _lskip_pub
+@sig (l: Lowerer) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 114
+
+---
+
+@fn _is_trait_object_type
+@sig (store: TypeStore, tid: i64) -> bool
+@source_file src/codegen/lower.aria
+@source_line 321
+
+---
+
 @fn _lower_derive_display
 @sig (l: Lowerer, def: StructDef) -> Lowerer
 @source_file src/codegen/lower.aria

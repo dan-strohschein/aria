@@ -1365,11 +1365,26 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         fn_ptr := "%vc_fn_" + i2s(idx)
         gg = _lg_emit(gg, fn_ptr + " = load i64, i64* " + fn_gep)
         // Cast to function pointer and call with data_ptr as self
+        // inst.type_id = method's return type (12 = str, returns struct {i64, i64})
         fn_cast := "%vc_cast_" + i2s(idx)
-        gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
-        result := "%vc_result_" + i2s(idx)
-        gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + data_ptr + ")")
-        gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        if inst.type_id == 12 {
+            si64 := _struct_i64_i64()
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to " + si64 + " (i64)*")
+            result := "%vc_result_" + i2s(idx)
+            gg = _lg_emit(gg, result + " = call " + si64 + " " + fn_cast + "(i64 " + data_ptr + ")")
+            // Extract ptr and len from struct return
+            rptr := "%vc_rptr_" + i2s(idx)
+            rlen := "%vc_rlen_" + i2s(idx)
+            gg = _lg_emit(gg, rptr + " = extractvalue " + si64 + " " + result + ", 0")
+            gg = _lg_emit(gg, rlen + " = extractvalue " + si64 + " " + result + ", 1")
+            gg = _lg_emit(gg, "store i64 " + rptr + ", i64* " + _t(inst.dest))
+            gg = _lg_emit(gg, "store i64 " + rlen + ", i64* " + _t(inst.dest + 1))
+        } else {
+            gg = _lg_emit(gg, fn_cast + " = inttoptr i64 " + fn_ptr + " to i64 (i64)*")
+            result := "%vc_result_" + i2s(idx)
+            gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + data_ptr + ")")
+            gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+        }
         return gg
     }
 

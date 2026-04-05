@@ -110,6 +110,20 @@ fn _ladv(l: Lowerer) -> Lowerer =
             temp_types: l.temp_types,
             fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
 
+// Skip pub modifier, including optional (pkg) scope qualifier
+fn _lskip_pub(l: Lowerer) -> Lowerer {
+    mut ll := l
+    if _lk(ll) == "pub" {
+        ll = _ladv(ll)
+        if _lk(ll) == "(" {
+            ll = _ladv(ll)
+            if _lk(ll) == "IDENT" { ll = _ladv(ll) }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+        }
+    }
+    ll
+}
+
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
     Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
@@ -301,6 +315,13 @@ fn _is_str_array_type(store: TypeStore, tid: i64) -> bool {
         return true
     }
     return false
+}
+
+fn _is_trait_object_type(store: TypeStore, tid: i64) -> bool {
+    if tid <= 16 { return false }
+    if tid >= store.types.len() { return false }
+    info := store.types[tid]
+    return type_kind_name(info.kind) == "TraitObject"
 }
 
 // Check if a type_id represents a named/struct type (not a builtin)
@@ -519,7 +540,7 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
         kname := decl_kind_name(decl.kind)
         if kname == "const" {
             ll = _lset_pos(ll, decl.token_start)
-            if _lk(ll) == "pub" { ll = _ladv(ll) }
+            ll = _lskip_pub(ll)
             ll = _ladv(ll)  // skip const
             if _lk(ll) == "IDENT" {
                 cname := _lcur(ll).text
@@ -629,7 +650,7 @@ fn _lower_bodies(l: Lowerer, index: DeclIndex) -> Lowerer {
         ll = _lset_pos(ll, decl.token_start)
 
         // Skip pub keyword if present
-        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        ll = _lskip_pub(ll)
 
         // Skip annotations
         if _lk(ll) == "@" {
@@ -681,7 +702,7 @@ fn _lower_bodies_skip_entry(l: Lowerer, index: DeclIndex) -> Lowerer {
         decl := decl_index_get(index, di)
         kname := decl_kind_name(decl.kind)
         ll = _lset_pos(ll, decl.token_start)
-        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        ll = _lskip_pub(ll)
         if _lk(ll) == "@" {
             ll = _ladv(ll)
             if _lk(ll) == "IDENT" { ll = _ladv(ll) }
@@ -808,6 +829,8 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
                 pt := sig.param_types[pi]
                 if _is_str_array_type(ll.store, pt) {
                     ll = _lset_type(ll, nt.temp, 13)
+                } else if _is_trait_object_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 500)
                 } else {
                     ll = _lset_type(ll, nt.temp, pt)
                 }
@@ -2809,6 +2832,8 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
                 // Check if this is a [str] array type
                 if _is_str_array_type(ll.store, pt) {
                     ll = _lset_type(ll, nt.temp, 13)
+                } else if _is_trait_object_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 500)
                 } else {
                     ll = _lset_type(ll, nt.temp, pt)
                 }
@@ -3108,6 +3133,19 @@ fn _lower_fixture(l: Lowerer, kind: str) -> Lowerer {
 // DeclInfo-aware impl lowering — walks AST method children
 fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
     mut ll := _ladv(l)  // skip impl
+    // Skip generic params [T: Bound] for blanket impls
+    mut is_blanket := false
+    if _lk(ll) == "[" {
+        is_blanket = true
+        mut depth := 1
+        ll = _ladv(ll)
+        while depth > 0 && _lk(ll) != "EOF" {
+            if _lk(ll) == "[" { depth = depth + 1 }
+            if _lk(ll) == "]" { depth = depth - 1 }
+            if depth > 0 { ll = _ladv(ll) }
+        }
+        if _lk(ll) == "]" { ll = _ladv(ll) }
+    }
     mut impl_type := ""
     if _lk(ll) == "IDENT" {
         impl_type = _lcur(ll).text
@@ -3120,6 +3158,8 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             ll = _ladv(ll)
         }
     }
+    // For blanket impls, use empty prefix so methods are registered as _methodName
+    if is_blanket { impl_type = "" }
 
     // AST path: walk method children from EkImplDecl
     if decl.node_idx > 0 {
@@ -3242,7 +3282,7 @@ fn _lower_impl_legacy(l: Lowerer, impl_type: str) -> Lowerer {
     ll = _lskip_nl(ll)
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         ll = _lskip_nl(ll)
-        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        ll = _lskip_pub(ll)
         if _lk(ll) == "fn" {
             ll = _lower_impl_fn(ll, impl_type)
         } else if _lk(ll) == rb || _lk(ll) == "EOF" {
@@ -3279,7 +3319,7 @@ fn _lower_impl(l: Lowerer) -> Lowerer {
     ll = _lskip_nl(ll)
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         ll = _lskip_nl(ll)
-        if _lk(ll) == "pub" { ll = _ladv(ll) }
+        ll = _lskip_pub(ll)
         if _lk(ll) == "fn" {
             ll = _lower_impl_fn(ll, impl_type)
         } else if _lk(ll) == rb || _lk(ll) == "EOF" {
@@ -3337,6 +3377,8 @@ fn _lower_impl_fn(l: Lowerer, impl_type: str) -> Lowerer {
                 pt := sig.param_types[pi]
                 if _is_str_array_type(ll.store, pt) {
                     ll = _lset_type(ll, nt.temp, 13)
+                } else if _is_trait_object_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 500)
                 } else {
                     ll = _lset_type(ll, nt.temp, pt)
                 }
@@ -7172,8 +7214,8 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    // Map methods
-    if method == "set" {
+    // Map methods — guarded by type check to avoid collision with user-defined methods
+    if method == "set" && obj_type_ch == 300 {
         // map.set(key, value)
         key := _lower_expr(ll)
         ll = key.l
@@ -7185,7 +7227,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: obj}
     }
 
-    if method == "get" {
+    if method == "get" && obj_type_ch == 300 {
         // map.get(key) -> value
         key := _lower_expr(ll)
         ll = key.l
@@ -7196,7 +7238,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    if method == "has" {
+    if method == "has" && obj_type_ch == 300 {
         // map.has(key) -> bool
         key := _lower_expr(ll)
         ll = key.l
@@ -7207,7 +7249,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    if method == "keys" {
+    if method == "keys" && obj_type_ch == 300 {
         // map.keys() -> [str]
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -7680,12 +7722,39 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if _lk(ll) == "," { ll = _ladv(ll) }
         }
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpVtableCall, nt.temp, obj, method_idx, method, extra_count))
-        // Store extra arg temps in consecutive slots after the instruction
-        // (the LLVM emitter will use type_id for arg count)
-        return LT{l: ll, temp: nt.temp}
+        // Look up the method's return type from any impl FnSig in the registry
+        // to correctly allocate the result temp and generate the LLVM call signature.
+        mut m_ret := 0
+        mut fi := 1
+        while fi < ll.registry.fn_sigs.len() {
+            sig := ll.registry.fn_sigs[fi]
+            // Function names are "TypeName_methodName" for impls
+            slen := method.len()
+            nlen := sig.name.len()
+            if nlen > slen + 1 {
+                suffix := sig.name.substring(nlen - slen - 1, nlen)
+                if suffix == "_" + method {
+                    m_ret = sig.return_type
+                    fi = ll.registry.fn_sigs.len()
+                }
+            }
+            fi = fi + 1
+        }
+        mut nt_temp := 0
+        if m_ret == 12 {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            nt_temp = nt.temp
+            ll = _lset_type(ll, nt.temp, 12)
+        } else {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            nt_temp = nt.temp
+            if m_ret > 0 { ll = _lset_type(ll, nt.temp, m_ret) }
+        }
+        // type_id now holds return type (was extra_count, but extra_count is usually 0 for self-only methods)
+        ll = _lemit(ll, new_inst(OpVtableCall, nt_temp, obj, method_idx, method, m_ret))
+        return LT{l: ll, temp: nt_temp}
     }
 
     // Try user-defined method: qualified name first (Type_method), then plain name
@@ -7701,6 +7770,32 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         // Fallback to plain method name
         method_sig = reg_find_fn(ll.registry, method)
         qualified_method = method
+    }
+    // Blanket impl dispatch: if method still not found, check if the object's type
+    // implements a trait that has a blanket impl providing this method.
+    if method_sig.name == "" && obj_sname != "" {
+        // Look through all impls. If there's a blanket impl "*BoundTrait" that provides
+        // this method, and obj_sname implements BoundTrait, use the blanket impl's method.
+        mut ii := 1
+        while ii < ll.treg.impl_defs.len() {
+            bimp := ll.treg.impl_defs[ii]
+            // Blanket impls have type_name starting with "*"
+            if bimp.type_name.len() > 1 && bimp.type_name.charAt(0) == "*" {
+                bound := bimp.type_name.substring(1, bimp.type_name.len())
+                // Check if obj_sname has impl for the blanket's bound trait
+                if treg_has_impl(ll.treg, obj_sname, bound) {
+                    // The blanket impl method is registered with impl_type==empty or "_"
+                    // giving function names like "_methodName"
+                    blanket_fn := "_" + method
+                    method_sig = reg_find_fn(ll.registry, blanket_fn)
+                    if method_sig.name != "" {
+                        qualified_method = blanket_fn
+                        ii = ll.treg.impl_defs.len()
+                    }
+                }
+            }
+            ii = ii + 1
+        }
     }
     if method_sig.name != "" {
         // Call as method: obj is first arg (self)
@@ -9016,7 +9111,7 @@ fn _lower_make_trait_object(l: Lowerer, data_temp: i64, concrete_type: str, trai
             ll = _lemit(ll, new_inst(OpConst, fn_nt.temp, 0, 0, "", 0))
         }
         slot := vi - 1
-        ll = _lemit(ll, new_inst(OpFieldSet, vt_nt.temp, slot, fn_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, vt_nt.temp, fn_nt.temp, slot, "", 0))
         vi = vi + 1
     }
     // Create trait object: alloc 2 slots, store data_ptr and vtable_ptr
@@ -9061,6 +9156,10 @@ fn _emit_drops(l: Lowerer) -> Lowerer =
 
 fn _lower_closure(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip fn
+    // Optional `once` keyword — consume and ignore at lowering (semantic only)
+    if _lk(ll) == "IDENT" && _lcur(ll).text == "once" {
+        ll = _ladv(ll)
+    }
     // Generate unique closure name based on module function count
     closure_name := "_closure_" + i2s(ll.module.funcs.len())
 
@@ -11137,6 +11236,8 @@ fn _skip_type_l(l: Lowerer) -> Lowerer {
     }
     if k == "fn" {
         ll = _ladv(ll)
+        // Optional `once`
+        if _lk(ll) == "IDENT" && _lcur(ll).text == "once" { ll = _ladv(ll) }
         if _lk(ll) == "(" {
             ll = _ladv(ll)
             while _lk(ll) != ")" && _lk(ll) != "EOF" {
@@ -11875,6 +11976,8 @@ fn _lower_mono_fn(l: Lowerer, spec: MonoSpec) -> Lowerer {
                 pt := sig.param_types[pi]
                 if _is_str_array_type(ll.store, pt) {
                     ll = _lset_type(ll, nt.temp, 13)
+                } else if _is_trait_object_type(ll.store, pt) {
+                    ll = _lset_type(ll, nt.temp, 500)
                 } else {
                     ll = _lset_type(ll, nt.temp, pt)
                 }

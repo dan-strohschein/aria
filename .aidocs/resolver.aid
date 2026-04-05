@@ -192,6 +192,20 @@
 
 ---
 
+@fn _rskip_pub
+@sig (r: Resolver) -> Resolver
+@source_file src/resolver/resolver.aria
+@source_line 64
+
+---
+
+@fn _stdlib_module_for_name
+@sig (name: str) -> str
+@source_file src/resolver/resolver.aria
+@source_line 1383
+
+---
+
 @fn resolve
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult
 @calls [new_table, add_scope, add_symbol, lookup, lookup_local]

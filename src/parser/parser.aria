@@ -229,6 +229,12 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
         if token_name(tokens[pos].kind) == "pub" {
             is_pub = true
             pos = pos + 1
+            // Skip optional (pkg) scope qualifier — treated as pub for intra-package compilation
+            if pos < len && token_name(tokens[pos].kind) == "(" {
+                pos = pos + 1
+                if pos < len && token_name(tokens[pos].kind) == "IDENT" { pos = pos + 1 }
+                if pos < len && token_name(tokens[pos].kind) == ")" { pos = pos + 1 }
+            }
         }
 
         // Skip annotations
@@ -625,6 +631,8 @@ fn _bdi_skip_type_tokens(tokens: [Token], start: i64, len: i64) -> i64 {
     }
     if k == "fn" {
         pos = pos + 1
+        // Optional `once`
+        if pos < len && token_name(tokens[pos].kind) == "IDENT" && tokens[pos].text == "once" { pos = pos + 1 }
         if pos < len && token_name(tokens[pos].kind) == "(" {
             pos = _bdi_skip_parens(tokens, pos, len)
         }
@@ -864,6 +872,8 @@ fn _skip_type(p: Parser) -> Parser {
     }
     if k == "fn" {
         pp = _adv(pp)
+        // Optional `once`
+        if _ck(pp) == "IDENT" && _cur(pp).text == "once" { pp = _adv(pp) }
         pp = _expect(pp, "(")
         while _ck(pp) != ")" && _ck(pp) != "EOF" {
             pp = _skip_type(pp)
@@ -1852,6 +1862,12 @@ fn _parse_pattern(p: Parser) -> PR {
 fn _parse_closure_expr(p: Parser) -> PR {
     span := _pspan(p)
     mut pp := _adv(p)
+    // Optional `once` keyword — consumed, but semantics not yet enforced
+    mut is_once := false
+    if _ck(pp) == "IDENT" && _cur(pp).text == "once" {
+        is_once = true
+        pp = _adv(pp)
+    }
     pp = _expect(pp, "(")
     mut params := ""
     while _ck(pp) != ")" && _ck(pp) != "EOF" {
@@ -1885,7 +1901,7 @@ fn _parse_closure_expr(p: Parser) -> PR {
     }
     body_idx := _pidx(pp)
     pp = _padd(pp, body)
-    PR{p: pp, e: Expr{kind: EkClosure, s1: params, s2: "", b1: false, b2: false,
+    PR{p: pp, e: Expr{kind: EkClosure, s1: params, s2: "", b1: false, b2: is_once,
                        c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
