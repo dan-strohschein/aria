@@ -2663,7 +2663,19 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         if resolved_count > 0 { call_name = name + "_" + resolved_ty_0 }
         if resolved_count > 1 { call_name = call_name + "_" + resolved_ty_1 }
         sp_sig := reg_find_fn(ll.registry, call_name)
-        if sp_sig.name != "" { call_sig = sp_sig }
+        if sp_sig.name != "" {
+            call_sig = sp_sig
+        } else if resolved_count > 0 {
+            // Fallback: generic params derived from assoc bounds aren't in args.
+            // Look up the mono spec by generic_name + first concrete type arg.
+            first_concrete := arg_types[1]
+            sp := reg_find_mono_by_generic(ll.registry, name, first_concrete)
+            if sp.specialized_name != "" {
+                call_name = sp.specialized_name
+                sp_sig2 := reg_find_fn(ll.registry, call_name)
+                if sp_sig2.name != "" { call_sig = sp_sig2 }
+            }
+        }
     }
 
     if call_sig.name != "" || name.startsWith("_aria") {
@@ -5551,6 +5563,15 @@ fn _lower_primary(l: Lowerer) -> LT {
                     sp_sig := reg_find_fn(ll.registry, call_name)
                     if sp_sig.name != "" {
                         call_sig = sp_sig
+                    } else if resolved_count > 0 && arg_types.len() > 1 {
+                        // Fallback: derived-from-bound generics aren't visible in args.
+                        // Look up the mono spec by generic_name + first concrete arg.
+                        sp := reg_find_mono_by_generic(ll.registry, name, arg_types[1])
+                        if sp.specialized_name != "" {
+                            call_name = sp.specialized_name
+                            sp_sig2 := reg_find_fn(ll.registry, call_name)
+                            if sp_sig2.name != "" { call_sig = sp_sig2 }
+                        }
                     }
                 }
 

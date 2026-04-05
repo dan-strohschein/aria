@@ -624,10 +624,30 @@ fn _resolve_fn(r: Resolver) -> Resolver {
                 gspan := _rspan(rr)
                 rr = _add_sym(rr, gname, SkType, gspan, false, false)
                 rr = _radv(rr)
-                // Skip optional trait bound ": Trait"
+                // Skip optional trait bound ": Trait" or ": Trait<Assoc=Type>" or ": Trait + Trait2"
                 if _rk(rr) == ":" {
                     rr = _radv(rr)
                     if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                    // Skip associated-type constraint: <IDENT = IDENT>
+                    if _rk(rr) == "<" {
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == "=" { rr = _radv(rr) }
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == ">" { rr = _radv(rr) }
+                    }
+                    // Skip multi-bounds: + Trait (+ Trait<Assoc=Type>)*
+                    while _rk(rr) == "+" {
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == "<" {
+                            rr = _radv(rr)
+                            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                            if _rk(rr) == "=" { rr = _radv(rr) }
+                            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                            if _rk(rr) == ">" { rr = _radv(rr) }
+                        }
+                    }
                 }
             } else {
                 rr = _radv(rr)
@@ -738,6 +758,24 @@ fn _resolve_fn_ast(r: Resolver, node_idx: i64) -> Resolver {
                 if _rk(rr) == ":" {
                     rr = _radv(rr)
                     if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                    if _rk(rr) == "<" {
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == "=" { rr = _radv(rr) }
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == ">" { rr = _radv(rr) }
+                    }
+                    while _rk(rr) == "+" {
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                        if _rk(rr) == "<" {
+                            rr = _radv(rr)
+                            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                            if _rk(rr) == "=" { rr = _radv(rr) }
+                            if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                            if _rk(rr) == ">" { rr = _radv(rr) }
+                        }
+                    }
                 }
             } else {
                 rr = _radv(rr)

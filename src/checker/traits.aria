@@ -117,6 +117,33 @@ fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
     false
 }
 
+// Returns the ImplDef for a given (type, trait) pair; sentinel (name="") if not found.
+fn treg_find_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> ImplDef {
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.type_name == type_name && imp.trait_name == trait_name {
+            return imp
+        }
+        i = i + 1
+    }
+    _sentinel_impl_def()
+}
+
+// Looks up the impl's value for a given associated type name; "" if not bound.
+fn treg_find_assoc_value(reg: TraitRegistry, type_name: str, trait_name: str, assoc_name: str) -> str {
+    imp := treg_find_impl(reg, type_name, trait_name)
+    if imp.trait_name == "" { return "" }
+    mut i := 1
+    while i < imp.assoc_type_names.len() {
+        if imp.assoc_type_names[i] == assoc_name {
+            return imp.assoc_type_values[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
 // Returns list of concrete type names that implement a given bound trait.
 // Skips blanket markers (type_name starts with "*"). Used for eager
 // monomorphization of blanket impl methods.

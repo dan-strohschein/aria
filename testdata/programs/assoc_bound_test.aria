@@ -1,0 +1,27 @@
+// test-expect: assoc_bound_test passed
+
+// Test associated types in generic bounds.
+// Form A: concrete assoc binding (T: Trait<Item=i64>)
+// Form B: generic assoc binding (T: Trait<Item=U>, U)
+
+trait Tagged {
+    type Out
+    fn tag(self) -> Out
+}
+
+impl Tagged for i64 {
+    type Out = i64
+    fn tag(self) -> i64 = self + 1
+}
+
+// Form A: concrete assoc — constrains i64's Tagged::Out to i64
+fn use_tagged[T: Tagged<Out=i64>](x: T) -> i64 = 42
+
+// Form B: generic assoc — binds U to i64 via impl's Out value
+fn bind_tagged[T: Tagged<Out=U>, U](x: T) -> i64 = 7
+
+entry {
+    assert use_tagged(5) == 42
+    assert bind_tagged(5) == 7
+    println("assoc_bound_test passed")
+}

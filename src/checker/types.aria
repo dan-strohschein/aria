@@ -704,6 +704,21 @@ fn reg_find_mono(reg: TypeRegistry, specialized_name: str) -> MonoSpec {
     _sentinel_mono_spec()
 }
 
+// Finds a mono spec by generic_name matching the first-arg type.
+// Used by the lowerer when generic params derived from assoc-bounds
+// aren't visible in the arg-based name.
+fn reg_find_mono_by_generic(reg: TypeRegistry, generic_name: str, type_arg_0: i64) -> MonoSpec {
+    mut i := 1
+    while i < reg.mono_specs.len() {
+        sp := reg.mono_specs[i]
+        if sp.generic_name == generic_name && sp.type_arg_0 == type_arg_0 {
+            return sp
+        }
+        i = i + 1
+    }
+    _sentinel_mono_spec()
+}
+
 fn reg_find_struct(reg: TypeRegistry, name: str) -> StructDef {
     mut i := 1
     while i < reg.struct_defs.len() {

@@ -698,11 +698,28 @@ fn _parse_fn(p: Parser) -> PR {
                 generics = generics + gname
                 pp = _adv(pp)
                 // Capture optional trait bound ": Trait" or ": Trait + Trait2"
+                // Also supports associated-type constraints: ": Trait<Item=Type>"
                 if _ck(pp) == ":" {
                     pp = _adv(pp)
                     if _ck(pp) == "IDENT" {
                         generics = generics + ":" + _cur(pp).text
                         pp = _adv(pp)
+                        if _ck(pp) == "<" {
+                            pp = _adv(pp)
+                            if _ck(pp) == "IDENT" {
+                                assoc_n := _cur(pp).text
+                                pp = _adv(pp)
+                                if _ck(pp) == "=" {
+                                    pp = _adv(pp)
+                                    if _ck(pp) == "IDENT" {
+                                        assoc_v := _cur(pp).text
+                                        generics = generics + "<" + assoc_n + "=" + assoc_v + ">"
+                                        pp = _adv(pp)
+                                    }
+                                }
+                            }
+                            if _ck(pp) == ">" { pp = _adv(pp) }
+                        }
                         while _ck(pp) == "+" {
                             pp = _adv(pp)
                             if _ck(pp) == "IDENT" {
@@ -924,6 +941,23 @@ fn _parse_type_decl(p: Parser) -> PR {
                     if _ck(pp) == "IDENT" {
                         generics = generics + ":" + _cur(pp).text
                         pp = _adv(pp)
+                        // Optional associated-type constraint: <Name=Type>
+                        if _ck(pp) == "<" {
+                            pp = _adv(pp)
+                            if _ck(pp) == "IDENT" {
+                                assoc_n := _cur(pp).text
+                                pp = _adv(pp)
+                                if _ck(pp) == "=" {
+                                    pp = _adv(pp)
+                                    if _ck(pp) == "IDENT" {
+                                        assoc_v := _cur(pp).text
+                                        generics = generics + "<" + assoc_n + "=" + assoc_v + ">"
+                                        pp = _adv(pp)
+                                    }
+                                }
+                            }
+                            if _ck(pp) == ">" { pp = _adv(pp) }
+                        }
                         while _ck(pp) == "+" {
                             pp = _adv(pp)
                             if _ck(pp) == "IDENT" {

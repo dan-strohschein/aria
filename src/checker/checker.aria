@@ -1880,21 +1880,18 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
     if is_blanket { reg_prefix = "" }
     // AST path: iterate method children from the EkImplDecl node
     if node_idx > 0 {
+        saved_impl_pos := cc.pos
         impl_node := pool_get(cc.pool, node_idx)
         mut mi := 0
         while mi < impl_node.list_count {
             midx_node := pool_get(cc.pool, impl_node.list_start + mi)
             method_idx := midx_node.c0
             method_node := pool_get(cc.pool, method_idx)
-            // The method FnDecl has a token position — find it for token_start
-            // Use the method node's span to find the token position
-            // We need the token position of the fn keyword — look it up from the method node
-            // Method nodes are EkFnDecl; their span points to the fn keyword
-            // We need to find the token index for this method
-            // Since we have the method node in the pool, use token_start from a scan
             cc = _register_impl_fn_sig_ast(cc, reg_prefix, method_idx)
             mi = mi + 1
         }
+        // Restore to impl start so associated-type scanning sees the full body
+        cc = _cset_pos(cc, saved_impl_pos)
         // Still need to handle associated types — scan tokens for those
         lb := "\{"
         while _ck2(cc) != lb && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -3486,9 +3483,57 @@ fn _check_call_args_sig(c: Checker, sig: FnSig) -> CE {
 // --- Check generic function call: infer type args, register specialization ---
 
 // Check multi-bounds: split "Eq+Hash+Clone" and verify each
-fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -> Checker {
+// Parses a single bound like "Iter<Item=U>" or "Clone" into parts.
+// Returns [trait_name, assoc_name, assoc_binding]; assoc_name/assoc_binding empty if no constraint.
+fn _parse_single_bound(b: str) -> [str] {
+    blen := b.len()
+    if blen == 0 { return ["", "", ""] }
+    mut lt := 0 - 1
+    mut i := 0
+    while i < blen {
+        if b.charAt(i) == "<" {
+            lt = i
+            i = blen
+        } else {
+            i = i + 1
+        }
+    }
+    if lt < 0 { return [b, "", ""] }
+    trait_n := b.substring(0, lt)
+    // Find matching '>'
+    mut gt := 0 - 1
+    mut j := lt + 1
+    while j < blen {
+        if b.charAt(j) == ">" {
+            gt = j
+            j = blen
+        } else {
+            j = j + 1
+        }
+    }
+    if gt < 0 { return [trait_n, "", ""] }
+    inner := b.substring(lt + 1, gt)
+    // Split inner on '='
+    mut eq := 0 - 1
+    mut k := 0
+    while k < inner.len() {
+        if inner.charAt(k) == "=" {
+            eq = k
+            k = inner.len()
+        } else {
+            k = k + 1
+        }
+    }
+    if eq < 0 { return [trait_n, "", ""] }
+    assoc_n := inner.substring(0, eq)
+    assoc_v := inner.substring(eq + 1, inner.len())
+    [trait_n, assoc_n, assoc_v]
+}
+
+// Wrapper that knows the generic-parameter names — skips assoc-checks
+// when assoc_v is a generic param (binding handled in _derive_from_assoc_bound).
+fn _check_multi_bound_sig(c: Checker, type_name: str, bound: str, param_name: str, sig: FnSig) -> Checker {
     mut cc := c
-    // Split bound on +
     mut start := 0
     mut i := 0
     while i <= bound.len() {
@@ -3497,14 +3542,136 @@ fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -
         if i < bound.len() && bound.charAt(i) == "+" { at_sep = true }
         if at_sep && i > start {
             single := bound.substring(start, i)
-            if treg_has_impl(cc.treg, type_name, single) == false {
-                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + single + " for " + param_name)
+            parts := _parse_single_bound(single)
+            trait_n := parts[0]
+            assoc_n := parts[1]
+            assoc_v := parts[2]
+            if treg_has_impl(cc.treg, type_name, trait_n) == false {
+                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+            } else if assoc_n != "" {
+                // Skip check if assoc_v is a generic parameter of this fn
+                is_gp := assoc_v == sig.generic_name_0 || assoc_v == sig.generic_name_1 || assoc_v == sig.generic_name_2
+                if is_gp == false && _is_concrete_type_name(cc.store, assoc_v) {
+                    alias_name := type_name + "_" + assoc_n
+                    alias_tid := resolve_type_name(cc.store, alias_name)
+                    expected_tid := resolve_type_name(cc.store, assoc_v)
+                    if alias_tid != TY_UNKNOWN && expected_tid != TY_UNKNOWN {
+                        alias_info := store_get(cc.store, alias_tid)
+                        actual_tid := alias_info.type_id
+                        if actual_tid != expected_tid {
+                            cc = _cerror(cc, E0106, "type " + type_name + " has " + trait_n + "::" + assoc_n +
+                                         " = " + format_type(cc.store, actual_tid) + " but expected " + assoc_v + " for " + param_name)
+                        }
+                    }
+                }
             }
             start = i + 1
         }
         i = i + 1
     }
     cc
+}
+
+fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -> Checker {
+    mut cc := c
+    // Split bound on + (top level; assoc constraints don't contain '+')
+    mut start := 0
+    mut i := 0
+    while i <= bound.len() {
+        mut at_sep := false
+        if i == bound.len() { at_sep = true }
+        if i < bound.len() && bound.charAt(i) == "+" { at_sep = true }
+        if at_sep && i > start {
+            single := bound.substring(start, i)
+            parts := _parse_single_bound(single)
+            trait_n := parts[0]
+            assoc_n := parts[1]
+            assoc_v := parts[2]
+            if treg_has_impl(cc.treg, type_name, trait_n) == false {
+                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+            } else if assoc_n != "" {
+                if _is_concrete_type_name(cc.store, assoc_v) {
+                    alias_name := type_name + "_" + assoc_n
+                    alias_tid := resolve_type_name(cc.store, alias_name)
+                    expected_tid := resolve_type_name(cc.store, assoc_v)
+                    if alias_tid != TY_UNKNOWN && expected_tid != TY_UNKNOWN {
+                        alias_info := store_get(cc.store, alias_tid)
+                        actual_tid := alias_info.type_id
+                        if actual_tid != expected_tid {
+                            cc = _cerror(cc, E0106, "type " + type_name + " has " + trait_n + "::" + assoc_n +
+                                         " = " + format_type(cc.store, actual_tid) + " but expected " + assoc_v + " for " + param_name)
+                        }
+                    }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    cc
+}
+
+// Returns true if name refers to a known concrete type in the store (primitive or registered struct).
+fn _is_concrete_type_name(store: TypeStore, name: str) -> bool {
+    if name == "" { return false }
+    if name == "i64" || name == "f64" || name == "bool" || name == "str" || name == "char" { return true }
+    tid := resolve_type_name(store, name)
+    if tid == TY_UNKNOWN { return false }
+    true
+}
+
+// For an unbound generic param `target_name`, scan each bound on a KNOWN
+// generic looking for `<Assoc=target_name>`. If found, look up the impl's
+// concrete value for that assoc and return its type id. Returns 0 if no
+// binding can be derived.
+fn _derive_from_assoc_bound(c: Checker, sig: FnSig, target_name: str, c0: i64, c1: i64, c2: i64, t0: i64, t1: i64, t2: i64) -> i64 {
+    // Try each (bound_str, concrete_type) pair
+    mut result := 0
+    if sig.generic_bound_0 != "" && c0 > 0 {
+        result = _scan_bound_for_target(c, sig.generic_bound_0, target_name, c0)
+        if result > 0 { return result }
+    }
+    if sig.generic_bound_1 != "" && c1 > 0 {
+        result = _scan_bound_for_target(c, sig.generic_bound_1, target_name, c1)
+        if result > 0 { return result }
+    }
+    if sig.generic_bound_2 != "" && c2 > 0 {
+        result = _scan_bound_for_target(c, sig.generic_bound_2, target_name, c2)
+        if result > 0 { return result }
+    }
+    0
+}
+
+// Scans a "+"-separated bound string for a sub-bound whose assoc_binding == target_name.
+// If found, looks up the impl's value and resolves to a type id.
+fn _scan_bound_for_target(c: Checker, bound: str, target_name: str, known_concrete: i64) -> i64 {
+    type_name := format_type(c.store, known_concrete)
+    mut start := 0
+    mut i := 0
+    while i <= bound.len() {
+        mut at_sep := false
+        if i == bound.len() { at_sep = true }
+        if i < bound.len() && bound.charAt(i) == "+" { at_sep = true }
+        if at_sep && i > start {
+            single := bound.substring(start, i)
+            parts := _parse_single_bound(single)
+            trait_n := parts[0]
+            assoc_n := parts[1]
+            assoc_v := parts[2]
+            if assoc_n != "" && assoc_v == target_name {
+                // Look up the impl's alias ConcreteType_AssocName
+                alias_name := type_name + "_" + assoc_n
+                alias_tid := resolve_type_name(c.store, alias_name)
+                if alias_tid != TY_UNKNOWN {
+                    alias_info := store_get(c.store, alias_tid)
+                    return alias_info.type_id
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    0
 }
 
 fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
@@ -3578,6 +3745,19 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
         pi = pi + 1
     }
 
+    // Derive unbound generic params from associated-type bounds.
+    // If bound on a KNOWN generic binds an unbound generic via <Assoc=Name>,
+    // look up the impl's assoc value and bind the unbound generic to it.
+    if concrete_0 == 0 && sig.generic_name_0 != "" {
+        concrete_0 = _derive_from_assoc_bound(cc, sig, sig.generic_name_0, concrete_0, concrete_1, concrete_2, tv_id_0, tv_id_1, tv_id_2)
+    }
+    if concrete_1 == 0 && sig.generic_name_1 != "" {
+        concrete_1 = _derive_from_assoc_bound(cc, sig, sig.generic_name_1, concrete_0, concrete_1, concrete_2, tv_id_0, tv_id_1, tv_id_2)
+    }
+    if concrete_2 == 0 && sig.generic_name_2 != "" {
+        concrete_2 = _derive_from_assoc_bound(cc, sig, sig.generic_name_2, concrete_0, concrete_1, concrete_2, tv_id_0, tv_id_1, tv_id_2)
+    }
+
     // Build specialized name
     mut spec_name := sig.name
     if sig.generic_count > 0 && concrete_0 > 0 {
@@ -3620,15 +3800,15 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
     // Check trait bounds (supports multi-bounds: "Eq+Hash+Clone")
     if sig.generic_bound_0 != "" && concrete_0 > 0 && concrete_0 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_0)
-        cc = _check_multi_bound(cc, cname, sig.generic_bound_0, sig.generic_name_0)
+        cc = _check_multi_bound_sig(cc, cname, sig.generic_bound_0, sig.generic_name_0, sig)
     }
     if sig.generic_bound_1 != "" && concrete_1 > 0 && concrete_1 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_1)
-        cc = _check_multi_bound(cc, cname, sig.generic_bound_1, sig.generic_name_1)
+        cc = _check_multi_bound_sig(cc, cname, sig.generic_bound_1, sig.generic_name_1, sig)
     }
     if sig.generic_bound_2 != "" && concrete_2 > 0 && concrete_2 != TY_UNKNOWN {
         cname := format_type(cc.store, concrete_2)
-        cc = _check_multi_bound(cc, cname, sig.generic_bound_2, sig.generic_name_2)
+        cc = _check_multi_bound_sig(cc, cname, sig.generic_bound_2, sig.generic_name_2, sig)
     }
 
     // Determine return type
