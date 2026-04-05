@@ -140,6 +140,7 @@
   deprecated_names: [str] — Deprecated symbol names
   deprecated_msgs: [str] — Deprecation messages
   cold_names: [str] — Cold-path function names
+  fn_value_refs: [str] — Function names referenced as values
 @source_file src/checker/types.aria
 @source_line 614
 
@@ -201,6 +202,7 @@
   fn_error_type: i64 — Current function error type
   fn_current_name: str — Current function name
   in_loop: bool — Whether inside a loop
+  in_callee_slot: bool — Whether in callee position of a call
 @source_file src/checker/checker.aria
 @source_line 18
 
@@ -754,6 +756,13 @@
 
 ---
 
+@fn reg_add_fn_value_ref
+@sig (reg: TypeRegistry, fname: str) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 658
+
+---
+
 @fn reg_find_mono
 @sig (reg: TypeRegistry, specialized_name: str) -> MonoSpec
 @source_file src/checker/types.aria
@@ -863,6 +872,13 @@
 @sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> str
 @source_file src/checker/checker.aria
 @source_line 111
+
+---
+
+@fn _cset_callee_slot
+@sig (c: Checker, in_callee: bool) -> Checker
+@source_file src/checker/checker.aria
+@source_line 171
 
 ---
 

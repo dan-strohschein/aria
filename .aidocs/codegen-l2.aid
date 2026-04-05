@@ -539,11 +539,31 @@
 
 ---
 
+@fn _lset_reg
+@sig (l: Lowerer, reg: TypeRegistry) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 127
+@purpose Returns a new Lowerer with the registry field replaced. Used by the lowerer to register fn-value refs during expression lowering (reg_add_fn_value_ref mutations).
+@notes Part of Sprint v0.2-1 fn-as-value infrastructure. Follows the functional-update pattern used by all Lowerer state mutations.
+
+---
+
+@fn _lower_trampolines
+@sig (l: Lowerer) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11788
+@purpose Generates trampoline wrapper functions for each function referenced as a first-class value. Each trampoline has signature `_tramp_<fname>(env_ptr: i64, args...)` and delegates to the original fn by discarding env_ptr and forwarding the remaining args. Bridges the ABI gap between closures (which pass env_ptr as first arg) and named functions (which don't).
+@workflow Runs after _lower_bodies, before _lower_derives and _lower_mono_pass. Iterates registry.fn_value_refs. For each entry, looks up the original FnSig, computes ABI arg count (str params take 2 slots), emits the wrapper as a new IrFunc in the module.
+@notes Return type dispatched: str (type 12) returns {i64, i64} struct, void/unit returns nothing, others return i64. Precedent: mirrors _lower_derives iteration pattern.
+@effects Adds one IrFunc per unique fn_value_refs entry to ll.module.funcs.
+
+---
+
 @fn lower
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
 @source_file src/codegen/lower.aria
 @source_line 11247
-@purpose Main lowering entry point. Runs four passes: (1) _scan_consts pre-scans compile-time constants, (2) _lower_bodies lowers all fn/entry/test bodies to IR, (3) _lower_derives generates trait derive implementations (Eq, Clone, Debug, Display, Default, Ord, Hash), (4) _lower_mono_pass generates monomorphized copies of generic functions.
+@purpose Main lowering entry point. Runs five passes: (1) _scan_consts pre-scans compile-time constants, (2) _lower_bodies lowers all fn/entry/test bodies to IR, (3) _lower_trampolines generates wrappers for fn-as-value references, (4) _lower_derives generates trait derive implementations (Eq, Clone, Debug, Display, Default, Ord, Hash), (5) _lower_mono_pass generates monomorphized copies of generic functions.
 @workflow Called after check() succeeds. Produces an IrModule ready for LLVM IR generation.
 @pre All inputs must come from a successful check pass. tokens/pool/store/registry/treg/table must be consistent.
 @post Returns an IrModule with entry_func set, all functions lowered, and string constants populated.

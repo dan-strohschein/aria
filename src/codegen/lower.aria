@@ -124,6 +124,18 @@ fn _lskip_pub(l: Lowerer) -> Lowerer {
     ll
 }
 
+fn _lset_reg(l: Lowerer, reg: TypeRegistry) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: reg, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types,
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
+
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
     Lowerer{tokens: l.tokens, pos: pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
@@ -1222,6 +1234,25 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = nt.l
             ll = _lemit(ll, new_inst(OpConst, nt.temp, vtag, 0, "", 0))
             return LT{l: ll, temp: nt.temp}
+        }
+        // Check if name refers to a function — emit fn-as-value fat pointer
+        fsig := reg_find_fn(ll.registry, name)
+        if fsig.name != "" {
+            // Register this fn as a value reference (dedup in registry)
+            ll = _lset_reg(ll, reg_add_fn_value_ref(ll.registry, name))
+            // Build closure fat pointer: {trampoline_fn_ptr, null_env}
+            clos := _lnew_temp(ll)
+            ll = clos.l
+            ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+            fn_ref := _lnew_temp(ll)
+            ll = fn_ref.l
+            ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, "_tramp_" + name, 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+            null_env := _lnew_temp(ll)
+            ll = null_env.l
+            ll = _lemit(ll, new_inst(OpConst, null_env.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, null_env.temp, 1, "_env", 0))
+            return LT{l: ll, temp: clos.temp}
         }
         // Unknown ident — return dummy temp
         nt := _lnew_temp(ll)
@@ -3133,12 +3164,23 @@ fn _lower_fixture(l: Lowerer, kind: str) -> Lowerer {
 // DeclInfo-aware impl lowering — walks AST method children
 fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
     mut ll := _ladv(l)  // skip impl
-    // Skip generic params [T: Bound] for blanket impls
+    // Skip generic params [T: Bound] for blanket impls, capturing the bound trait name
     mut is_blanket := false
+    mut bound_trait := ""
     if _lk(ll) == "[" {
         is_blanket = true
+        ll = _ladv(ll)  // skip [
+        // Parse: T : Bound
+        if _lk(ll) == "IDENT" { ll = _ladv(ll) }  // skip T
+        if _lk(ll) == ":" {
+            ll = _ladv(ll)  // skip :
+            if _lk(ll) == "IDENT" {
+                bound_trait = _lcur(ll).text
+                ll = _ladv(ll)
+            }
+        }
+        // Skip any remaining tokens in brackets (e.g., "+ OtherBound")
         mut depth := 1
-        ll = _ladv(ll)
         while depth > 0 && _lk(ll) != "EOF" {
             if _lk(ll) == "[" { depth = depth + 1 }
             if _lk(ll) == "]" { depth = depth - 1 }
@@ -3180,6 +3222,22 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             sig := reg_find_fn(ll.registry, name)
             if sig.name != "" && fn_is_generic(sig) == false && method_node.b1 {
                 ll = _lower_impl_method_by_name(ll, impl_type, raw_name, sig)
+                // For blanket impls, also emit specializations per concrete type.
+                // Reset position to body start before each specialization so the
+                // token-scan finds the method body.
+                if is_blanket && bound_trait != "" {
+                    concrete_types := treg_types_implementing(ll.treg, bound_trait)
+                    mut ci := 1
+                    while ci < concrete_types.len() {
+                        ctype_name := concrete_types[ci]
+                        ctype_id := _struct_type_id(ll.registry, ctype_name)
+                        if ctype_id > 0 {
+                            ll = _lset_pos(ll, decl.body_start)
+                            ll = _lower_blanket_method_specialized(ll, raw_name, sig, ctype_name, ctype_id)
+                        }
+                        ci = ci + 1
+                    }
+                }
             }
             mi = mi + 1
         }
@@ -3193,6 +3251,86 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
 }
 
 // Lower a specific impl method — scans forward from current pos to find it
+// Lower a blanket impl method specialized to a concrete type. Like
+// _lower_impl_method_by_name, but the function name is "_<raw_name>_<concrete_type>"
+// and the self parameter gets the concrete type's struct ID so self.X() dispatches
+// to the concrete type's methods during body lowering.
+fn _lower_blanket_method_specialized(l: Lowerer, raw_name: str, sig: FnSig, concrete_type: str, concrete_tid: i64) -> Lowerer {
+    mut ll := l
+    tlen := ll.tokens.len()
+    mut search_pos := ll.pos
+    lb := "\{"
+    while search_pos < tlen {
+        tk := token_name(ll.tokens[search_pos].kind)
+        if tk == "fn" {
+            next := search_pos + 1
+            if next < tlen {
+                if ll.tokens[next].text == raw_name {
+                    ll = _lset_pos(ll, search_pos + 2)
+                    // Count register args
+                    mut actual_param_count := 0
+                    mut pi := 1
+                    while pi < sig.param_names.len() {
+                        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+                            actual_param_count = actual_param_count + 2
+                        } else {
+                            actual_param_count = actual_param_count + 1
+                        }
+                        pi = pi + 1
+                    }
+                    // Specialized function name: "_raw_name_ConcreteType"
+                    spec_fname := "_" + raw_name + "_" + concrete_type
+                    ll = _lset_func(ll, new_ir_func(spec_fname, actual_param_count, sig.return_type))
+                    // Allocate temps for parameters; self gets concrete_tid
+                    pi = 1
+                    while pi < sig.param_names.len() {
+                        if pi <= sig.param_types.len() - 1 && sig.param_types[pi] == 12 {
+                            nt := _lnew_str_temp(ll)
+                            ll = nt.l
+                            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+                            ll = _lset_type(ll, nt.temp, 12)
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            ll = _lenv_add(ll, sig.param_names[pi], nt.temp)
+                            // Self (first param) gets concrete type; other params use sig
+                            if pi == 1 && sig.param_names[pi] == "self" {
+                                ll = _lset_type(ll, nt.temp, concrete_tid)
+                            } else if pi <= sig.param_types.len() - 1 && sig.param_types[pi] > 0 {
+                                pt := sig.param_types[pi]
+                                if _is_str_array_type(ll.store, pt) {
+                                    ll = _lset_type(ll, nt.temp, 13)
+                                } else {
+                                    ll = _lset_type(ll, nt.temp, pt)
+                                }
+                            }
+                        }
+                        pi = pi + 1
+                    }
+                    // Skip to body
+                    while _lk(ll) != "=" && _lk(ll) != lb && _lk(ll) != "EOF" {
+                        ll = _ladv(ll)
+                    }
+                    if _lk(ll) == "=" {
+                        ll = _ladv(ll)
+                        ll = _lskip_nl(ll)
+                        result := _lower_expr(ll)
+                        ll = result.l
+                        ret_type := _lget_type(ll, result.temp)
+                        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", ret_type))
+                    } else if _lk(ll) == lb {
+                        ll = _lower_fn_body(ll, sig.return_type)
+                    }
+                    ll = _lfinish_func(ll)
+                    return ll
+                }
+            }
+        }
+        search_pos = search_pos + 1
+    }
+    ll
+}
+
 fn _lower_impl_method_by_name(l: Lowerer, impl_type: str, raw_name: str, sig: FnSig) -> Lowerer {
     mut ll := l
     // Scan forward from current position to find fn <raw_name>
@@ -6790,6 +6928,23 @@ fn _lower_primary(l: Lowerer) -> LT {
             return LT{l: ll, temp: nt.temp}
         }
 
+        // Function reference (name resolves to a function, used as value)
+        fsig := reg_find_fn(ll.registry, name)
+        if fsig.name != "" {
+            ll = _lset_reg(ll, reg_add_fn_value_ref(ll.registry, name))
+            clos := _lnew_temp(ll)
+            ll = clos.l
+            ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+            fn_ref := _lnew_temp(ll)
+            ll = fn_ref.l
+            ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, "_tramp_" + name, 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+            null_env := _lnew_temp(ll)
+            ll = null_env.l
+            ll = _lemit(ll, new_inst(OpConst, null_env.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, null_env.temp, 1, "_env", 0))
+            return LT{l: ll, temp: clos.temp}
+        }
         // Unknown identifier — return 0
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -7784,13 +7939,26 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                 bound := bimp.type_name.substring(1, bimp.type_name.len())
                 // Check if obj_sname has impl for the blanket's bound trait
                 if treg_has_impl(ll.treg, obj_sname, bound) {
-                    // The blanket impl method is registered with impl_type==empty or "_"
-                    // giving function names like "_methodName"
-                    blanket_fn := "_" + method
-                    method_sig = reg_find_fn(ll.registry, blanket_fn)
-                    if method_sig.name != "" {
-                        qualified_method = blanket_fn
-                        ii = ll.treg.impl_defs.len()
+                    // Prefer specialized blanket method: "_method_ConcreteType"
+                    // These aren't in the registry; check the module directly.
+                    spec_fn := "_" + method + "_" + obj_sname
+                    spec_fn_check := mod_find_func(ll.module, spec_fn)
+                    if spec_fn_check.name != "" {
+                        // Use the generic blanket's sig but with the specialized name
+                        blanket_fn := "_" + method
+                        method_sig = reg_find_fn(ll.registry, blanket_fn)
+                        if method_sig.name != "" {
+                            qualified_method = spec_fn
+                            ii = ll.treg.impl_defs.len()
+                        }
+                    } else {
+                        // Fall back to generic blanket method "_method"
+                        blanket_fn := "_" + method
+                        method_sig = reg_find_fn(ll.registry, blanket_fn)
+                        if method_sig.name != "" {
+                            qualified_method = blanket_fn
+                            ii = ll.treg.impl_defs.len()
+                        }
                     }
                 }
             }
@@ -11733,10 +11901,85 @@ fn _lower_derive_hash(l: Lowerer, def: StructDef) -> Lowerer {
     ll
 }
 
+// Generate trampoline wrapper functions for each fn referenced as a value.
+// Each trampoline accepts an env_ptr as its first arg (closure ABI) and forwards
+// the remaining args to the original function. This bridges the ABI gap between
+// named functions (no env_ptr) and closures (env_ptr as first arg).
+fn _lower_trampolines(l: Lowerer) -> Lowerer {
+    mut ll := l
+    mut i := 1
+    while i < ll.registry.fn_value_refs.len() {
+        fname := ll.registry.fn_value_refs[i]
+        sig := reg_find_fn(ll.registry, fname)
+        if sig.name != "" {
+            tramp_name := "_tramp_" + fname
+            existing := mod_find_func(ll.module, tramp_name)
+            if existing.name == "" {
+                // Compute ABI arg count: str params take 2 register slots
+                mut abi_args := 0
+                mut pi := 1
+                while pi < sig.param_types.len() {
+                    if sig.param_types[pi] == 12 {
+                        abi_args = abi_args + 2
+                    } else {
+                        abi_args = abi_args + 1
+                    }
+                    pi = pi + 1
+                }
+                // Trampoline takes 1 extra arg (env_ptr) prepended
+                total_args := 1 + abi_args
+                ll = _lset_func(ll, new_ir_func(tramp_name, total_args, sig.return_type))
+                // Emit OpArg for each param (arg 0 = env_ptr, unused)
+                mut ai := 0
+                while ai < total_args {
+                    arg_temp := _lnew_temp(ll)
+                    ll = arg_temp.l
+                    ll = _lemit(ll, new_inst(OpArg, arg_temp.temp, ai, 0, "", 0))
+                    ai = ai + 1
+                }
+                // Forward to original function with args starting at index 1 (skip env_ptr)
+                // First forwarded arg temp is env_arg_temp + 1
+                // The temp counter for args 0..total_args-1 corresponds to the first
+                // total_args temps after entering the function (their IDs are known).
+                // Actually: each _lnew_temp returns sequential IDs. First arg was temp 0
+                // (or whatever starting id), then 1, 2, ...
+                // We emit OpCall with first_arg = temp_of(arg_1), arg_count = abi_args.
+                // The temps we allocated are sequential from the first _lnew_temp call.
+                // Need to track the first forwarded arg temp.
+                // Re-emit: track first_forwarded_temp explicitly.
+                first_forward := 1  // arg 0 is env_ptr, arg 1 starts the forwarded args (temp id = 1 in fresh func)
+                // Allocate return temp
+                mut ret_temp := 0
+                if sig.return_type == 12 {
+                    rt := _lnew_str_temp(ll)
+                    ll = rt.l
+                    ret_temp = rt.temp
+                    ll = _lemit(ll, new_inst(OpCall, ret_temp, first_forward, abi_args, fname, sig.return_type))
+                    ll = _lemit(ll, new_inst(OpRet, 0, ret_temp, 0, "", 0))
+                } else if sig.return_type == 0 || sig.return_type == 14 {
+                    // void / unit
+                    ll = _lemit(ll, new_inst(OpCall, 0, first_forward, abi_args, fname, sig.return_type))
+                    ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+                } else {
+                    rt := _lnew_temp(ll)
+                    ll = rt.l
+                    ret_temp = rt.temp
+                    ll = _lemit(ll, new_inst(OpCall, ret_temp, first_forward, abi_args, fname, sig.return_type))
+                    ll = _lemit(ll, new_inst(OpRet, 0, ret_temp, 0, "", 0))
+                }
+                ll = _lfinish_func(ll)
+            }
+        }
+        i = i + 1
+    }
+    ll
+}
+
 fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies(l, index)
+    l = _lower_trampolines(l)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     return l.module
@@ -11748,6 +11991,7 @@ fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: Typ
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies_skip_entry(l, index)
+    l = _lower_trampolines(l)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function

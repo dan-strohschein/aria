@@ -449,6 +449,20 @@
 
 ---
 
+@fn _lset_reg
+@sig (l: Lowerer, reg: TypeRegistry) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 127
+
+---
+
+@fn _lower_trampolines
+@sig (l: Lowerer) -> Lowerer
+@source_file src/codegen/lower.aria
+@source_line 11788
+
+---
+
 @fn lower
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
 @source_file src/codegen/lower.aria

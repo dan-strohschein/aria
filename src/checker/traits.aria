@@ -80,6 +80,36 @@ fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
     false
 }
 
+// Returns list of concrete type names that implement a given bound trait.
+// Skips blanket markers (type_name starts with "*"). Used for eager
+// monomorphization of blanket impl methods.
+fn treg_types_implementing(reg: TraitRegistry, bound: str) -> [str] {
+    mut types := [""]
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.trait_name == bound {
+            if imp.type_name.len() > 0 {
+                first := imp.type_name.substring(0, 1)
+                if first != "*" {
+                    // Dedup
+                    mut found := false
+                    mut j := 1
+                    while j < types.len() {
+                        if types[j] == imp.type_name { found = true }
+                        j = j + 1
+                    }
+                    if found == false {
+                        types = types.append(imp.type_name)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    types
+}
+
 // --- Populate built-in traits and impls ---
 
 fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {

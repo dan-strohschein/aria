@@ -161,6 +161,7 @@
   deprecated_names: [str] — Deprecated symbol names (1-based)
   deprecated_msgs: [str] — Deprecation messages (parallel to deprecated_names)
   cold_names: [str] — Cold-path function names (1-based)
+  fn_value_refs: [str] — Function names referenced as first-class values (for fn-as-value HOFs). Drives trampoline emission in _lower_trampolines.
 @purpose Central registry for all type and function definitions discovered during checking. Provides lookup-by-name for structs, functions, monomorphization specs, and annotation metadata. Passed through to codegen as part of CheckResult.
 @invariants All arrays are 1-based with sentinels at index 0. deprecated_names and deprecated_msgs are parallel arrays. Struct type IDs >= TY_STRUCT_BASE map to struct_defs via: index = type_id - TY_STRUCT_BASE + 1.
 @antipatterns Linear search is used for all lookups (reg_find_struct, reg_find_fn, etc.); adequate for compiler-sized programs but would not scale to very large registries.
@@ -230,6 +231,7 @@
   fn_error_type: i64 — Current function's declared error type (0 = infallible)
   fn_current_name: str — Current function name (for effect checking and Self resolution)
   in_loop: bool — Whether currently inside a loop (for break/continue validation)
+  in_callee_slot: bool — Whether the expression being checked is the callee of a call (true for `f` in `f(x)`, false for `f` in `apply(f, x)`). Enables fn-as-value detection for trampoline generation.
 @purpose Immutable state object threaded through all checking functions. Every mutation creates a new Checker via _cset_* helper functions. This functional-update pattern avoids mutable state issues and works within bootstrap compiler constraints.
 @invariants env_names, env_types, and env_scopes are parallel arrays. fn_return_type/fn_error_type are set per-function via _cset_fn_ctx. fn_current_name is "_entry" for entry blocks and "_test" for test blocks (these bypass effect checking).
 @notes The _cset_* helpers (_cset_pos, _cset_store, _cset_reg, _cset_diag, _cset_fn_ctx, _cset_treg, _cset_loop) each create a full copy of the Checker with one field changed. This is verbose but necessary because the bootstrap compiler cannot generate struct-update syntax. [src: checker.aria:97-144]
@@ -893,6 +895,16 @@
 
 ---
 
+@fn reg_add_fn_value_ref
+@sig (reg: TypeRegistry, fname: str) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 658
+@purpose Registers a function name as referenced as a first-class value (passed to HOFs, stored in variables, etc.). Dedups before appending. Drives trampoline emission in _lower_trampolines — only functions in this list get trampolines generated.
+@notes Part of Sprint v0.2-1 fn-as-value infrastructure. Called from lowerer's EkIdent path when an identifier resolves to a function but is not in callee position.
+@effects Appends to reg.fn_value_refs if not already present.
+
+---
+
 @fn reg_find_mono
 @sig (reg: TypeRegistry, specialized_name: str) -> MonoSpec
 @purpose Looks up a monomorphization record by its specialized name. Returns sentinel (specialized_name="") if not found. Used to avoid creating duplicate specializations.
@@ -1024,6 +1036,15 @@
 @source_line 111
 @purpose Resolves a type_id to its struct/newtype name for type-aware dispatch. Returns "" for primitives or non-Named types.
 @notes Used by trait object coercion — concrete types are assignable to dyn Trait when the concrete struct name has a corresponding impl of the trait in treg.
+
+---
+
+@fn _cset_callee_slot
+@sig (c: Checker, in_callee: bool) -> Checker
+@source_file src/checker/checker.aria
+@source_line 171
+@purpose Sets the in_callee_slot flag on a fresh Checker copy. Used by _check_call_expr to mark that the immediately-following expression is the callee of a call (not a value argument). This lets the checker distinguish `f(x)` (f is called) from `apply(f, x)` (f is passed as a value) during fn-as-value detection.
+@notes Part of Sprint v0.2-1 fn-as-value infrastructure. The flag is reset to false when descending into arguments or other subexpressions.
 
 ---
 
