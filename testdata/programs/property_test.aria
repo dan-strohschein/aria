@@ -1,0 +1,23 @@
+// test-expect: property_test passed
+// test-files: property_test.aria ../../lib/property.aria
+
+fn abs(x: i64) -> i64 {
+    if x < 0 { return 0 - x }
+    x
+}
+
+entry {
+    // Test: x + 0 == x (identity)
+    _ := forAll_i64(fn(x: i64) -> bool => x + 0 == x, 42, 100)
+
+    // Test: abs(x) >= 0 (non-negative)
+    _ := forAll_i64(fn(x: i64) -> bool => abs(x) >= 0, 123, 100)
+
+    // Test: a + b == b + a (commutativity)
+    _ := forAll_pair(fn(a: i64, b: i64) -> bool => a + b == b + a, 99, 100)
+
+    // Test: bool identity
+    _ := forAll_bool(fn(b: bool) -> bool => (b || true) == true, 7, 50)
+
+    println("property_test passed")
+}
