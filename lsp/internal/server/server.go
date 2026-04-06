@@ -343,17 +343,29 @@ func (s *Server) handleDocumentSymbol(msg *jsonrpcMessage) {
 }
 
 func convertSymbol(sym symbols.Symbol) documentSymbol {
+	selEnd := sym.Col + len(sym.Name)
+
+	// Full range must contain the selection range.
+	// If the block ends on the same line it started, make sure the
+	// range end character is past the selection end.
+	endLine := sym.EndLine
+	endChar := 0
+	if endLine < sym.Line || (endLine == sym.Line && endChar <= selEnd) {
+		endLine = sym.Line
+		endChar = selEnd
+	}
+
 	ds := documentSymbol{
 		Name:   sym.Name,
 		Detail: sym.Detail,
 		Kind:   int(sym.Kind),
 		Range: lspRange{
-			Start: lspPosition{Line: sym.Line, Character: sym.Col},
-			End:   lspPosition{Line: sym.EndLine, Character: 0},
+			Start: lspPosition{Line: sym.Line, Character: 0},
+			End:   lspPosition{Line: endLine, Character: endChar},
 		},
 		SelectionRange: lspRange{
 			Start: lspPosition{Line: sym.Line, Character: sym.Col},
-			End:   lspPosition{Line: sym.Line, Character: sym.Col + len(sym.Name)},
+			End:   lspPosition{Line: sym.Line, Character: selEnd},
 		},
 	}
 	if len(sym.Children) > 0 {

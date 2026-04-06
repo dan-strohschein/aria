@@ -13,6 +13,7 @@ import (
 func main() {
 	compilerPath := flag.String("compiler", "", "Path to the aria compiler binary")
 	version := flag.Bool("version", false, "Print version and exit")
+	_ = flag.Bool("stdio", false, "Use stdio transport (default, accepted for compatibility)")
 	flag.Parse()
 
 	if *version {

@@ -20,16 +20,16 @@ function findBundledServer(context: ExtensionContext): string | undefined {
 
 export function activate(context: ExtensionContext): void {
   const config = workspace.getConfiguration("aria");
-  const lspPath =
-    config.get<string>("lsp.path") ||
-    findBundledServer(context) ||
-    "aria-lsp";
+  const configuredPath = config.inspect<string>("lsp.path");
+  // Only use the configured path if the user explicitly set it
+  const userSetPath =
+    configuredPath?.workspaceValue ?? configuredPath?.globalValue;
+  const lspPath = userSetPath || findBundledServer(context) || "aria-lsp";
   const compilerPath = config.get<string>("compiler.path", "aria");
 
   const serverOptions: ServerOptions = {
     command: lspPath,
-    args: ["--compiler", compilerPath],
-    transport: TransportKind.stdio,
+    args: ["--compiler", compilerPath, "--stdio"],
   };
 
   const clientOptions: LanguageClientOptions = {
