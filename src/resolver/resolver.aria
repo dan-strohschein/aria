@@ -1104,6 +1104,13 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
         rr := _radv(r)
         return _resolve_expr_until_nl(rr)
     }
+    if k == "mock" {
+        // mock fn_name with <expr> — skip name, resolve the replacement expr
+        mut rr := _radv(r)  // skip mock
+        if _rk(rr) == "IDENT" { rr = _radv(rr) }  // skip fn_name
+        if _rk(rr) == "with" { rr = _radv(rr) }  // skip with
+        return _resolve_expr_until_nl(rr)
+    }
     if k == "if" { return _resolve_if(r) }
     if k == "match" { return _resolve_match(r) }
     if k == "with" { return _resolve_with(r) }

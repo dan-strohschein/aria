@@ -3790,6 +3790,23 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
         return result.l
     }
     if k == "assert" { return _lower_assert(l) }
+    if k == "mock" {
+        // mock fn_name with <closure_expr>
+        // Lowers the closure and stores it in env under fn_name,
+        // so subsequent calls to fn_name dispatch via CallIndirect.
+        mut ll := _ladv(l)  // skip mock
+        if _lk(ll) == "IDENT" {
+            mock_name := _lcur(ll).text
+            ll = _ladv(ll)
+            if _lk(ll) == "with" {
+                ll = _ladv(ll)
+                mock_expr := _lower_expr(ll)
+                ll = mock_expr.l
+                ll = _lenv_add(ll, "_mock_" + mock_name, mock_expr.temp)
+            }
+        }
+        return ll
+    }
     if k == "with" {
         // with expr { body } — resource block with guaranteed cleanup
         // Check if this is effect clause (with [...]) or resource block
@@ -5562,6 +5579,57 @@ fn _lower_primary(l: Lowerer) -> LT {
                 if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
                 // Set value field at slot 0
                 ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 0, "value", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            // Check for mock binding — uses _mock_ prefix to avoid colliding with closure params
+            mock_slot := _lenv_lookup(ll, "_mock_" + name)
+            if mock_slot >= 0 && _lk(ll) == "(" {
+                // Mocked function — redirect through closure in env
+                closure_nt := _lnew_temp(ll)
+                ll = closure_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, closure_nt.temp, mock_slot, 0, "", 0))
+                fn_ptr_nt := _lnew_temp(ll)
+                ll = fn_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, closure_nt.temp, 0, "_fn", 0))
+                env_ptr_nt := _lnew_temp(ll)
+                ll = env_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, closure_nt.temp, 1, "_env", 0))
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                mut ic_arg_count := 0
+                mut ic_reg_count := 0
+                mut first_arg := -1
+                while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                    ll = _lskip_nl(ll)
+                    arg := _lower_expr(ll)
+                    ll = arg.l
+                    if ic_arg_count == 0 { first_arg = arg.temp }
+                    atid := _lget_type(ll, arg.temp)
+                    if atid == 12 { ic_reg_count = ic_reg_count + 2 } else { ic_reg_count = ic_reg_count + 1 }
+                    ic_arg_count = ic_arg_count + 1
+                    ll = _lskip_nl(ll)
+                    if _lk(ll) == "," { ll = _ladv(ll) }
+                }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                total_args := ic_reg_count + 1
+                pack_start := _lnew_temp(ll)
+                ll = pack_start.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp, env_ptr_nt.temp, 0, "", 0))
+                mut pack_idx := 1
+                if ic_arg_count > 0 && first_arg >= 0 {
+                    mut ai := 0
+                    while ai < ic_arg_count {
+                        pack_t := _lnew_temp(ll)
+                        ll = pack_t.l
+                        ll = _lemit(ll, new_inst(OpLoad, pack_t.temp, first_arg + ai, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, pack_t.temp, 0, "", 0))
+                        pack_idx = pack_idx + 1
+                        ai = ai + 1
+                    }
+                }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCallIndirect, nt.temp, fn_ptr_nt.temp, total_args, "", pack_start.temp))
                 return LT{l: ll, temp: nt.temp}
             }
             sig := reg_find_fn(ll.registry, name)
