@@ -1,0 +1,25 @@
+// test-expect: generic_blanket_method_test passed
+
+trait Showable {
+    fn show(self) -> str
+}
+
+trait Wrapper {
+    fn wrap[U](self, val: U) -> U
+}
+
+struct Box { v: i64 }
+impl Showable for Box {
+    fn show(self) -> str = "box"
+}
+
+impl[T: Showable] Wrapper for T {
+    fn wrap[U](self, val: U) -> U = val
+}
+
+entry {
+    b := Box{v: 1}
+    r := b.wrap(42)
+    assert r == 42
+    println("generic_blanket_method_test passed")
+}

@@ -3271,6 +3271,35 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             name := impl_type + "_" + raw_name
 
             sig := reg_find_fn(ll.registry, name)
+            if sig.name != "" && fn_is_generic(sig) && is_blanket && bound_trait != "" && method_node.b1 {
+                // Generic blanket method: register per-concrete-type generic sigs
+                // so the mono pass can create _method_ConcreteType_U specializations.
+                concrete_types := treg_types_implementing(ll.treg, bound_trait)
+                mut ci := 1
+                while ci < concrete_types.len() {
+                    ctype_name := concrete_types[ci]
+                    spec_base := "_" + raw_name + "_" + ctype_name
+                    existing_sig := reg_find_fn(ll.registry, spec_base)
+                    if existing_sig.name == "" {
+                        // Create a generic FnSig with self typed to the concrete type
+                        // Copy sig but change name and set self's param type to concrete tid
+                        ctype_id := _struct_type_id(ll.registry, ctype_name)
+                        mut sp_ptypes := [0]
+                        mut spi := 1
+                        while spi < sig.param_types.len() {
+                            mut pt := sig.param_types[spi]
+                            if spi == 1 && sig.param_names[spi] == "self" { pt = ctype_id }
+                            sp_ptypes = sp_ptypes.append(pt)
+                            spi = spi + 1
+                        }
+                        sp_sig := new_generic_fn_sig(spec_base, sig.param_names, sp_ptypes, sig.return_type, sig.error_type,
+                            sig.generic_count, sig.generic_name_0, sig.generic_name_1, sig.generic_name_2,
+                            sig.generic_bound_0, sig.generic_bound_1, sig.generic_bound_2, sig.token_start)
+                        ll = _lset_reg(ll, reg_add_fn(ll.registry, sp_sig))
+                    }
+                    ci = ci + 1
+                }
+            }
             if sig.name != "" && fn_is_generic(sig) == false && method_node.b1 {
                 ll = _lower_impl_method_by_name(ll, impl_type, raw_name, sig)
                 // For blanket impls, also emit specializations per concrete type.
@@ -8176,6 +8205,68 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if _lk(ll) == "," { ll = _ladv(ll) }
         }
         if _lk(ll) == ")" { ll = _ladv(ll) }
+        // Generic method specialization: infer type args from call args
+        if fn_is_generic(method_sig) {
+            // Try blanket-specialized variant: "_method_ConcreteType"
+            if obj_sname != "" {
+                bspec := "_" + method + "_" + obj_sname
+                bsig := reg_find_fn(ll.registry, bspec)
+                if bsig.name != "" && fn_is_generic(bsig) {
+                    method_sig = bsig
+                    qualified_method = bspec
+                }
+            }
+            // Infer U from arg types (self is first_arg, user args follow)
+            mut resolved_suffix := ""
+            mut gi := 2
+            while gi < method_sig.param_types.len() && gi < arg_count + 1 {
+                pt := method_sig.param_types[gi]
+                if pt > 0 && pt < ll.store.types.len() {
+                    ptinfo := store_get(ll.store, pt)
+                    if type_kind_name(ptinfo.kind) == "TypeVar" {
+                        at := _lget_type(ll, first_arg + gi - 1)
+                        suffix := _type_name_suffix_l(ll.store, ll.registry, at)
+                        if resolved_suffix == "" { resolved_suffix = suffix }
+                    }
+                }
+                gi = gi + 1
+            }
+            if resolved_suffix != "" {
+                spec_call := qualified_method + "_" + resolved_suffix
+                sp := reg_find_fn(ll.registry, spec_call)
+                if sp.name != "" {
+                    qualified_method = spec_call
+                    method_sig = sp
+                } else {
+                    // Create MonoSpec + specialized FnSig for the mono pass
+                    at := _lget_type(ll, first_arg + 1)
+                    sp_ptypes := [0]
+                    mut spi := 1
+                    while spi < method_sig.param_types.len() {
+                        mut pt := method_sig.param_types[spi]
+                        // Substitute TypeVar with concrete arg type
+                        if pt > 0 && pt < ll.store.types.len() {
+                            pti := store_get(ll.store, pt)
+                            if type_kind_name(pti.kind) == "TypeVar" { pt = at }
+                        }
+                        sp_ptypes = sp_ptypes.append(pt)
+                        spi = spi + 1
+                    }
+                    mut sp_ret := method_sig.return_type
+                    if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                        rti := store_get(ll.store, sp_ret)
+                        if type_kind_name(rti.kind) == "TypeVar" { sp_ret = at }
+                    }
+                    new_sig := new_fn_sig(spec_call, method_sig.param_names, sp_ptypes, sp_ret, method_sig.error_type)
+                    ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                    spec := MonoSpec{generic_name: qualified_method, specialized_name: spec_call,
+                                     type_arg_0: at, type_arg_1: 0, type_arg_2: 0}
+                    ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
+                    qualified_method = spec_call
+                    method_sig = new_sig
+                }
+            }
+        }
         // Use _lnew_str_temp for string return types (2 consecutive slots)
         mut nt_temp := 0
         if method_sig.return_type == 12 {

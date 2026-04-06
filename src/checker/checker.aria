@@ -1536,9 +1536,17 @@ fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Che
 
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
-        // For impl methods, token_start is the fn keyword position
-        // We don't have it directly from AST, but we can use 0 as fallback
-        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, 0)
+        // Find the fn keyword's token index from the AST node's span offset
+        mut tstart := 0
+        mut ti := 0
+        while ti < cc.tokens.len() {
+            if cc.tokens[ti].offset == node.span.offset {
+                tstart = ti
+                ti = cc.tokens.len()
+            }
+            ti = ti + 1
+        }
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, tstart)
     }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
     cc
