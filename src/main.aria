@@ -454,6 +454,74 @@ fn _expand_dir(path: str) -> [str] {
     result
 }
 
+// Module priority for dependency ordering: lower number = processed first.
+// Ensures type definitions are available before they're referenced.
+// Within each module, type-definition files (token, ast, types, scope, ir)
+// are prioritized before implementation files (lexer, parser, checker, etc.)
+fn _module_priority(path: str) -> i64 {
+    mut base := 30
+    if path.contains("/lexer/") { base = 10 }
+    if path.contains("/parser/") { base = 20 }
+    if path.contains("/diagnostic/") { base = 30 }
+    if path.contains("/resolver/") { base = 40 }
+    if path.contains("/checker/") { base = 50 }
+    if path.contains("/codegen/") { base = 60 }
+    if path.contains("/main.aria") { base = 70 }
+    // Within a module, type/data files before implementation files
+    if path.contains("/token.aria") { return base }
+    if path.contains("/ast.aria") { return base }
+    if path.contains("/types.aria") { return base }
+    if path.contains("/scope.aria") { return base }
+    if path.contains("/ir.aria") { return base }
+    if path.contains("/precedence.aria") { return base }
+    if path.contains("/diagnostic.aria") { return base }
+    // Tests come last within a module
+    if path.contains("/tests.aria") { return base + 5 }
+    if path.contains("_tests.aria") { return base + 5 }
+    // Implementation files
+    base + 2
+}
+
+// Sort files by module dependency order using insertion sort
+fn _sort_by_module_priority(files: [str]) -> [str] {
+    mut sorted := [""]
+    mut i := 1
+    while i < files.len() {
+        sorted = sorted.append(files[i])
+        i = i + 1
+    }
+    // Insertion sort by priority
+    mut si := 2
+    while si < sorted.len() {
+        key := sorted[si]
+        key_pri := _module_priority(key)
+        mut j := si - 1
+        while j >= 1 && _module_priority(sorted[j]) > key_pri {
+            // Shift — rebuild array (Aria arrays are immutable, so swap via temp)
+            sorted = _arr_set(sorted, j + 1, sorted[j])
+            j = j - 1
+        }
+        sorted = _arr_set(sorted, j + 1, key)
+        si = si + 1
+    }
+    sorted
+}
+
+// Set element at index in a string array (returns new array)
+fn _arr_set(arr: [str], idx: i64, val: str) -> [str] {
+    mut result := [""]
+    mut i := 1
+    while i < arr.len() {
+        if i == idx {
+            result = result.append(val)
+        } else {
+            result = result.append(arr[i])
+        }
+        i = i + 1
+    }
+    result
+}
+
 fn expand_files(files: [str]) -> [str] {
     mut result := [""]
     mut i := 1
@@ -471,7 +539,8 @@ fn expand_files(files: [str]) -> [str] {
         }
         i = i + 1
     }
-    result
+    // Sort by module dependency order so types are defined before referenced
+    _sort_by_module_priority(result)
 }
 
 // --- Pipeline skeleton ---
