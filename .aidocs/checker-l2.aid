@@ -36,7 +36,8 @@
   TyNever — Never type (diverges)
   TyUnknown — Unknown / unresolved
   TyNone — Sentinel
-@purpose Classifies every type in the system. Primitives have dedicated variants; compound types (Array, Function, Result, Optional, Tuple) store sub-type references via TypeInfo fields. TyNone is the sentinel for invalid/missing types at index 0. TyUnknown is used for graceful error recovery when a type cannot be resolved.
+  TyApplied — HKT type application: F[A] where F is a higher-kinded TypeVar (v0.4). type_id=constructor TypeVar ID, type_id2=arg type ID.
+@purpose Classifies every type in the system. Primitives have dedicated variants; compound types (Array, Function, Result, Optional, Tuple, Applied) store sub-type references via TypeInfo fields. TyApplied (v0.4) represents HKT type applications. TyNone is the sentinel for invalid/missing types at index 0. TyUnknown is used for graceful error recovery when a type cannot be resolved.
 @invariants TyNone only appears at TypeStore index 0. TyNever is assignable to any type (used for diverging expressions like return/panic). TyUnknown is treated as compatible with any type to prevent cascading errors.
 @source_file src/checker/types.aria
 @source_line 14

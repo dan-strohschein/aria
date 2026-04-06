@@ -11,6 +11,7 @@
   resolver.aid — Name resolution: scope hierarchy, symbol table construction
   checker.aid — Type checker: inference, traits, generics, effects
   codegen.aid — Code generation: IR lowering, LLVM IR, ARM64 emission, Mach-O linking
+  property.aid — Property-based testing library: LCG RNG, generators, forAll (v0.4)
 
 @layer2
   main-l2.aid — L2 semantic annotations for main module

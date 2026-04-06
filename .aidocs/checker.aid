@@ -34,6 +34,7 @@
   TyNever — Never type (diverges)
   TyUnknown — Unknown / unresolved
   TyNone — Sentinel
+  TyApplied — HKT type application: F[A] where F is a higher-kinded TypeVar (v0.4)
 @source_file src/checker/types.aria
 @source_line 14
 
@@ -482,7 +483,23 @@
 @fn mk_typevar
 @sig (name: str) -> TypeInfo
 @source_file src/checker/types.aria
-@source_line 109
+@source_line 112
+
+---
+
+@fn mk_hkt_typevar
+@purpose Creates an HKT TypeVar with arity > 0 (e.g., F[_] has arity 1) (v0.4)
+@sig (name: str, arity: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 115
+
+---
+
+@fn mk_applied_type
+@purpose Creates a TyApplied node: type constructor applied to an arg (F[A]) (v0.4)
+@sig (constructor_id: i64, arg_id: i64) -> TypeInfo
+@source_file src/checker/types.aria
+@source_line 118
 
 ---
 

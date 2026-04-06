@@ -1,0 +1,61 @@
+@module property
+@lang aria
+@aid_version 0.2
+@purpose Property-based testing library: LCG RNG, typed generators, forAll variants (v0.4)
+@depends []
+
+---
+
+@fn lcg_next
+@purpose Linear congruential generator — deterministic pseudo-random i64 from seed
+@sig (seed: i64) -> i64
+@source_file lib/property.aria
+@source_line 20
+
+---
+
+@fn gen_range
+@purpose Generate i64 in [0, max) from seed
+@sig (seed: i64, max: i64) -> i64
+@source_file lib/property.aria
+@source_line 30
+
+---
+
+@fn gen_i64_small
+@purpose Generate i64 in [-1000, 1000) from seed
+@sig (seed: i64) -> i64
+@source_file lib/property.aria
+@source_line 38
+
+---
+
+@fn gen_bool
+@purpose Generate bool from seed
+@sig (seed: i64) -> bool
+@source_file lib/property.aria
+@source_line 45
+
+---
+
+@fn forAll_i64
+@purpose Test a property over count randomly generated i64 values; asserts on first violation
+@sig (prop: fn(i64) -> bool, seed: i64, count: i64) -> i64
+@source_file lib/property.aria
+@source_line 52
+
+---
+
+@fn forAll_bool
+@purpose Test a property over generated bools
+@sig (prop: fn(bool) -> bool, seed: i64, count: i64) -> i64
+@source_file lib/property.aria
+@source_line 63
+
+---
+
+@fn forAll_pair
+@purpose Test a 2-argument property over pairs of i64 values
+@sig (prop: fn(i64, i64) -> bool, seed: i64, count: i64) -> i64
+@source_file lib/property.aria
+@source_line 74
