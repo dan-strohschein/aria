@@ -2703,11 +2703,20 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         sp_sig := reg_find_fn(ll.registry, call_name)
         if sp_sig.name != "" {
             call_sig = sp_sig
-        } else if resolved_count > 0 {
-            // Fallback: generic params derived from assoc bounds aren't in args.
-            // Look up the mono spec by generic_name + first concrete type arg.
+        } else if arg_types.len() > 1 {
+            // Fallback: HKT or derived-from-bound generics.
             first_concrete := arg_types[1]
             sp := reg_find_mono_by_generic(ll.registry, name, first_concrete)
+            if sp.specialized_name == "" {
+                mut msi := 1
+                while msi < ll.registry.mono_specs.len() {
+                    if ll.registry.mono_specs[msi].generic_name == name {
+                        sp = ll.registry.mono_specs[msi]
+                        msi = ll.registry.mono_specs.len()
+                    }
+                    msi = msi + 1
+                }
+            }
             if sp.specialized_name != "" {
                 call_name = sp.specialized_name
                 sp_sig2 := reg_find_fn(ll.registry, call_name)
@@ -5716,14 +5725,25 @@ fn _lower_primary(l: Lowerer) -> LT {
                     if resolved_count > 2 {
                         call_name = call_name + "_" + resolved_ty_2
                     }
-                    // Look up the specialized sig
+                    // Look up the specialized sig (must be different from the generic)
                     sp_sig := reg_find_fn(ll.registry, call_name)
-                    if sp_sig.name != "" {
+                    if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
                         call_sig = sp_sig
-                    } else if resolved_count > 0 && arg_types.len() > 1 {
-                        // Fallback: derived-from-bound generics aren't visible in args.
-                        // Look up the mono spec by generic_name + first concrete arg.
+                    } else if arg_types.len() > 1 {
+                        // Fallback: HKT or derived-from-bound generics.
+                        // First try by concrete arg type
                         sp := reg_find_mono_by_generic(ll.registry, name, arg_types[1])
+                        if sp.specialized_name == "" {
+                            // HKT: find any mono spec for this generic name
+                            mut msi := 1
+                            while msi < ll.registry.mono_specs.len() {
+                                if ll.registry.mono_specs[msi].generic_name == name {
+                                    sp = ll.registry.mono_specs[msi]
+                                    msi = ll.registry.mono_specs.len()
+                                }
+                                msi = msi + 1
+                            }
+                        }
                         if sp.specialized_name != "" {
                             call_name = sp.specialized_name
                             sp_sig2 := reg_find_fn(ll.registry, call_name)

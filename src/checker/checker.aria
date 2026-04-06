@@ -304,8 +304,16 @@ fn _parse_type_ann(c: Checker) -> CE {
                 cc = _cset_store(cc, new_store)
                 return CE{c: cc, type_id: store_last_id(cc.store)}
             }
-            // For other generic types (Map, user-defined), resolve base type
+            // Check if base name is an HKT TypeVar — create TyApplied
             tid := resolve_type_name(cc.store, name)
+            if tid != TY_UNKNOWN {
+                tinfo := store_get(cc.store, tid)
+                if type_kind_name(tinfo.kind) == "TypeVar" && tinfo.param_count > 0 && argc >= 1 {
+                    new_store := store_add(cc.store, mk_applied_type(tid, arg1))
+                    cc = _cset_store(cc, new_store)
+                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                }
+            }
             return CE{c: cc, type_id: tid}
         }
         // Check for optional T?
@@ -556,6 +564,24 @@ fn _register_alias_decl(c: Checker) -> Checker {
 }
 
 // Parse generic params from s2 encoded string "T:Eq,U:Hash+Ord"
+// Creates a TypeVar, detecting HKT arity from [_] suffix in name.
+// "F[_]" → HKT TypeVar "F" with arity 1. "A" → regular TypeVar "A".
+fn _mk_typevar_from_name(name: str) -> TypeInfo {
+    if name.len() > 3 && name.substring(name.len() - 3, name.len()) == "[_]" {
+        base := name.substring(0, name.len() - 3)
+        return mk_hkt_typevar(base, 1)
+    }
+    mk_typevar(name)
+}
+
+// Strip [_] suffix from generic name for FnSig storage.
+fn _strip_hkt_suffix(name: str) -> str {
+    if name.len() > 3 && name.substring(name.len() - 3, name.len()) == "[_]" {
+        return name.substring(0, name.len() - 3)
+    }
+    name
+}
+
 // Returns count and populates gp_0..2 / gb_0..2
 fn _parse_generic_str(s: str, gp_0: str, gp_1: str, gp_2: str, gb_0: str, gb_1: str, gb_2: str) -> [str] {
     // Returns array: [count_str, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2]
@@ -1315,15 +1341,15 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
 
     // Register TypeVars
     if gp_count > 0 {
-        new_st := store_add(cc.store, mk_typevar(gp_0))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_0))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 1 {
-        new_st := store_add(cc.store, mk_typevar(gp_1))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_1))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 2 {
-        new_st := store_add(cc.store, mk_typevar(gp_2))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_2))
         cc = _cset_store(cc, new_st)
     }
 
@@ -1446,7 +1472,7 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
 
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
-        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, _strip_hkt_suffix(gp_0), _strip_hkt_suffix(gp_1), _strip_hkt_suffix(gp_2), gb_0, gb_1, gb_2, token_start)
     }
     if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
         sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
@@ -1480,15 +1506,15 @@ fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Che
 
     // Register TypeVars
     if gp_count > 0 {
-        new_st := store_add(cc.store, mk_typevar(gp_0))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_0))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 1 {
-        new_st := store_add(cc.store, mk_typevar(gp_1))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_1))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 2 {
-        new_st := store_add(cc.store, mk_typevar(gp_2))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_2))
         cc = _cset_store(cc, new_st)
     }
 
@@ -1553,7 +1579,7 @@ fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Che
             }
             ti = ti + 1
         }
-        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, tstart)
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, _strip_hkt_suffix(gp_0), _strip_hkt_suffix(gp_1), _strip_hkt_suffix(gp_2), gb_0, gb_1, gb_2, tstart)
     }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
     cc
@@ -1624,15 +1650,15 @@ fn _register_fn_sig(c: Checker) -> Checker {
 
     // If generic, add TypeVar entries to the store so _parse_type_ann resolves them
     if gp_count > 0 {
-        new_st := store_add(cc.store, mk_typevar(gp_0))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_0))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 1 {
-        new_st := store_add(cc.store, mk_typevar(gp_1))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_1))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 2 {
-        new_st := store_add(cc.store, mk_typevar(gp_2))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_2))
         cc = _cset_store(cc, new_st)
     }
 
@@ -1755,7 +1781,7 @@ fn _register_fn_sig(c: Checker) -> Checker {
 
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
-        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, _strip_hkt_suffix(gp_0), _strip_hkt_suffix(gp_1), _strip_hkt_suffix(gp_2), gb_0, gb_1, gb_2, token_start)
     }
     if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
         sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
@@ -2050,15 +2076,15 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
 
     // If generic, add TypeVar entries
     if gp_count > 0 {
-        new_st := store_add(cc.store, mk_typevar(gp_0))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_0))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 1 {
-        new_st := store_add(cc.store, mk_typevar(gp_1))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_1))
         cc = _cset_store(cc, new_st)
     }
     if gp_count > 2 {
-        new_st := store_add(cc.store, mk_typevar(gp_2))
+        new_st := store_add(cc.store, _mk_typevar_from_name(gp_2))
         cc = _cset_store(cc, new_st)
     }
 
@@ -2179,7 +2205,7 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
 
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if gp_count > 0 {
-        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, gp_0, gp_1, gp_2, gb_0, gb_1, gb_2, token_start)
+        sig = new_generic_fn_sig(name, pnames, ptypes, ret, err, gp_count, _strip_hkt_suffix(gp_0), _strip_hkt_suffix(gp_1), _strip_hkt_suffix(gp_2), gb_0, gb_1, gb_2, token_start)
     }
     if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
         sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
@@ -3780,10 +3806,40 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
             if pt == tv_id_0 && tv_id_0 > 0 { concrete_0 = at }
             if pt == tv_id_1 && tv_id_1 > 0 { concrete_1 = at }
             if pt == tv_id_2 && tv_id_2 > 0 { concrete_2 = at }
+            // HKT decomposition: if param type is TyApplied (F[A]),
+            // decompose concrete arg type to infer F and A separately.
+            if pt > 0 && pt < cc.store.types.len() {
+                pti := store_get(cc.store, pt)
+                if type_kind_name(pti.kind) == "Applied" {
+                    // pti.type_id = constructor TypeVar (F), pti.type_id2 = arg TypeVar (A)
+                    constructor_tv := pti.type_id
+                    arg_tv := pti.type_id2
+                    // Decompose concrete arg: Array[i64] → constructor=Array, element=i64
+                    at_info := store_get(cc.store, at)
+                    at_kind := type_kind_name(at_info.kind)
+                    if at_kind == "Array" {
+                        // Register a named type for "Array" constructor if needed
+                        arr_ctor := resolve_type_name(cc.store, "_Array")
+                        if arr_ctor == TY_UNKNOWN {
+                            new_st := store_add(cc.store, TypeInfo{kind: TyNamed, name: "_Array", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+                            cc = _cset_store(cc, new_st)
+                            arr_ctor = store_last_id(cc.store)
+                        }
+                        if constructor_tv == tv_id_0 && tv_id_0 > 0 { concrete_0 = arr_ctor }
+                        if constructor_tv == tv_id_1 && tv_id_1 > 0 { concrete_1 = arr_ctor }
+                        if constructor_tv == tv_id_2 && tv_id_2 > 0 { concrete_2 = arr_ctor }
+                        elem_tid := at_info.type_id
+                        if arg_tv == tv_id_0 && tv_id_0 > 0 { concrete_0 = elem_tid }
+                        if arg_tv == tv_id_1 && tv_id_1 > 0 { concrete_1 = elem_tid }
+                        if arg_tv == tv_id_2 && tv_id_2 > 0 { concrete_2 = elem_tid }
+                    }
+                }
+            }
         }
         pi = pi + 1
     }
 
+    // (debug removed)
     // Derive unbound generic params from associated-type bounds.
     // If bound on a KNOWN generic binds an unbound generic via <Assoc=Name>,
     // look up the impl's assoc value and bind the unbound generic to it.

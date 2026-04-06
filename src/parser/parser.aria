@@ -693,10 +693,20 @@ fn _parse_fn(p: Parser) -> PR {
         mut gcount := 0
         while _ck(pp) != "]" && _ck(pp) != "EOF" {
             if _ck(pp) == "IDENT" {
-                gname := _cur(pp).text
+                mut gname := _cur(pp).text
+                pp = _adv(pp)
+                // HKT: detect F[_] syntax
+                if _ck(pp) == "[" {
+                    next_pos := pp.pos + 1
+                    if next_pos < pp.tokens.len() && _cur(_adv(pp)).text == "_" {
+                        pp = _adv(pp)  // skip [
+                        pp = _adv(pp)  // skip _
+                        if _ck(pp) == "]" { pp = _adv(pp) }
+                        gname = gname + "[_]"
+                    }
+                }
                 if gcount > 0 { generics = generics + "," }
                 generics = generics + gname
-                pp = _adv(pp)
                 // Capture optional trait bound ": Trait" or ": Trait + Trait2"
                 // Also supports associated-type constraints: ": Trait<Item=Type>"
                 if _ck(pp) == ":" {

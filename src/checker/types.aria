@@ -38,6 +38,7 @@ type TypeKind =
     | TyNever
     | TyUnknown
     | TyNone
+    | TyApplied
 
 fn type_kind_name(k: TypeKind) -> str = match k {
     TyI8 => "i8"
@@ -65,6 +66,7 @@ fn type_kind_name(k: TypeKind) -> str = match k {
     TyNever => "Never"
     TyUnknown => "Unknown"
     TyNone => "None"
+    TyApplied => "Applied"
 }
 
 fn tk_eq(a: TypeKind, b: TypeKind) -> bool =
@@ -109,6 +111,12 @@ fn mk_optional_type(inner_id: i64) -> TypeInfo =
 
 fn mk_typevar(name: str) -> TypeInfo =
     TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
+
+fn mk_hkt_typevar(name: str, arity: i64) -> TypeInfo =
+    TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: arity}
+
+fn mk_applied_type(constructor_id: i64, arg_id: i64) -> TypeInfo =
+    TypeInfo{kind: TyApplied, name: "", type_id: constructor_id, type_id2: arg_id, param_start: 0, param_count: 0}
 
 // Tuple type: element type IDs encoded as comma-delimited string in name field,
 // param_count = arity (number of elements)
@@ -271,6 +279,19 @@ fn substitute_type(store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64
         elem := substitute_type(store, info.type_id, typevar_id, concrete_id)
         if elem == info.type_id { return tid }
         return elem  // caller must add new array type
+    }
+    if kn == "Applied" {
+        // F[A] — substitute both constructor and arg
+        new_ctor := substitute_type(store, info.type_id, typevar_id, concrete_id)
+        new_arg := substitute_type(store, info.type_id2, typevar_id, concrete_id)
+        // If constructor resolved to _Array, reconstruct as Array type
+        if new_ctor > 0 && new_ctor < store.types.len() {
+            ctor_info := store.types[new_ctor]
+            if type_kind_name(ctor_info.kind) == "Named" && ctor_info.name == "_Array" {
+                return new_arg  // The array type is just the element type — mk_array_type wraps at call site
+            }
+        }
+        return tid
     }
     tid
 }

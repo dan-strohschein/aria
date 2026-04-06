@@ -624,6 +624,12 @@ fn _resolve_fn(r: Resolver) -> Resolver {
                 gspan := _rspan(rr)
                 rr = _add_sym(rr, gname, SkType, gspan, false, false)
                 rr = _radv(rr)
+                // Skip HKT syntax: F[_]
+                if _rk(rr) == "[" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "_" || (_rk(rr) == "IDENT" && _rcur(rr).text == "_") { rr = _radv(rr) }
+                    if _rk(rr) == "]" { rr = _radv(rr) }
+                }
                 // Skip optional trait bound ": Trait" or ": Trait<Assoc=Type>" or ": Trait + Trait2"
                 if _rk(rr) == ":" {
                     rr = _radv(rr)
@@ -755,6 +761,12 @@ fn _resolve_fn_ast(r: Resolver, node_idx: i64) -> Resolver {
                 gspan := _rspan(rr)
                 rr = _add_sym(rr, gname, SkType, gspan, false, false)
                 rr = _radv(rr)
+                // Skip HKT syntax: F[_]
+                if _rk(rr) == "[" {
+                    rr = _radv(rr)
+                    if _rk(rr) == "_" || (_rk(rr) == "IDENT" && _rcur(rr).text == "_") { rr = _radv(rr) }
+                    if _rk(rr) == "]" { rr = _radv(rr) }
+                }
                 if _rk(rr) == ":" {
                     rr = _radv(rr)
                     if _rk(rr) == "IDENT" { rr = _radv(rr) }
