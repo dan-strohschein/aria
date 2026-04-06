@@ -565,10 +565,31 @@ fn fn_has_effect(sig: FnSig, effect: str) -> bool {
     if effect == "Net" { return sig.has_net }
     if effect == "Ffi" { return sig.has_ffi }
     if effect == "Async" { return sig.has_async }
-    // Check user-defined effects
+    // Check user-defined effects (exact match)
     mut i := 1
     while i < sig.user_effects.len() {
         if sig.user_effects[i] == effect { return true }
+        i = i + 1
+    }
+    false
+}
+
+// Transitive effect check: uses TraitRegistry to resolve effect hierarchy.
+// E.g., if effect "log" implies "Io", then fn_has_effect_t(sig_with_log, "Io", treg) == true.
+fn fn_has_effect_t(sig: FnSig, effect: str, treg: TraitRegistry) -> bool {
+    if fn_has_effect(sig, effect) { return true }
+    // Check if any user effect transitively implies the required effect
+    mut i := 1
+    while i < sig.user_effects.len() {
+        ue := sig.user_effects[i]
+        tdef := treg_find_trait(treg, ue)
+        if tdef.name != "" {
+            mut pi := 1
+            while pi < tdef.parent_traits.len() {
+                if tdef.parent_traits[pi] == effect { return true }
+                pi = pi + 1
+            }
+        }
         i = i + 1
     }
     false

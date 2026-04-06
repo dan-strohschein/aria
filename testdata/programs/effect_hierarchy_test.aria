@@ -1,0 +1,14 @@
+// test-expect: effect_hierarchy_test passed
+
+effect log implies Io
+
+fn log_msg(msg: str) with [log] = println(msg)
+
+fn process(x: i64) with [log] {
+    log_msg("processing")
+}
+
+entry {
+    process(42)
+    println("effect_hierarchy_test passed")
+}

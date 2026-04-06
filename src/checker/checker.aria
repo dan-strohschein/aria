@@ -3238,26 +3238,26 @@ fn _check_primary(c: Checker) -> CE {
                 if fn_is_pure(sig) == false && cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" {
-                        if sig.has_io && fn_has_effect(caller_sig, "Io") == false {
+                        if sig.has_io && fn_has_effect_t(caller_sig, "Io", cc.treg) == false {
                             cc = _cwarning(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]")
                         }
-                        if sig.has_fs && fn_has_effect(caller_sig, "Fs") == false {
+                        if sig.has_fs && fn_has_effect_t(caller_sig, "Fs", cc.treg) == false {
                             cc = _cwarning(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
                         }
-                        if sig.has_net && fn_has_effect(caller_sig, "Net") == false {
+                        if sig.has_net && fn_has_effect_t(caller_sig, "Net", cc.treg) == false {
                             cc = _cwarning(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]")
                         }
-                        if sig.has_ffi && fn_has_effect(caller_sig, "Ffi") == false {
+                        if sig.has_ffi && fn_has_effect_t(caller_sig, "Ffi", cc.treg) == false {
                             cc = _cwarning(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]")
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
                             cc = _cwarning(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
                         }
-                        // Check user-defined effects
+                        // Check user-defined effects (with transitive hierarchy)
                         mut uei := 1
                         while uei < sig.user_effects.len() {
                             ue := sig.user_effects[uei]
-                            if fn_has_effect(caller_sig, ue) == false {
+                            if fn_has_effect_t(caller_sig, ue, cc.treg) == false {
                                 cc = _cwarning(cc, "E0305", "function '" + name + "' requires effect [" + ue + "] but '" + cc.fn_current_name + "' does not declare [" + ue + "]")
                             }
                             uei = uei + 1
@@ -3276,7 +3276,7 @@ fn _check_primary(c: Checker) -> CE {
             if (name == "println" || name == "print" || name == "eprintln") &&
                cc.fn_current_name != "" && cc.fn_current_name != "_entry" && cc.fn_current_name != "_test" {
                 caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
-                if caller_sig.name != "" && fn_has_effect(caller_sig, "Io") == false {
+                if caller_sig.name != "" && fn_has_effect_t(caller_sig, "Io", cc.treg) == false {
                     cc = _cwarning(cc, "W0100", name + " requires effect [Io] but " + cc.fn_current_name + " is pure or missing [Io]")
                 }
             }
@@ -3285,7 +3285,7 @@ fn _check_primary(c: Checker) -> CE {
                 builtin_eff := _builtin_effect(name)
                 if builtin_eff != "" {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
-                    if caller_sig.name != "" && fn_has_effect(caller_sig, builtin_eff) == false {
+                    if caller_sig.name != "" && fn_has_effect_t(caller_sig, builtin_eff, cc.treg) == false {
                         mut eff_code := "E0300"
                         if builtin_eff == "Fs" { eff_code = "E0301" }
                         if builtin_eff == "Net" { eff_code = "E0302" }
@@ -4503,8 +4503,41 @@ fn _pass4_once_check(c: Checker, index: DeclIndex) -> Checker {
     cc
 }
 
+// Pre-pass: scan tokens for `effect Name` and `effect Name implies Parent` declarations.
+// Registers each effect as a TraitDef in the TraitRegistry (reuses parent_traits for hierarchy).
+fn _scan_effect_decls(c: Checker) -> Checker {
+    mut cc := c
+    mut i := 0
+    while i < cc.tokens.len() - 1 {
+        if token_name(cc.tokens[i].kind) == "IDENT" && cc.tokens[i].text == "effect" {
+            next := i + 1
+            if next < cc.tokens.len() && token_name(cc.tokens[next].kind) == "IDENT" {
+                eff_name := cc.tokens[next].text
+                mut parents := [""]
+                // Check for "implies"
+                imp := next + 1
+                if imp < cc.tokens.len() && token_name(cc.tokens[imp].kind) == "IDENT" && cc.tokens[imp].text == "implies" {
+                    mut pi := imp + 1
+                    while pi < cc.tokens.len() && token_name(cc.tokens[pi].kind) == "IDENT" {
+                        parents = parents.append(cc.tokens[pi].text)
+                        pi = pi + 1
+                        if pi < cc.tokens.len() && token_name(cc.tokens[pi].kind) == "," { pi = pi + 1 }
+                    }
+                }
+                tdef := TraitDef{name: eff_name, method_names: [""], parent_traits: parents, assoc_type_names: [""], default_starts: [0], default_ends: [0]}
+                cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
+            }
+        }
+        i = i + 1
+    }
+    cc
+}
+
 fn check(tokens: [Token], index: DeclIndex, pool: NodePool, table: SymbolTable, file: str) -> CheckResult {
     mut c := _new_checker(tokens, pool, table, file)
+
+    // Pre-pass: register effect declarations (effect Name implies Parent)
+    c = _scan_effect_decls(c)
 
     // Pass 1: register type declarations
     c = _pass1_types(c, index)
