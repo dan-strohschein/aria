@@ -678,7 +678,15 @@
 @fn fn_has_effect
 @sig (sig: FnSig, effect: str) -> bool
 @source_file src/checker/types.aria
-@source_line 557
+@source_line 562
+
+---
+
+@fn fn_has_effect_t
+@purpose Transitive effect check: resolves effect hierarchy via TraitRegistry parent_traits (v0.4)
+@sig (sig: FnSig, effect: str, treg: TraitRegistry) -> bool
+@source_file src/checker/types.aria
+@source_line 577
 
 ---
 

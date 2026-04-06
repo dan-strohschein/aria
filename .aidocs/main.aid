@@ -32,6 +32,7 @@
   format: str — Output format (text/json)
   target: str — Target platform
   runtime_path: str — Runtime library path
+  parallel: bool — Run tests in parallel via spawn/await (v0.4, --parallel flag)
 @source_file src/main.aria
 @source_line 30
 
@@ -128,10 +129,10 @@
 ---
 
 @fn run_test
-@sig (raw_files: [str], format: str, runtime_path: str) -> i64
+@sig (raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64
 @calls [expand_files, generate_tests_from_sources]
 @source_file src/main.aria
-@source_line 500
+@source_line 524
 
 ---
 

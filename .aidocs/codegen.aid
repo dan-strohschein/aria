@@ -481,9 +481,10 @@
 ---
 
 @fn lower_for_tests
-@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
+@purpose Lowers for test mode with optional parallel execution (v0.4). When parallel=true, registers test fns as fn_value_refs for trampoline generation and spawns tests concurrently.
+@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool) -> IrModule
 @source_file src/codegen/lower.aria
-@source_line 11258
+@source_line 12415
 
 ---
 
