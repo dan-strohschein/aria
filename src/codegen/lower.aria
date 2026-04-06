@@ -1724,6 +1724,32 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             fidx = _field_index_any(ll.registry, field)
             ft = _field_type_id_any(ll.registry, field)
         }
+        // If field not found, try bound method ref: obj.method → closure
+        // ft==0 means _field_type_id returned unknown — field doesn't exist
+        has_field := reg_find_field(ll.registry, sname, field)
+        if has_field.name == "" && sname != "" {
+            qualified := sname + "_" + field
+            msig := reg_find_fn(ll.registry, qualified)
+            if msig.name != "" {
+                // Register for bound-trampoline generation
+                ll = _lset_reg(ll, reg_add_bound_fn_value_ref(ll.registry, qualified))
+                // Allocate env with 1 slot for captured receiver
+                env_nt := _lnew_temp(ll)
+                ll = env_nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, env_nt.temp, 1, 0, "_bound_env", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, env_nt.temp, recv.temp, 0, "_self", 0))
+                // Build fat-pointer closure: {_bound_tramp_qualified, env}
+                clos := _lnew_temp(ll)
+                ll = clos.l
+                ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+                fn_ref := _lnew_temp(ll)
+                ll = fn_ref.l
+                ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, "_bound_tramp_" + qualified, 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, env_nt.temp, 1, "_env", 0))
+                return LT{l: ll, temp: clos.temp}
+            }
+        }
         mut nt_temp := 0
         if ft == 12 {
             nt := _lnew_str_temp(ll)
@@ -4530,28 +4556,50 @@ fn _lower_expr(l: Lowerer) -> LT {
                         fidx = _field_index_any(ll.registry, field)
                         ft = _field_type_id_any(ll.registry, field)
                     }
-                    // Use _lnew_str_temp for string fields (2 consecutive slots)
-                    mut nt_temp := 0
-                    if ft == 12 {
-                        nt := _lnew_str_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
+                    // Bound method ref fallback: obj.method → closure capturing obj
+                    has_fld := reg_find_field(ll.registry, sname, field)
+                    if has_fld.name == "" && sname != "" {
+                        qualified := sname + "_" + field
+                        msig := reg_find_fn(ll.registry, qualified)
+                        if msig.name != "" {
+                            ll = _lset_reg(ll, reg_add_bound_fn_value_ref(ll.registry, qualified))
+                            env_nt := _lnew_temp(ll)
+                            ll = env_nt.l
+                            ll = _lemit(ll, new_inst(OpAlloc, env_nt.temp, 1, 0, "_bound_env", 0))
+                            ll = _lemit(ll, new_inst(OpFieldSet, env_nt.temp, left, 0, "_self", 0))
+                            clos := _lnew_temp(ll)
+                            ll = clos.l
+                            ll = _lemit(ll, new_inst(OpAlloc, clos.temp, 2, 0, "_Closure", 0))
+                            fn_ref := _lnew_temp(ll)
+                            ll = fn_ref.l
+                            ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, "_bound_tramp_" + qualified, 0))
+                            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, fn_ref.temp, 0, "_fn", 0))
+                            ll = _lemit(ll, new_inst(OpFieldSet, clos.temp, env_nt.temp, 1, "_env", 0))
+                            left = clos.temp
+                        } else {
+                            ll = _lemit(ll, new_inst(OpFieldGet, _lnew_temp(ll).temp, left, fidx, field, 0))
+                            left = _lnew_temp(ll).temp - 1
+                        }
                     } else {
-                        nt := _lnew_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
+                        // Use _lnew_str_temp for string fields (2 consecutive slots)
+                        mut nt_temp := 0
+                        if ft == 12 {
+                            nt := _lnew_str_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                            fidx_len := fidx + 1
+                            nt_len := nt_temp + 1
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field, 0))
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
+                        }
+                        if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
+                        left = nt_temp
                     }
-                    if ft == 12 {
-                        // String field: load both ptr and len from consecutive field slots
-                        fidx_len := fidx + 1
-                        nt_len := nt_temp + 1
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field, 0))
-                    } else {
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
-                    }
-                    if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
-                    left = nt_temp
                 }
             } else if _lk(ll) == "\{" {
                 // Record update: original.{field: new_val, ...}
@@ -12182,6 +12230,69 @@ fn _lower_trampolines(l: Lowerer) -> Lowerer {
             }
         }
         i = i + 1
+    }
+    // Bound method ref trampolines: extract self from env[0], forward to method
+    mut bi := 1
+    while bi < ll.registry.bound_fn_value_refs.len() {
+        bfname := ll.registry.bound_fn_value_refs[bi]
+        bsig := reg_find_fn(ll.registry, bfname)
+        if bsig.name != "" {
+            btramp := "_bound_tramp_" + bfname
+            bexist := mod_find_func(ll.module, btramp)
+            if bexist.name == "" {
+                // Count ABI args for the original method (including self)
+                mut babi := 0
+                mut bpi := 1
+                while bpi < bsig.param_types.len() {
+                    if bsig.param_types[bpi] == 12 { babi = babi + 2 } else { babi = babi + 1 }
+                    bpi = bpi + 1
+                }
+                // Bound trampoline: (env_ptr, extra_args...)
+                // self extracted from env[0], then forwarded with extra args
+                // Total incoming args = 1 (env_ptr) + (babi - self_slots)
+                // For simplicity: self takes 1 slot (struct pointer). Extra args = babi - 1.
+                extra_args := babi - 1
+                total_in := 1 + extra_args
+                ll = _lset_func(ll, new_ir_func(btramp, total_in, bsig.return_type))
+                // Arg 0: env_ptr
+                env_t := _lnew_temp(ll)
+                ll = env_t.l
+                ll = _lemit(ll, new_inst(OpArg, env_t.temp, 0, 0, "", 0))
+                // Extract self from env[0]
+                self_t := _lnew_temp(ll)
+                ll = self_t.l
+                ll = _lemit(ll, new_inst(OpFieldGet, self_t.temp, env_t.temp, 0, "_self", 0))
+                // Read extra args (indices 1..extra_args)
+                mut eai := 0
+                while eai < extra_args {
+                    ea_t := _lnew_temp(ll)
+                    ll = ea_t.l
+                    ll = _lemit(ll, new_inst(OpArg, ea_t.temp, eai + 1, 0, "", 0))
+                    eai = eai + 1
+                }
+                // Pack: self + extra args into consecutive temps for OpCall
+                // self_t.temp is temp 1 (after env_t at 0), extra args at 2..
+                // We need self as first arg to the method. Temps are:
+                // 0=env, 1=self, 2..=extra_args
+                // Call with first_arg=self_t.temp, arg_count=babi
+                if bsig.return_type == 12 {
+                    brt := _lnew_str_temp(ll)
+                    ll = brt.l
+                    ll = _lemit(ll, new_inst(OpCall, brt.temp, self_t.temp, babi, bfname, bsig.return_type))
+                    ll = _lemit(ll, new_inst(OpRet, 0, brt.temp, 0, "", 0))
+                } else if bsig.return_type == 0 || bsig.return_type == 14 {
+                    ll = _lemit(ll, new_inst(OpCall, 0, self_t.temp, babi, bfname, bsig.return_type))
+                    ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+                } else {
+                    brt := _lnew_temp(ll)
+                    ll = brt.l
+                    ll = _lemit(ll, new_inst(OpCall, brt.temp, self_t.temp, babi, bfname, bsig.return_type))
+                    ll = _lemit(ll, new_inst(OpRet, 0, brt.temp, 0, "", 0))
+                }
+                ll = _lfinish_func(ll)
+            }
+        }
+        bi = bi + 1
     }
     ll
 }

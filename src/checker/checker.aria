@@ -3894,6 +3894,15 @@ fn _check_field(c: Checker, obj_type: i64, field: str) -> CE {
         if fi.name != "" {
             return CE{c: c, type_id: fi.type_id}
         }
+        // Method ref: obj.method (no parens) → bound closure
+        qualified := info.name + "_" + field
+        msig := reg_find_fn(c.registry, qualified)
+        if msig.name != "" {
+            mut cc := c
+            new_st := store_add(cc.store, mk_fn_type(msig.return_type, 0, 0))
+            cc = _cset_store(cc, new_st)
+            return CE{c: cc, type_id: store_last_id(cc.store)}
+        }
         if obj_type != TY_UNKNOWN {
             q := _q()
             cc := _cerror(c, E0107, "field " + q + field + q + " not found on type " + q + info.name + q)

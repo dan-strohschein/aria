@@ -1,0 +1,21 @@
+// test-expect: method_ref_bound_test passed
+
+struct Dog { age: i64 }
+
+impl Dog {
+    fn bark(self) -> i64 = self.age * 2
+}
+
+fn apply(f: fn() -> i64) -> i64 = f()
+
+entry {
+    rex := Dog{age: 5}
+    b := rex.bark
+    assert b() == 10
+    assert apply(rex.bark) == 10
+
+    old := Dog{age: 10}
+    assert apply(old.bark) == 20
+
+    println("method_ref_bound_test passed")
+}
