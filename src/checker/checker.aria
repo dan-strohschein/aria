@@ -1397,10 +1397,12 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
     // Return type
     mut ret := TY_UNIT
     mut err := 0
+
     if node.b2 {
         cc = _cset_pos(cc, node.c1)
         rt := _parse_type_ann(cc)
         cc = rt.c
+    
         rtinfo := store_get(cc.store, rt.type_id)
         if type_kind_name(rtinfo.kind) == "Result" {
             ret = rtinfo.type_id
@@ -1623,6 +1625,7 @@ fn _register_fn_sig(c: Checker) -> Checker {
     name := _ccur(cc).text
     cc = _cadv(cc)
 
+
     // Capture generic params and trait bounds
     mut gp_count := 0
     mut gp_0 := ""
@@ -1717,10 +1720,12 @@ fn _register_fn_sig(c: Checker) -> Checker {
     // Return type (may include ! ErrorType parsed by _parse_type_ann)
     mut ret := TY_UNIT
     mut err := 0
+
     if _ck2(cc) == "->" {
         cc = _cadv(cc)
         rt := _parse_type_ann(cc)
         cc = rt.c
+    
         // Check if _parse_type_ann already consumed T ! E
         rtinfo := store_get(cc.store, rt.type_id)
         if type_kind_name(rtinfo.kind) == "Result" {
@@ -2141,10 +2146,12 @@ fn _register_impl_fn_sig(c: Checker, impl_type: str) -> Checker {
     // Return type (may include ! ErrorType parsed by _parse_type_ann)
     mut ret := TY_UNIT
     mut err := 0
+
     if _ck2(cc) == "->" {
         cc = _cadv(cc)
         rt := _parse_type_ann(cc)
         cc = rt.c
+    
         // Check if _parse_type_ann already consumed T ! E
         rtinfo := store_get(cc.store, rt.type_id)
         if type_kind_name(rtinfo.kind) == "Result" {
