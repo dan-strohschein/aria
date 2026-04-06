@@ -484,10 +484,10 @@ Aria includes a Language Server Protocol (LSP) server and a VSCode extension for
 
 ### Building the LSP Server
 
-The LSP server lives in the `../lsp/` directory as a standalone Go module:
+The LSP server lives in the `lsp/` directory as a standalone Go module:
 
 ```bash
-cd ../lsp
+cd lsp
 
 # Build just the LSP server
 make build
