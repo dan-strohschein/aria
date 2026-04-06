@@ -458,9 +458,18 @@
 ---
 
 @fn _lower_trampolines
+@purpose Generates trampoline wrappers for fn-as-value refs AND bound method refs (v0.3). Regular trampolines discard env_ptr; bound trampolines extract self from env[0] and forward to the original method.
 @sig (l: Lowerer) -> Lowerer
 @source_file src/codegen/lower.aria
-@source_line 11788
+@source_line 12143
+
+---
+
+@fn _type_name_suffix_l
+@purpose Lowerer-side type name suffix: handles TY_STRUCT_BASE+N registry IDs via _struct_name_from_type before falling back to _type_name_suffix (v0.3)
+@sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> str
+@source_file src/codegen/lower.aria
+@source_line 8241
 
 ---
 

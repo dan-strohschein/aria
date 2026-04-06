@@ -113,8 +113,9 @@
   has_net: bool — Has Net effect
   has_ffi: bool — Has FFI effect
   has_async: bool — Has Async effect
+  user_effects: [str] — User-defined effect names (v0.3: with [log, db] etc.)
 @source_file src/checker/types.aria
-@source_line 513
+@source_line 517
 
 ---
 
@@ -140,9 +141,10 @@
   deprecated_names: [str] — Deprecated symbol names
   deprecated_msgs: [str] — Deprecation messages
   cold_names: [str] — Cold-path function names
-  fn_value_refs: [str] — Function names referenced as values
+  fn_value_refs: [str] — Function names referenced as values (drives trampoline emission)
+  bound_fn_value_refs: [str] — Bound method ref names (obj.method — drives bound-trampoline emission, v0.3)
 @source_file src/checker/types.aria
-@source_line 614
+@source_line 619
 
 ---
 
@@ -690,7 +692,47 @@
 @fn sig_set_effects
 @sig (sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e: bool) -> FnSig
 @source_file src/checker/types.aria
-@source_line 590
+@source_line 601
+
+---
+
+@fn sig_set_user_effects
+@purpose Sets user-defined effect names on a FnSig (v0.3)
+@sig (sig: FnSig, effects: [str]) -> FnSig
+@source_file src/checker/types.aria
+@source_line 610
+
+---
+
+@fn treg_find_impl
+@purpose Returns the ImplDef for a (type, trait) pair; sentinel if not found (v0.3)
+@sig (reg: TraitRegistry, type_name: str, trait_name: str) -> ImplDef
+@source_file src/checker/traits.aria
+@source_line 120
+
+---
+
+@fn treg_find_assoc_value
+@purpose Looks up an impl's value for a given associated type name (v0.3)
+@sig (reg: TraitRegistry, type_name: str, trait_name: str, assoc_name: str) -> str
+@source_file src/checker/traits.aria
+@source_line 131
+
+---
+
+@fn reg_find_mono_by_generic
+@purpose Finds a MonoSpec by generic_name + first type arg (v0.3 — lowerer fallback for assoc-bound derived generics)
+@sig (reg: TypeRegistry, generic_name: str, type_arg_0: i64) -> MonoSpec
+@source_file src/checker/types.aria
+@source_line 714
+
+---
+
+@fn reg_add_bound_fn_value_ref
+@purpose Registers a bound method ref name for bound-trampoline generation (v0.3)
+@sig (reg: TypeRegistry, fname: str) -> TypeRegistry
+@source_file src/checker/types.aria
+@source_line 673
 
 ---
 

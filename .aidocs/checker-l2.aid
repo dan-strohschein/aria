@@ -128,9 +128,10 @@
   has_net: bool — Has Net effect
   has_ffi: bool — Has FFI effect
   has_async: bool — Has Async effect
+  user_effects: [str] — User-defined effect names (v0.3: with [log, db] etc.)
 @purpose Stores the complete signature of a function including parameter types, return/error types, generic parameters with trait bounds, and declared effects. Used for call-site type checking, generic monomorphization, and effect verification.
-@invariants param_names and param_types are parallel arrays, both 1-based. generic_count capped at 3. Trait bounds use "+" as separator for multi-bounds (e.g., "Eq+Hash+Clone"). error_type=0 means the function cannot fail.
-@notes Effect flags use boolean fields rather than an array because the bootstrap compiler has simpler codegen for booleans. Fs implies Io, Net implies Io (checked by fn_has_effect). [src: types.aria:557]
+@invariants param_names and param_types are parallel arrays, both 1-based. generic_count capped at 3. Trait bounds use "+" as separator for multi-bounds (e.g., "Eq+Hash+Clone"), with "<Assoc=Type>" for associated-type constraints (v0.3). error_type=0 means the function cannot fail. user_effects 1-based with "" sentinel.
+@notes Built-in effect flags use booleans; user-defined effects use a dynamic [str] list (v0.3). Fs implies Io, Net implies Io (checked by fn_has_effect). fn_has_effect also checks user_effects for dynamic matching. [src: types.aria:561]
 @source_file src/checker/types.aria
 @source_line 513
 

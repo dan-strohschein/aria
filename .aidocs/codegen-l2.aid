@@ -552,11 +552,11 @@
 @fn _lower_trampolines
 @sig (l: Lowerer) -> Lowerer
 @source_file src/codegen/lower.aria
-@source_line 11788
-@purpose Generates trampoline wrapper functions for each function referenced as a first-class value. Each trampoline has signature `_tramp_<fname>(env_ptr: i64, args...)` and delegates to the original fn by discarding env_ptr and forwarding the remaining args. Bridges the ABI gap between closures (which pass env_ptr as first arg) and named functions (which don't).
-@workflow Runs after _lower_bodies, before _lower_derives and _lower_mono_pass. Iterates registry.fn_value_refs. For each entry, looks up the original FnSig, computes ABI arg count (str params take 2 slots), emits the wrapper as a new IrFunc in the module.
-@notes Return type dispatched: str (type 12) returns {i64, i64} struct, void/unit returns nothing, others return i64. Precedent: mirrors _lower_derives iteration pattern.
-@effects Adds one IrFunc per unique fn_value_refs entry to ll.module.funcs.
+@source_line 12143
+@purpose Generates trampoline wrapper functions for fn-as-value refs AND bound method refs (v0.3). Two loops: (1) Regular trampolines `_tramp_<fname>` discard env_ptr and forward args to the original fn. (2) Bound trampolines `_bound_tramp_<fname>` extract self from env[0] via OpFieldGet and forward self + remaining args to the method. Bridges the ABI gap between closure calling convention and named function/method signatures.
+@workflow Runs after _lower_bodies, before _lower_derives and _lower_mono_pass. First loop iterates registry.fn_value_refs (unbound refs). Second loop iterates registry.bound_fn_value_refs (bound method refs from obj.method syntax).
+@notes Return type dispatched: str (type 12) returns {i64, i64} struct, void/unit returns nothing, others return i64.
+@effects Adds IrFuncs to ll.module.funcs: one per fn_value_refs entry + one per bound_fn_value_refs entry.
 
 ---
 
