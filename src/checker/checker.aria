@@ -3296,11 +3296,26 @@ fn _check_primary(c: Checker) -> CE {
             }
         }
 
-        // None — empty Optional
+        // None — empty Optional, but only if no user sum type owns a "None" variant
         if name == "None" {
-            new_st := store_add(cc.store, mk_optional_type(TY_UNKNOWN))
-            cc = _cset_store(cc, new_st)
-            return CE{c: cc, type_id: store_last_id(cc.store)}
+            mut has_user_none := false
+            mut ui := 1
+            while ui < cc.registry.struct_defs.len() {
+                udef := cc.registry.struct_defs[ui]
+                if udef.is_sum {
+                    mut uvi := 1
+                    while uvi < udef.variant_names.len() {
+                        if udef.variant_names[uvi] == "None" { has_user_none = true }
+                        uvi = uvi + 1
+                    }
+                }
+                ui = ui + 1
+            }
+            if has_user_none == false {
+                new_st := store_add(cc.store, mk_optional_type(TY_UNKNOWN))
+                cc = _cset_store(cc, new_st)
+                return CE{c: cc, type_id: store_last_id(cc.store)}
+            }
         }
 
         // Variable lookup
@@ -4388,8 +4403,17 @@ fn _check_once_consumption(c: Checker, start: i64, end_tok: i64) -> Checker {
                 if rhs + 1 < end_tok && token_name(cc.tokens[rhs].kind) == "fn" {
                     rhs2 := rhs + 1
                     if token_name(cc.tokens[rhs2].kind) == "IDENT" && cc.tokens[rhs2].text == "once" {
-                        once_names = once_names.append(cc.tokens[i].text)
-                        once_positions = once_positions.append(i)
+                        // Check for @once_unchecked annotation before the binding
+                        mut has_unchecked := false
+                        mut back := i - 1
+                        while back >= start && token_name(cc.tokens[back].kind) == "NEWLINE" { back = back - 1 }
+                        if back >= start + 1 && token_name(cc.tokens[back].kind) == "IDENT" && cc.tokens[back].text == "once_unchecked" {
+                            if token_name(cc.tokens[back - 1].kind) == "@" { has_unchecked = true }
+                        }
+                        if has_unchecked == false {
+                            once_names = once_names.append(cc.tokens[i].text)
+                            once_positions = once_positions.append(i)
+                        }
                     }
                 }
             }

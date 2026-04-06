@@ -1070,6 +1070,19 @@ fn _resolve_bracket_contents(r: Resolver) -> Resolver {
 fn _resolve_stmt(r: Resolver) -> Resolver {
     k := _rk(r)
 
+    // Skip annotations (@name or @name(...)) before any statement
+    if k == "@" {
+        mut rr := _radv(r)
+        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+        if _rk(rr) == "(" {
+            rr = _radv(rr)
+            while _rk(rr) != ")" && _rk(rr) != "EOF" { rr = _radv(rr) }
+            if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+        rr = _rskip_nl(rr)
+        return _resolve_stmt(rr)
+    }
+
     if k == "mut" { return _resolve_mut_binding(r) }
     if k == "return" {
         mut rr := _radv(r)

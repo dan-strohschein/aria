@@ -1472,6 +1472,19 @@ fn _parse_expr(p: Parser, min_bp: i64) -> PR {
 fn _parse_prefix(p: Parser) -> PR {
     k := _ck(p)
 
+    // Skip annotations (@name or @name(...)) in expression position
+    if k == "@" {
+        mut pp := _adv(p)
+        if _ck(pp) == "IDENT" { pp = _adv(pp) }
+        if _ck(pp) == "(" {
+            pp = _adv(pp)
+            while _ck(pp) != ")" && _ck(pp) != "EOF" { pp = _adv(pp) }
+            if _ck(pp) == ")" { pp = _adv(pp) }
+        }
+        pp = _skip_nl(pp)
+        return _parse_prefix(pp)
+    }
+
     if k == "-" || k == "!" || k == "~" {
         op := _cur(p).text
         span := _pspan(p)

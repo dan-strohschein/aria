@@ -6,7 +6,7 @@ type Inner =
 
 type Outer =
     | Wrap(Inner)
-    | Nothing
+    | None
 
 fn unwrap_outer(val: Outer) -> i64 {
     match val {
@@ -14,7 +14,7 @@ fn unwrap_outer(val: Outer) -> i64 {
             Leaf(n) => n
             Empty => 0
         }
-        Nothing => 0 - 1
+        None => 0 - 1
     }
 }
 
@@ -25,7 +25,7 @@ entry {
     val2 := Wrap(Empty)
     assert unwrap_outer(val2) == 0
 
-    val3 := Nothing
+    val3 := None
     assert unwrap_outer(val3) == 0 - 1
 
     println("nested_pattern_test passed")

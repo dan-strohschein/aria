@@ -6977,17 +6977,20 @@ fn _lower_primary(l: Lowerer) -> LT {
             }
         }
 
-        // None — Optional empty value
+        // None — Optional empty value, but only if no user sum type owns "None"
         if name == "None" {
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 1, 0, "_Optional", 0))
-            tag_nt := _lnew_temp(ll)
-            ll = tag_nt.l
-            ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
-            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
-            ll = _lset_type(ll, nt.temp, 201)
-            return LT{l: ll, temp: nt.temp}
+            vp := _variant_parent(ll.registry, "None")
+            if vp.name == "" {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 1, 0, "_Optional", 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                ll = _lset_type(ll, nt.temp, 201)
+                return LT{l: ll, temp: nt.temp}
+            }
         }
 
         // Variable reference
@@ -9498,16 +9501,16 @@ fn _lower_closure(l: Lowerer) -> LT {
     // Generate unique closure name based on module function count
     closure_name := "_closure_" + i2s(ll.module.funcs.len())
 
-    // Parse parameter names and count; track which params are str-typed
+    // Parse parameter names and types from annotations via resolve_type_name
     mut param_count := 0
     mut pname_0 := ""
     mut pname_1 := ""
     mut pname_2 := ""
     mut pname_3 := ""
-    mut pstr_0 := false
-    mut pstr_1 := false
-    mut pstr_2 := false
-    mut pstr_3 := false
+    mut ptype_0 := 0
+    mut ptype_1 := 0
+    mut ptype_2 := 0
+    mut ptype_3 := 0
     if _lk(ll) == "(" {
         ll = _ladv(ll)  // skip (
         while _lk(ll) != ")" && _lk(ll) != "EOF" {
@@ -9518,14 +9521,17 @@ fn _lower_closure(l: Lowerer) -> LT {
                 if param_count == 2 { pname_2 = ptext }
                 if param_count == 3 { pname_3 = ptext }
                 ll = _ladv(ll)
-                // Parse type annotation — detect "str" to allocate 2 slots
+                // Parse type annotation — resolve to type id
                 if _lk(ll) == ":" {
                     ll = _ladv(ll)
-                    if _lk(ll) == "IDENT" && _lcur(ll).text == "str" {
-                        if param_count == 0 { pstr_0 = true }
-                        if param_count == 1 { pstr_1 = true }
-                        if param_count == 2 { pstr_2 = true }
-                        if param_count == 3 { pstr_3 = true }
+                    if _lk(ll) == "IDENT" {
+                        ptid := resolve_type_name(ll.store, _lcur(ll).text)
+                        if ptid != TY_UNKNOWN {
+                            if param_count == 0 { ptype_0 = ptid }
+                            if param_count == 1 { ptype_1 = ptid }
+                            if param_count == 2 { ptype_2 = ptid }
+                            if param_count == 3 { ptype_3 = ptid }
+                        }
                     }
                     while _lk(ll) != "," && _lk(ll) != ")" && _lk(ll) != "EOF" {
                         ll = _ladv(ll)
@@ -9539,12 +9545,15 @@ fn _lower_closure(l: Lowerer) -> LT {
         }
         if _lk(ll) == ")" { ll = _ladv(ll) }
     }
-    // Parse return type annotation — detect "str"
-    mut ret_is_str := false
+    // Parse return type annotation
+    mut ret_type := 1
     lb2 := "\{"
     if _lk(ll) == "->" {
         ll = _ladv(ll)
-        if _lk(ll) == "IDENT" && _lcur(ll).text == "str" { ret_is_str = true }
+        if _lk(ll) == "IDENT" {
+            rtid := resolve_type_name(ll.store, _lcur(ll).text)
+            if rtid != TY_UNKNOWN { ret_type = rtid }
+        }
         while _lk(ll) != "=>" && _lk(ll) != lb2 && _lk(ll) != "EOF" { ll = _ladv(ll) }
     }
     // Skip =>
@@ -9659,16 +9668,14 @@ fn _lower_closure(l: Lowerer) -> LT {
     mut actual_params := 1
     mut reg_pi := 0
     while reg_pi < param_count {
-        mut ps := false
-        if reg_pi == 0 { ps = pstr_0 }
-        if reg_pi == 1 { ps = pstr_1 }
-        if reg_pi == 2 { ps = pstr_2 }
-        if reg_pi == 3 { ps = pstr_3 }
-        if ps { actual_params = actual_params + 2 } else { actual_params = actual_params + 1 }
+        mut pt := 0
+        if reg_pi == 0 { pt = ptype_0 }
+        if reg_pi == 1 { pt = ptype_1 }
+        if reg_pi == 2 { pt = ptype_2 }
+        if reg_pi == 3 { pt = ptype_3 }
+        if pt == 12 { actual_params = actual_params + 2 } else { actual_params = actual_params + 1 }
         reg_pi = reg_pi + 1
     }
-    mut ret_type := 1
-    if ret_is_str { ret_type = 12 }
     ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
 
     // First param is env_ptr
@@ -9679,17 +9686,17 @@ fn _lower_closure(l: Lowerer) -> LT {
     // Register closure parameters (after env_ptr); str params allocate 2 consecutive slots
     mut pi := 0
     while pi < param_count {
-        mut ps := false
-        if pi == 0 { ps = pstr_0 }
-        if pi == 1 { ps = pstr_1 }
-        if pi == 2 { ps = pstr_2 }
-        if pi == 3 { ps = pstr_3 }
+        mut pt := 0
+        if pi == 0 { pt = ptype_0 }
+        if pi == 1 { pt = ptype_1 }
+        if pi == 2 { pt = ptype_2 }
+        if pi == 3 { pt = ptype_3 }
         mut pn := ""
         if pi == 0 { pn = pname_0 }
         if pi == 1 { pn = pname_1 }
         if pi == 2 { pn = pname_2 }
         if pi == 3 { pn = pname_3 }
-        if ps {
+        if pt == 12 {
             nt := _lnew_str_temp(ll)
             ll = nt.l
             ll = _lenv_add(ll, pn, nt.temp)
@@ -9698,6 +9705,7 @@ fn _lower_closure(l: Lowerer) -> LT {
             nt := _lnew_temp(ll)
             ll = nt.l
             ll = _lenv_add(ll, pn, nt.temp)
+            if pt > 0 { ll = _lset_type(ll, nt.temp, pt) }
         }
         pi = pi + 1
     }
