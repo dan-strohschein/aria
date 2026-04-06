@@ -47,6 +47,16 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
 // ============================================================
 
 fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag {
+    // Validate IR before generating LLVM
+    ir_errors := validate_ir_module(m)
+    if ir_errors.len() > 1 {
+        mut ei := 1
+        while ei < ir_errors.len() {
+            println(ir_errors[ei])
+            ei = ei + 1
+        }
+    }
+
     ll_path := output_path + ".ll"
 
     // Use streaming write to reduce memory: write header, then each function
@@ -54,7 +64,7 @@ fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> Dia
     generate_llvm_ir_to_file(m, ll_path)
 
     // Compile with clang
-    cmd := "clang " + ll_path + " " + runtime_path + " -o " + output_path + " -O1 -Wno-override-module 2>&1"
+    cmd := "clang '" + ll_path + "' '" + runtime_path + "' -o '" + output_path + "' -O1 -Wno-override-module 2>&1"
     exit_code := _ariaExec(cmd)
 
     if exit_code != 0 {
@@ -62,6 +72,36 @@ fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> Dia
         return bag_add_error(bag, "E9000", "clang compilation failed (exit code " + i2s(exit_code) + ")", new_span("<codegen>", 0, 0, 0, 0))
     }
     new_bag()
+}
+
+// ============================================================
+// Duplicate definition detection
+// ============================================================
+
+fn _check_duplicate_decls(index: DeclIndex) -> DiagnosticBag {
+    mut bag := new_bag()
+    mut i := 1
+    while i < index.decls.len() {
+        di := index.decls[i]
+        dk := decl_kind_name(di.kind)
+        // Only check fn, type, enum, trait, const for duplicates
+        // Skip impl, test, entry, use, none (allowed duplicates)
+        if dk == "fn" || dk == "type" || dk == "enum" || dk == "trait" || dk == "const" {
+            if di.name.len() > 0 {
+                mut j := i + 1
+                while j < index.decls.len() {
+                    dj := index.decls[j]
+                    if decl_kind_name(dj.kind) == dk && dj.name == di.name {
+                        bag = bag_add_error(bag, "E0702", "duplicate " + dk + " definition '" + di.name + "'", new_span("<multi-file>", 0, 0, 0, 0))
+                        j = index.decls.len()  // break inner loop
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    bag
 }
 
 // ============================================================
@@ -146,6 +186,10 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     // 1b. Build declaration index
     pr := build_decl_index(merged)
     if bag_has_errors(pr.diagnostics) { return pr.diagnostics }
+
+    // 1c. Check for duplicate definitions across files
+    dup_bag := _check_duplicate_decls(pr.index)
+    if bag_has_errors(dup_bag) { return dup_bag }
 
     // 2. Resolve
     rr := resolve(merged, pr.index, pr.pool, file)

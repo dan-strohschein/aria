@@ -275,3 +275,141 @@ fn mod_find_func(m: IrModule, name: str) -> IrFunc {
     }
     return _sentinel_func()
 }
+
+// ============================================================
+// IR Validation — checks for common lowering errors
+// ============================================================
+
+fn _is_jump_op(op: IrOp) -> bool =
+    ir_op_name(op) == "Jump" || ir_op_name(op) == "BranchTrue" || ir_op_name(op) == "BranchFalse"
+
+fn _is_def_op(op: IrOp) -> bool {
+    name := ir_op_name(op)
+    // Ops that produce a value in dest
+    if name == "Const" { return true }
+    if name == "ConstStr" { return true }
+    if name == "Add" { return true }
+    if name == "Sub" { return true }
+    if name == "Mul" { return true }
+    if name == "Div" { return true }
+    if name == "Mod" { return true }
+    if name == "Neg" { return true }
+    if name == "Eq" { return true }
+    if name == "Neq" { return true }
+    if name == "Lt" { return true }
+    if name == "Gt" { return true }
+    if name == "Lte" { return true }
+    if name == "Gte" { return true }
+    if name == "And" { return true }
+    if name == "Or" { return true }
+    if name == "Not" { return true }
+    if name == "Call" { return true }
+    if name == "CallIndirect" { return true }
+    if name == "FnRef" { return true }
+    if name == "Load" { return true }
+    if name == "FieldGet" { return true }
+    if name == "Alloc" { return true }
+    if name == "ArrayNew" { return true }
+    if name == "ArrayGet" { return true }
+    if name == "ArrayLen" { return true }
+    if name == "ArrayAppend" { return true }
+    if name == "MapNew" { return true }
+    if name == "SetNew" { return true }
+    if name == "IntToStr" { return true }
+    if name == "StrToInt" { return true }
+    false
+}
+
+// Validate a single IR function: check label targets and return path
+fn _validate_func(f: IrFunc) -> [str] {
+    mut errors := [""]
+    // Collect all defined labels
+    mut labels := [0]
+    mut ii := 1
+    while ii < f.insts.len() {
+        inst := f.insts[ii]
+        if ir_op_name(inst.op) == "Label" {
+            labels = labels.append(inst.dest)
+        }
+        ii = ii + 1
+    }
+    // Check jump targets reference existing labels
+    mut ji := 1
+    while ji < f.insts.len() {
+        inst := f.insts[ji]
+        if _is_jump_op(inst.op) {
+            target := inst.arg1
+            mut found := false
+            mut li := 1
+            while li < labels.len() {
+                if labels[li] == target { found = true }
+                li = li + 1
+            }
+            if found == false {
+                errors = errors.append("E9002: jump to undefined label L" + _ir_i2s(target) + " in function '" + f.name + "'")
+            }
+        }
+        ji = ji + 1
+    }
+    // Check return path: last non-nop instruction should be Ret or RetVoid
+    if f.insts.len() > 1 {
+        last := f.insts[f.insts.len() - 1]
+        last_name := ir_op_name(last.op)
+        if last_name != "Ret" && last_name != "RetVoid" && last_name != "Jump" {
+            // Only warn if function has instructions (not empty)
+            if f.insts.len() > 2 {
+                errors = errors.append("W9003: function '" + f.name + "' may not return on all paths")
+            }
+        }
+    }
+    errors
+}
+
+// Simple i64 to string for IR validation messages
+fn _ir_i2s(n: i64) -> str {
+    if n == 0 { return "0" }
+    mut result := ""
+    mut v := n
+    if v < 0 { v = 0 - v }
+    while v > 0 {
+        d := v - (v / 10) * 10
+        mut ch := "0"
+        if d == 1 { ch = "1" }
+        if d == 2 { ch = "2" }
+        if d == 3 { ch = "3" }
+        if d == 4 { ch = "4" }
+        if d == 5 { ch = "5" }
+        if d == 6 { ch = "6" }
+        if d == 7 { ch = "7" }
+        if d == 8 { ch = "8" }
+        if d == 9 { ch = "9" }
+        result = ch + result
+        v = v / 10
+    }
+    if n < 0 { result = "-" + result }
+    result
+}
+
+// Validate entire IR module
+fn validate_ir_module(m: IrModule) -> [str] {
+    mut all_errors := [""]
+    // Check entry function exists
+    if m.entry_func.len() > 0 {
+        ef := mod_find_func(m, m.entry_func)
+        if ef.name == "" {
+            all_errors = all_errors.append("E9004: entry function '" + m.entry_func + "' not found in module")
+        }
+    }
+    // Validate each function
+    mut fi := 1
+    while fi < m.funcs.len() {
+        func_errors := _validate_func(m.funcs[fi])
+        mut ei := 1
+        while ei < func_errors.len() {
+            all_errors = all_errors.append(func_errors[ei])
+            ei = ei + 1
+        }
+        fi = fi + 1
+    }
+    all_errors
+}

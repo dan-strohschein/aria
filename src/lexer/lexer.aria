@@ -733,7 +733,12 @@ fn tokenize(source: str, file: str) -> Lexer {
                 lex = _advance(lex)
             }
         } else if c == "." {
-            if _peek_next(lex) == "." {
+            lb := "\{"
+            if _peek_next(lex) == lb {
+                // .{ record update
+                lex = _add_token(lex, TkDotLBrace, ".\{", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == "." {
                 // .. or ..=
                 lex = _advance(_advance(lex))
                 if _at_end(lex) == false && _peek(lex) == "=" {

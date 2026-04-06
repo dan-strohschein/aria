@@ -140,6 +140,13 @@ fn new_error(code: str, message: str, span: Span) -> Diagnostic =
 fn new_warning(code: str, message: str, span: Span) -> Diagnostic =
     new_diagnostic(code, Warning, message, span)
 
+fn diag_with_note(diag: Diagnostic, note: str) -> Diagnostic =
+    Diagnostic{code: diag.code, severity: diag.severity, message: diag.message, span: diag.span,
+               labels: diag.labels, notes: diag.notes.append(note), suggestions: diag.suggestions}
+
+fn bag_add_error_with_note(bag: DiagnosticBag, code: str, message: str, span: Span, note: str) -> DiagnosticBag =
+    bag_add_diagnostic(bag, diag_with_note(new_error(code, message, span), note))
+
 // --- DiagnosticBag ---
 
 struct DiagnosticBag {
@@ -156,6 +163,15 @@ fn new_bag() -> DiagnosticBag =
     }
 
 fn bag_add_diagnostic(bag: DiagnosticBag, diag: Diagnostic) -> DiagnosticBag {
+    // Deduplicate: skip if same code + line already exists
+    mut i := 1
+    while i < bag.diagnostics.len() {
+        existing := bag.diagnostics[i]
+        if existing.code == diag.code && existing.span.line == diag.span.line && existing.span.file == diag.span.file {
+            return bag
+        }
+        i = i + 1
+    }
     new_diagnostics := bag.diagnostics.append(diag)
     mut new_errors := bag.error_count
     mut new_warnings := bag.warning_count
@@ -316,6 +332,7 @@ fn describe_code(code: str) -> str {
     if code == E0110 { return "duplicate field" }
     if code == E0200 { return "trait not satisfied" }
     if code == E0201 { return "missing trait method" }
+    if code == E0202 { return "orphan impl" }
     if code == E0300 { return "missing effect [Io]" }
     if code == E0301 { return "missing effect [Fs]" }
     if code == E0302 { return "missing effect [Net]" }

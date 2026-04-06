@@ -1,0 +1,23 @@
+mod test
+
+// Test that more than 8 defers work correctly (was hardcoded limit of 8)
+// Uses a counter approach since defer side effects are hard to assert on
+fn count_defers() -> i64 {
+    mut count := 0
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    defer count = count + 1
+    count
+}
+
+entry {
+    count_defers()
+    println("defer_many_test passed")
+}

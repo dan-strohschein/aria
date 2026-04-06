@@ -1,0 +1,14 @@
+mod test
+
+// Test closures with more than 4 parameters (was hardcoded limit of 4)
+// NOTE: This test exercises the self-hosting compiler's dynamic param arrays.
+// The bootstrap compiler may still have the old 4-param limit.
+
+fn apply5(f: fn(i64, i64, i64, i64, i64) -> i64) -> i64 = f(1, 2, 3, 4, 5)
+
+entry {
+    // Basic closure with 5 params
+    result := apply5(fn(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 => a + b + c + d + e)
+    assert result == 15
+    println("closure_many_params_test passed")
+}

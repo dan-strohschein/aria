@@ -1,0 +1,22 @@
+mod test
+
+// Test closures with more than 8 captures (was hardcoded limit of 8)
+// NOTE: This test exercises the self-hosting compiler's dynamic capture arrays.
+// The bootstrap compiler may still have the old 8-capture limit.
+
+entry {
+    a := 1
+    b := 2
+    c := 3
+    d := 4
+    e := 5
+    x := 6
+    y := 7
+    z := 8
+    p := 9
+    q := 10
+    sum_fn := fn() -> i64 => a + b + c + d + e + x + y + z + p + q
+    result := sum_fn()
+    assert result == 55
+    println("closure_many_captures_test passed")
+}

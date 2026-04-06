@@ -1514,6 +1514,14 @@ fn _parse_prefix(p: Parser) -> PR {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_float_lit(tok.text, _pspan(p))}
     }
+    if k == "DURATION" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_duration_lit(tok.text, _pspan(p))}
+    }
+    if k == "SIZE" {
+        tok := _cur(p)
+        return PR{p: _adv(p), e: mk_size_lit(tok.text, _pspan(p))}
+    }
     if k == "STRING" {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_string_lit(tok.text, _pspan(p))}
@@ -1813,6 +1821,13 @@ fn _parse_match(p: Parser) -> PR {
         pat := _parse_pattern(pp)
         pat_idx := _pidx(pat.p)
         pp = _padd(pat.p, pat.e)
+        // Or-patterns: pat1 | pat2 | pat3
+        while _ck(pp) == "|" {
+            pp = _adv(pp)
+            pp = _skip_nl(pp)
+            alt := _parse_pattern(pp)
+            pp = _padd(alt.p, alt.e)
+        }
         if _ck(pp) == "if" {
             pp = _adv(pp)
             g := _parse_expr(pp, 0)
@@ -1860,6 +1875,52 @@ fn _parse_pattern(p: Parser) -> PR {
     k := _ck(p)
     span := _pspan(p)
     lb := "\{"
+    // Tuple pattern: (a, b, c)
+    if k == "(" {
+        mut pp := _adv(p)
+        list_start := _pidx(pp)
+        mut count := 0
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            sub := _parse_pattern(pp)
+            pp = _padd(sub.p, sub.e)
+            count = count + 1
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _expect(pp, ")")
+        return PR{p: pp, e: Expr{kind: EkTuple, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+    }
+    // Array pattern: [first, second, ..rest]
+    if k == "[" {
+        mut pp := _adv(p)
+        list_start := _pidx(pp)
+        mut count := 0
+        while _ck(pp) != "]" && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            if _ck(pp) == ".." {
+                // Rest pattern
+                pp = _adv(pp)
+                if _ck(pp) == "IDENT" {
+                    rest_name := _cur(pp).text
+                    pp = _padd(_adv(pp), mk_ident(".." + rest_name, span))
+                } else {
+                    pp = _padd(pp, mk_ident("..", span))
+                }
+                count = count + 1
+            } else {
+                sub := _parse_pattern(pp)
+                pp = _padd(sub.p, sub.e)
+                count = count + 1
+            }
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _expect(pp, "]")
+        return PR{p: pp, e: Expr{kind: EkArray, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+    }
     if k == "INT" {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_int_lit(tok.text, span)}
@@ -1891,6 +1952,15 @@ fn _parse_pattern(p: Parser) -> PR {
         name := _cur(p).text
         mut pp := _adv(p)
         if name == "_" { return PR{p: pp, e: mk_ident("_", span)} }
+        // Named pattern: name @ subpattern
+        if _ck(pp) == "@" {
+            pp = _adv(pp)
+            sub := _parse_pattern(pp)
+            sub_idx := _pidx(sub.p)
+            pp = _padd(sub.p, sub.e)
+            return PR{p: pp, e: Expr{kind: EkBinding, s1: name, s2: "@", b1: false, b2: false,
+                                      c0: sub_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+        }
         // Check for destructure: Name(x, y) or Name{x: p}
         if _ck(pp) == "(" {
             pp = _adv(pp)

@@ -34,6 +34,8 @@ struct Options {
     target: str
     runtime_path: str
     parallel: bool
+    output_path: str
+    help_requested: bool
 }
 
 fn default_options() -> Options =
@@ -43,8 +45,28 @@ fn default_options() -> Options =
         format: "text",
         target: "native",
         runtime_path: "runtime/runtime.c",
-        parallel: false
+        parallel: false,
+        output_path: "",
+        help_requested: false
     }
+
+// DRY: Options setter helpers (avoid duplicating 8-field struct literal)
+fn _opts_set_cmd(o: Options, c: Command) -> Options =
+    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_format(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_target(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_runtime(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_parallel(o: Options) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_output(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested}
+fn _opts_set_files(o: Options, f: [str]) -> Options =
+    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_help(o: Options) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true}
 
 // --- Argument parsing ---
 
@@ -93,6 +115,9 @@ fn _parse_flag_value(arg: str) -> str {
     ""
 }
 
+fn _validate_format(v: str) -> bool =
+    v == "text" || v == "json"
+
 fn parse_args(args: [str]) -> Options {
     mut opts := default_options()
     mut cmd_set := false
@@ -103,55 +128,38 @@ fn parse_args(args: [str]) -> Options {
     while i < args.len() {
         arg := args[i]
         if _is_flag(arg) {
-            if arg.startsWith("--format=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: _parse_flag_value(arg),
-                    target: opts.target,
-                    runtime_path: opts.runtime_path,
-                    parallel: opts.parallel
+            if arg == "--help" || arg == "-h" {
+                opts = _opts_set_help(opts)
+            } else if arg.startsWith("--format=") {
+                fv := _parse_flag_value(arg)
+                if _validate_format(fv) {
+                    opts = _opts_set_format(opts, fv)
+                } else {
+                    println("error: invalid format '" + fv + "' (expected 'text' or 'json')")
                 }
-            }
-            if arg.startsWith("--target=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: opts.format,
-                    target: _parse_flag_value(arg),
-                    runtime_path: opts.runtime_path,
-                    parallel: opts.parallel
+            } else if arg.startsWith("--target=") {
+                opts = _opts_set_target(opts, _parse_flag_value(arg))
+            } else if arg.startsWith("--runtime=") {
+                opts = _opts_set_runtime(opts, _parse_flag_value(arg))
+            } else if arg.startsWith("--output=") {
+                opts = _opts_set_output(opts, _parse_flag_value(arg))
+            } else if arg == "-o" {
+                // -o PATH: value is next argument
+                if i + 1 < args.len() {
+                    i = i + 1
+                    opts = _opts_set_output(opts, args[i])
+                } else {
+                    println("error: -o requires a path argument")
                 }
-            }
-            if arg.startsWith("--runtime=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: opts.format,
-                    target: opts.target,
-                    runtime_path: _parse_flag_value(arg),
-                    parallel: opts.parallel
-                }
-            }
-            if arg == "--parallel" {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: opts.format,
-                    target: opts.target,
-                    runtime_path: opts.runtime_path,
-                    parallel: true
-                }
+            } else if arg == "--parallel" {
+                opts = _opts_set_parallel(opts)
+            } else if arg == "--version" || arg == "-v" {
+                opts = _opts_set_cmd(opts, CmdVersion)
+            } else {
+                println("error: unknown flag '" + arg + "'")
             }
         } else if cmd_set == false {
-            opts = Options{
-                command: parse_command(arg),
-                files: opts.files,
-                format: opts.format,
-                target: opts.target,
-                runtime_path: opts.runtime_path,
-                parallel: opts.parallel
-            }
+            opts = _opts_set_cmd(opts, parse_command(arg))
             cmd_set = true
         } else {
             files = files.append(arg)
@@ -159,20 +167,12 @@ fn parse_args(args: [str]) -> Options {
         i = i + 1
     }
 
-    opts = Options{
-        command: opts.command,
-        files: files,
-        format: opts.format,
-        target: opts.target,
-        runtime_path: opts.runtime_path,
-        parallel: opts.parallel
-    }
-    opts
+    _opts_set_files(opts, files)
 }
 
 // --- Version ---
 
-const COMPILER_VERSION: str = "0.1.0-dev"
+const COMPILER_VERSION: str = "0.5.0"
 
 fn print_version() -> i64 {
     println("aria " + COMPILER_VERSION + " (self-hosting)")
@@ -180,6 +180,13 @@ fn print_version() -> i64 {
 }
 
 // --- Help ---
+
+fn _print_command_header(name: str, desc: str) {
+    println("aria " + name + " -- " + desc)
+    println("")
+    println("Usage: aria " + name + " [flags] <files...>")
+    println("")
+}
 
 fn print_help() -> i64 {
     println("aria " + COMPILER_VERSION + " -- the Aria self-hosting compiler")
@@ -196,11 +203,59 @@ fn print_help() -> i64 {
     println("  explain   Explain an error code (e.g., aria explain E0100)")
     println("")
     println("Flags:")
-    println("  --format=text|json  Output format (default: text)")
-    println("  --target=TARGET     Target platform")
-    println("  --runtime=PATH      Path to runtime.c (default: runtime/runtime.c)")
-    println("  --version, -v       Print version")
-    println("  --help, -h          Print this help")
+    println("  -o PATH              Output path for compiled binary")
+    println("  --output=PATH        Output path (same as -o)")
+    println("  --format=text|json   Output format (default: text)")
+    println("  --target=TARGET      Target platform")
+    println("  --runtime=PATH       Path to runtime.c (default: runtime/runtime.c)")
+    println("  --parallel           Run tests in parallel")
+    println("  --version, -v        Print version")
+    println("  --help, -h           Print this help")
+    println("")
+    println("Run 'aria <command> --help' for command-specific help.")
+    0
+}
+
+fn _print_build_help() -> i64 {
+    _print_command_header("build", "Compile source files to an executable")
+    println("Flags:")
+    println("  -o PATH              Output binary path (default: derived from input)")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --target=TARGET      Target platform (default: native)")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_run_help() -> i64 {
+    _print_command_header("run", "Compile and run source files")
+    println("Flags:")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_check_help() -> i64 {
+    _print_command_header("check", "Type-check source files without compiling")
+    println("Flags:")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_test_help() -> i64 {
+    _print_command_header("test", "Compile and run test blocks")
+    println("Flags:")
+    println("  -o PATH              Output test binary path")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --parallel           Run tests in parallel (experimental)")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_bench_help() -> i64 {
+    _print_command_header("bench", "Compile and run bench blocks")
+    println("Flags:")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --format=text|json   Diagnostic output format")
     0
 }
 
@@ -331,6 +386,46 @@ fn _resolve_runtime_path(explicit: str) -> str {
     aria_home + "/runtime/runtime.c"
 }
 
+// Validate runtime path exists and return it, or print error and return ""
+fn _resolve_and_validate_runtime(runtime_path: str) -> str {
+    rt := _resolve_runtime_path(runtime_path)
+    content := _ariaReadFile(rt)
+    if content.len() > 0 { return rt }
+    println("error: runtime not found at '" + rt + "'")
+    println("hint: set ARIA_HOME or use --runtime=PATH")
+    ""
+}
+
+// Determine output path: explicit > derived from file > derived from directory > a.out
+fn _determine_output_path(raw_files: [str], file: str, explicit: str) -> str {
+    if explicit.len() > 0 { return explicit }
+    mut output := "a.out"
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+    if raw_files.len() > 1 {
+        raw_input := raw_files[1]
+        if _ariaIsDir(raw_input) == 1 {
+            mut out := raw_input
+            if out.len() > 1 && out.charAt(out.len() - 1) == "/" {
+                out = out.substring(0, out.len() - 1)
+            }
+            mut last_slash := 0 - 1
+            mut si := 0
+            while si < out.len() {
+                if out.charAt(si) == "/" { last_slash = si }
+                si = si + 1
+            }
+            if last_slash >= 0 {
+                output = out + "/" + out.substring(last_slash + 1, out.len())
+            } else {
+                output = out + "/" + out
+            }
+        }
+    }
+    output
+}
+
 fn _expand_dir(path: str) -> [str] {
     mut result := [""]
     entries := _ariaListDir(path)
@@ -435,7 +530,7 @@ fn _print_diagnostics(diags: DiagnosticBag, format: str) {
     mut _unused := 0
 }
 
-fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+fn run_build(raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -443,37 +538,10 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
-
-    // Determine output path: strip .aria extension, or use directory name
-    mut output := "a.out"
-    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
-        output = file.substring(0, file.len() - 5)
-    }
-    // If original input was a directory, use directory path as output
-    if raw_files.len() > 1 {
-        raw_input := raw_files[1]
-        if _ariaIsDir(raw_input) == 1 {
-            // Strip trailing slash
-            mut out := raw_input
-            if out.len() > 1 && out.charAt(out.len() - 1) == "/" {
-                out = out.substring(0, out.len() - 1)
-            }
-            // Use last path component + /main
-            mut last_slash := 0 - 1
-            mut si := 0
-            while si < out.len() {
-                if out.charAt(si) == "/" { last_slash = si }
-                si = si + 1
-            }
-            if last_slash >= 0 {
-                output = out + "/" + out.substring(last_slash + 1, out.len())
-            } else {
-                output = out + "/" + out
-            }
-        }
-    }
+    output := _determine_output_path(raw_files, file, output_path)
 
     // Run full pipeline: lex → resolve → check → lower → LLVM IR → clang
     diags := generate_from_sources(files, output, rt)
@@ -489,7 +557,7 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i
     0
 }
 
-fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+fn run_run(raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 {
     // Build to temp path, then execute
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
@@ -498,14 +566,10 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
-
-    // Output path: strip .aria, add _run suffix to avoid clobbering
-    mut output := "a.out"
-    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
-        output = file.substring(0, file.len() - 5)
-    }
+    output := _determine_output_path(raw_files, file, output_path)
 
     // Build
     diags := generate_from_sources(files, output, rt)
@@ -530,7 +594,8 @@ fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) ->
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
 
     // Build test binary to temp path
@@ -654,7 +719,8 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
     mut output := file
     if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
@@ -680,10 +746,25 @@ entry {
     } else {
         opts := parse_args(args)
         cmd := command_to_str(opts.command)
-        if cmd == "build" {
-            run_build(opts.files, opts.format, opts.target, opts.runtime_path)
+        // Per-command help: aria <command> --help
+        if opts.help_requested {
+            if cmd == "build" {
+                _print_build_help()
+            } else if cmd == "run" {
+                _print_run_help()
+            } else if cmd == "check" {
+                _print_check_help()
+            } else if cmd == "test" {
+                _print_test_help()
+            } else if cmd == "bench" {
+                _print_bench_help()
+            } else {
+                print_help()
+            }
+        } else if cmd == "build" {
+            run_build(opts.files, opts.format, opts.target, opts.runtime_path, opts.output_path)
         } else if cmd == "run" {
-            run_run(opts.files, opts.format, opts.target, opts.runtime_path)
+            run_run(opts.files, opts.format, opts.target, opts.runtime_path, opts.output_path)
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {

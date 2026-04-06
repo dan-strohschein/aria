@@ -6,7 +6,9 @@ mod checker
 
 use diagnostic
 use lexer
+use parser
 use resolver
+
 
 // --- Helpers ---
 // NOTE: Never use variable name "t" in test blocks (shadows Go testing.T)
@@ -14,8 +16,9 @@ use resolver
 fn _check_source(source: str) -> CheckResult {
     lex := tokenize(source, "test.aria")
     toks := get_tokens(lex)
-    rr := resolve(toks, "test.aria")
-    check(toks, rr.table, "test.aria")
+    pr := build_decl_index(toks)
+    rr := resolve(toks, pr.index, pr.pool, "test.aria")
+    check(toks, pr.index, pr.pool, rr.table, "test.aria")
 }
 
 fn _check_has_errors(result: CheckResult) -> bool = bag_has_errors(result.diagnostics)

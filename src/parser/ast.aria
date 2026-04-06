@@ -58,6 +58,8 @@ type ExprKind =
     | EkYield
     | EkSelect
     | EkNone
+    | EkDurationLit
+    | EkSizeLit
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
     EkIntLit => "IntLit"
@@ -107,6 +109,8 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkYield => "Yield"
     EkSelect => "Select"
     EkNone => "None"
+    EkDurationLit => "DurationLit"
+    EkSizeLit => "SizeLit"
 }
 
 // --- Expr node ---
@@ -170,6 +174,14 @@ fn mk_float_lit(value: str, span: Span) -> Expr =
 
 fn mk_string_lit(value: str, span: Span) -> Expr =
     Expr{kind: EkStringLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_duration_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkDurationLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_size_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkSizeLit, s1: value, s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
 
 fn mk_bool_lit(value: bool, span: Span) -> Expr =

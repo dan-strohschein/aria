@@ -219,6 +219,26 @@ fn _env_lookup(c: Checker, name: str) -> i64 {
     TY_UNKNOWN
 }
 
+// Restore environment to a saved length (scope cleanup on block exit)
+fn _env_trim(c: Checker, saved_len: i64) -> Checker {
+    if saved_len >= c.env_names.len() { return c }
+    mut names := [""]
+    mut types := [0]
+    mut scopes := [0]
+    mut i := 1
+    while i < saved_len {
+        names = names.append(c.env_names[i])
+        types = types.append(c.env_types[i])
+        scopes = scopes.append(c.env_scopes[i])
+        i = i + 1
+    }
+    Checker{tokens: c.tokens, pos: c.pos, store: c.store, registry: c.registry,
+            treg: c.treg, diagnostics: c.diagnostics, table: c.table,
+            current_scope: c.current_scope, file: c.file, pool: c.pool,
+            env_names: names, env_types: types, env_scopes: scopes,
+            fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop, in_callee_slot: c.in_callee_slot}
+}
+
 // --- Parse a type annotation from tokens, return type_id ---
 
 fn _parse_type_ann(c: Checker) -> CE {
@@ -1897,7 +1917,7 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
             // Orphan: trait and type both have home packages different from current
             if trait_pkg != "" && trait_pkg != current_pkg && type_pkg != "" && type_pkg != current_pkg {
                 q := _q()
-                cc = _cwarning(cc, "W0009", "orphan impl: trait " + q + impl_trait + q + " and type " + q + impl_type + q + " both defined in other packages")
+                cc = _cerror(cc, E0202, "orphan impl: trait " + q + impl_trait + q + " and type " + q + impl_type + q + " both defined in other packages")
             }
         }
         cc = _cset_treg(cc, treg_add_impl_pkg(cc.treg, _mk_impl(impl_trait, impl_type), current_pkg))
@@ -2620,6 +2640,7 @@ fn _check_block(c: Checker) -> CE {
     if _ck2(c) != lb { return CE{c: c, type_id: TY_UNIT} }
     mut cc := _cadv(c)  // skip {
     cc = _cskip_nl(cc)
+    saved_env_len := cc.env_names.len()
     mut last_type := TY_UNIT
     while _ck2(cc) != rb && _ck2(cc) != "EOF" {
         result := _check_stmt(cc)
@@ -2628,6 +2649,8 @@ fn _check_block(c: Checker) -> CE {
         cc = _cskip_nl(cc)
     }
     if _ck2(cc) == rb { cc = _cadv(cc) }
+    // Restore environment — bindings from this block go out of scope
+    cc = _env_trim(cc, saved_env_len)
     CE{c: cc, type_id: last_type}
 }
 
@@ -3265,26 +3288,26 @@ fn _check_primary(c: Checker) -> CE {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" {
                         if sig.has_io && fn_has_effect_t(caller_sig, "Io", cc.treg) == false {
-                            cc = _cwarning(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]")
+                            cc = _cerror(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]")
                         }
                         if sig.has_fs && fn_has_effect_t(caller_sig, "Fs", cc.treg) == false {
-                            cc = _cwarning(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
+                            cc = _cerror(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
                         }
                         if sig.has_net && fn_has_effect_t(caller_sig, "Net", cc.treg) == false {
-                            cc = _cwarning(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]")
+                            cc = _cerror(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]")
                         }
                         if sig.has_ffi && fn_has_effect_t(caller_sig, "Ffi", cc.treg) == false {
-                            cc = _cwarning(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]")
+                            cc = _cerror(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]")
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
-                            cc = _cwarning(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
+                            cc = _cerror(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
                         }
                         // Check user-defined effects (with transitive hierarchy)
                         mut uei := 1
                         while uei < sig.user_effects.len() {
                             ue := sig.user_effects[uei]
                             if fn_has_effect_t(caller_sig, ue, cc.treg) == false {
-                                cc = _cwarning(cc, "E0305", "function '" + name + "' requires effect [" + ue + "] but '" + cc.fn_current_name + "' does not declare [" + ue + "]")
+                                cc = _cerror(cc, "E0305", "function '" + name + "' requires effect [" + ue + "] but '" + cc.fn_current_name + "' does not declare [" + ue + "]")
                             }
                             uei = uei + 1
                         }
@@ -3612,7 +3635,7 @@ fn _check_multi_bound_sig(c: Checker, type_name: str, bound: str, param_name: st
             assoc_n := parts[1]
             assoc_v := parts[2]
             if treg_has_impl(cc.treg, type_name, trait_n) == false {
-                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+                cc = _cerror(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
             } else if assoc_n != "" {
                 // Skip check if assoc_v is a generic parameter of this fn
                 is_gp := assoc_v == sig.generic_name_0 || assoc_v == sig.generic_name_1 || assoc_v == sig.generic_name_2
@@ -3624,7 +3647,7 @@ fn _check_multi_bound_sig(c: Checker, type_name: str, bound: str, param_name: st
                         alias_info := store_get(cc.store, alias_tid)
                         actual_tid := alias_info.type_id
                         if actual_tid != expected_tid {
-                            cc = _cerror(cc, E0106, "type " + type_name + " has " + trait_n + "::" + assoc_n +
+                            cc = _cerror(cc, E0200, "type " + type_name + " has " + trait_n + "::" + assoc_n +
                                          " = " + format_type(cc.store, actual_tid) + " but expected " + assoc_v + " for " + param_name)
                         }
                     }
@@ -3653,7 +3676,7 @@ fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -
             assoc_n := parts[1]
             assoc_v := parts[2]
             if treg_has_impl(cc.treg, type_name, trait_n) == false {
-                cc = _cerror(cc, E0106, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+                cc = _cerror(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
             } else if assoc_n != "" {
                 if _is_concrete_type_name(cc.store, assoc_v) {
                     alias_name := type_name + "_" + assoc_n
@@ -3663,7 +3686,7 @@ fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -
                         alias_info := store_get(cc.store, alias_tid)
                         actual_tid := alias_info.type_id
                         if actual_tid != expected_tid {
-                            cc = _cerror(cc, E0106, "type " + type_name + " has " + trait_n + "::" + assoc_n +
+                            cc = _cerror(cc, E0200, "type " + type_name + " has " + trait_n + "::" + assoc_n +
                                          " = " + format_type(cc.store, actual_tid) + " but expected " + assoc_v + " for " + param_name)
                         }
                     }
@@ -3806,6 +3829,32 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
             if pt == tv_id_0 && tv_id_0 > 0 { concrete_0 = at }
             if pt == tv_id_1 && tv_id_1 > 0 { concrete_1 = at }
             if pt == tv_id_2 && tv_id_2 > 0 { concrete_2 = at }
+            // Function type decomposition: if param type is fn(T) -> U,
+            // infer TypeVars from closure arg/return types.
+            if pt > 0 && pt < cc.store.types.len() && at > 0 && at < cc.store.types.len() {
+                pti := store_get(cc.store, pt)
+                ati := store_get(cc.store, at)
+                if type_kind_name(pti.kind) == "Function" && type_kind_name(ati.kind) == "Function" {
+                    // Match return type: if param's return is TypeVar, infer from arg's return
+                    pret := pti.type_id
+                    aret := ati.type_id
+                    if pret == tv_id_0 && tv_id_0 > 0 && aret > 0 && aret != TY_UNKNOWN { concrete_0 = aret }
+                    if pret == tv_id_1 && tv_id_1 > 0 && aret > 0 && aret != TY_UNKNOWN { concrete_1 = aret }
+                    if pret == tv_id_2 && tv_id_2 > 0 && aret > 0 && aret != TY_UNKNOWN { concrete_2 = aret }
+                    // Match param types: iterate through function param types
+                    mut fpi := 0
+                    while fpi < pti.param_count && fpi < ati.param_count {
+                        fpt := cc.store.types[pti.param_start + fpi].type_id
+                        fat := cc.store.types[ati.param_start + fpi].type_id
+                        if fat > 0 && fat != TY_UNKNOWN {
+                            if fpt == tv_id_0 && tv_id_0 > 0 { concrete_0 = fat }
+                            if fpt == tv_id_1 && tv_id_1 > 0 { concrete_1 = fat }
+                            if fpt == tv_id_2 && tv_id_2 > 0 { concrete_2 = fat }
+                        }
+                        fpi = fpi + 1
+                    }
+                }
+            }
             // HKT decomposition: if param type is TyApplied (F[A]),
             // decompose concrete arg type to infer F and A separately.
             if pt > 0 && pt < cc.store.types.len() {

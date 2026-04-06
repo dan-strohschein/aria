@@ -198,6 +198,26 @@ fn store_get(store: TypeStore, id: i64) -> TypeInfo {
 
 fn store_last_id(store: TypeStore) -> i64 = store.types.len() - 1
 
+// Canonicalized store_add: find existing equivalent type or add new one.
+// Returns the type ID (existing or newly added).
+fn store_find_type(store: TypeStore, info: TypeInfo) -> i64 {
+    kn := type_kind_name(info.kind)
+    mut i := 1
+    while i < store.types.len() {
+        existing := store.types[i]
+        if type_kind_name(existing.kind) == kn {
+            if kn == "Array" && existing.type_id == info.type_id { return i }
+            if kn == "Optional" && existing.type_id == info.type_id { return i }
+            if kn == "Result" && existing.type_id == info.type_id && existing.type_id2 == info.type_id2 { return i }
+            if kn == "Named" && existing.name == info.name { return i }
+            if kn == "TypeVar" && existing.name == info.name { return i }
+            if kn == "Tuple" && existing.name == info.name && existing.param_count == info.param_count { return i }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
 fn store_size(store: TypeStore) -> i64 = store.types.len()
 
 // --- Type name formatting ---
@@ -376,6 +396,24 @@ fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
     if types_equal(store, src, dst) { return true }
     if src == TY_NEVER { return true }
     if src == TY_UNKNOWN || dst == TY_UNKNOWN { return true }
+    // Structural assignability: accept Unknown inner types in containers
+    if src > 0 && src < store.types.len() && dst > 0 && dst < store.types.len() {
+        si := store.types[src]
+        di := store.types[dst]
+        sk := type_kind_name(si.kind)
+        dk := type_kind_name(di.kind)
+        if sk == dk {
+            if sk == "Optional" || sk == "Array" {
+                if si.type_id == TY_UNKNOWN || di.type_id == TY_UNKNOWN { return true }
+                return is_assignable(store, si.type_id, di.type_id)
+            }
+            if sk == "Result" {
+                ok_ok := si.type_id == TY_UNKNOWN || di.type_id == TY_UNKNOWN || is_assignable(store, si.type_id, di.type_id)
+                err_ok := si.type_id2 == TY_UNKNOWN || di.type_id2 == TY_UNKNOWN || is_assignable(store, si.type_id2, di.type_id2)
+                return ok_ok && err_ok
+            }
+        }
+    }
     return false
 }
 
