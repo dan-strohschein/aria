@@ -1,0 +1,73 @@
+{
+  "name": "aria-lang",
+  "displayName": "Aria Language",
+  "description": "Language support for the Aria programming language",
+  "version": "0.2.0",
+  "publisher": "aria-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aria-lang/aria"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:aria"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aria",
+        "aliases": [
+          "Aria",
+          "aria"
+        ],
+        "extensions": [
+          ".aria"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aria",
+        "scopeName": "source.aria",
+        "path": "./syntaxes/aria.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Aria",
+      "properties": {
+        "aria.lsp.path": {
+          "type": "string",
+          "default": "aria-lsp",
+          "description": "Path to the aria-lsp binary"
+        },
+        "aria.compiler.path": {
+          "type": "string",
+          "default": "aria",
+          "description": "Path to the aria compiler binary"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.0.0"
+  }
+}

@@ -1,0 +1,49 @@
+import { workspace, ExtensionContext, window } from "vscode";
+import {
+  LanguageClient,
+  LanguageClientOptions,
+  ServerOptions,
+  TransportKind,
+} from "vscode-languageclient/node";
+
+let client: LanguageClient | undefined;
+
+export function activate(context: ExtensionContext): void {
+  const config = workspace.getConfiguration("aria");
+  const lspPath = config.get<string>("lsp.path", "aria-lsp");
+  const compilerPath = config.get<string>("compiler.path", "aria");
+
+  const serverOptions: ServerOptions = {
+    command: lspPath,
+    args: ["--compiler", compilerPath],
+    transport: TransportKind.stdio,
+  };
+
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [{ scheme: "file", language: "aria" }],
+    synchronize: {
+      fileEvents: workspace.createFileSystemWatcher("**/*.aria"),
+    },
+  };
+
+  client = new LanguageClient(
+    "aria",
+    "Aria Language Server",
+    serverOptions,
+    clientOptions
+  );
+
+  client.start().catch((err) => {
+    window.showErrorMessage(
+      `Failed to start Aria language server: ${err.message}. ` +
+        `Make sure aria-lsp is installed and the path is correct in settings.`
+    );
+  });
+}
+
+export function deactivate(): Thenable<void> | undefined {
+  if (!client) {
+    return undefined;
+  }
+  return client.stop();
+}
