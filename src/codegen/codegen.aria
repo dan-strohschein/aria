@@ -191,7 +191,7 @@ fn check_sources(files: [str]) -> DiagnosticBag {
     cr.diagnostics
 }
 
-fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
+fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str, parallel: bool) -> DiagnosticBag {
     // Same pipeline as generate_from_sources but uses lower_for_tests
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true
@@ -220,7 +220,7 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
 
     // Lower with test runner generation
-    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file, parallel)
 
     generate_from_module(m, output_path, runtime_path)
 }
@@ -252,6 +252,6 @@ fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str
     if bag_has_errors(rr.diagnostics) { return rr.diagnostics }
     cr := check(merged, pr.index, pr.pool, rr.table, file)
     if bag_has_errors(cr.diagnostics) { return cr.diagnostics }
-    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file)
+    m := lower_for_tests(merged, pr.index, pr.pool, cr.store, cr.registry, cr.treg, rr.table, file, false)
     generate_from_module(m, output_path, runtime_path)
 }

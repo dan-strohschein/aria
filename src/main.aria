@@ -33,6 +33,7 @@ struct Options {
     format: str
     target: str
     runtime_path: str
+    parallel: bool
 }
 
 fn default_options() -> Options =
@@ -41,7 +42,8 @@ fn default_options() -> Options =
         files: [""],
         format: "text",
         target: "native",
-        runtime_path: "runtime/runtime.c"
+        runtime_path: "runtime/runtime.c",
+        parallel: false
     }
 
 // --- Argument parsing ---
@@ -107,7 +109,8 @@ fn parse_args(args: [str]) -> Options {
                     files: opts.files,
                     format: _parse_flag_value(arg),
                     target: opts.target,
-                    runtime_path: opts.runtime_path
+                    runtime_path: opts.runtime_path,
+                    parallel: opts.parallel
                 }
             }
             if arg.startsWith("--target=") {
@@ -116,7 +119,8 @@ fn parse_args(args: [str]) -> Options {
                     files: opts.files,
                     format: opts.format,
                     target: _parse_flag_value(arg),
-                    runtime_path: opts.runtime_path
+                    runtime_path: opts.runtime_path,
+                    parallel: opts.parallel
                 }
             }
             if arg.startsWith("--runtime=") {
@@ -125,7 +129,18 @@ fn parse_args(args: [str]) -> Options {
                     files: opts.files,
                     format: opts.format,
                     target: opts.target,
-                    runtime_path: _parse_flag_value(arg)
+                    runtime_path: _parse_flag_value(arg),
+                    parallel: opts.parallel
+                }
+            }
+            if arg == "--parallel" {
+                opts = Options{
+                    command: opts.command,
+                    files: opts.files,
+                    format: opts.format,
+                    target: opts.target,
+                    runtime_path: opts.runtime_path,
+                    parallel: true
                 }
             }
         } else if cmd_set == false {
@@ -134,7 +149,8 @@ fn parse_args(args: [str]) -> Options {
                 files: opts.files,
                 format: opts.format,
                 target: opts.target,
-                runtime_path: opts.runtime_path
+                runtime_path: opts.runtime_path,
+                parallel: opts.parallel
             }
             cmd_set = true
         } else {
@@ -148,7 +164,8 @@ fn parse_args(args: [str]) -> Options {
         files: files,
         format: opts.format,
         target: opts.target,
-        runtime_path: opts.runtime_path
+        runtime_path: opts.runtime_path,
+        parallel: opts.parallel
     }
     opts
 }
@@ -505,7 +522,7 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64
     return exit_code
 }
 
-fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
+fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64 {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -524,7 +541,7 @@ fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     output = output + "_test_runner"
 
     // Compile with test runner
-    diags := generate_tests_from_sources(files, output, rt)
+    diags := generate_tests_from_sources(files, output, rt, parallel)
     if bag_has_errors(diags) {
         _print_diagnostics(diags, format)
         return 1
@@ -670,7 +687,7 @@ entry {
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {
-            run_test(opts.files, opts.format, opts.runtime_path)
+            run_test(opts.files, opts.format, opts.runtime_path, opts.parallel)
         } else if cmd == "bench" {
             run_bench(opts.files, opts.format, opts.runtime_path)
         } else if cmd == "fix" {

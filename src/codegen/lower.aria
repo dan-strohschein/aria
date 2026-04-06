@@ -213,6 +213,18 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
             temp_types: [0],
             fn_error_type: 0, defer_count: 0, defer_start_0: 0, defer_start_1: 0, defer_start_2: 0, defer_start_3: 0, defer_start_4: 0, defer_start_5: 0, defer_start_6: 0, defer_start_7: 0, defer_end_0: 0, defer_end_1: 0, defer_end_2: 0, defer_end_3: 0, defer_end_4: 0, defer_end_5: 0, defer_end_6: 0, defer_end_7: 0}
 
+fn _lset_mod(l: Lowerer, m: IrModule) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: m,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types,
+            fn_error_type: l.fn_error_type, defer_count: l.defer_count, defer_start_0: l.defer_start_0, defer_start_1: l.defer_start_1, defer_start_2: l.defer_start_2, defer_start_3: l.defer_start_3, defer_start_4: l.defer_start_4, defer_start_5: l.defer_start_5, defer_start_6: l.defer_start_6, defer_start_7: l.defer_start_7, defer_end_0: l.defer_end_0, defer_end_1: l.defer_end_1, defer_end_2: l.defer_end_2, defer_end_3: l.defer_end_3, defer_end_4: l.defer_end_4, defer_end_5: l.defer_end_5, defer_end_6: l.defer_end_6, defer_end_7: l.defer_end_7}
+
 fn _lfinish_func(l: Lowerer) -> Lowerer {
     f0 := func_set_locals(l.current_func, l.temp_counter)
     f := func_set_temp_types(f0, l.temp_types)
@@ -12400,19 +12412,31 @@ fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, re
 
 // Lower for test mode: compile test blocks and generate a test runner _main
 // Skips entry blocks to avoid duplicate _main (test runner generates its own)
-fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule {
+fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies_skip_entry(l, index)
+    // For parallel tests, register test fns as value refs so trampolines are generated
+    if parallel {
+        mut ti := 0
+        while ti < l.module.test_count {
+            test_fn := "_test_" + i2s(ti)
+            // Register a FnSig for the test fn so trampolines can look it up
+            test_sig := new_fn_sig(test_fn, [""], [0], 0, 0)
+            l = _lset_reg(l, reg_add_fn(l.registry, test_sig))
+            l = _lset_reg(l, reg_add_fn_value_ref(l.registry, test_fn))
+            ti = ti + 1
+        }
+    }
     l = _lower_trampolines(l)
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function
-    l = _generate_test_runner(l)
+    l = _generate_test_runner_p(l, parallel)
     return l.module
 }
 
-fn _generate_test_runner(l: Lowerer) -> Lowerer {
+fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
     mut ll := l
     test_count := ll.module.test_count
     if test_count == 0 {
@@ -12459,7 +12483,57 @@ fn _generate_test_runner(l: Lowerer) -> Lowerer {
     // Generate _main that calls each test, prints results
     ll = _lset_func(ll, new_ir_func("_main", 0, 0))
 
-    // For each test, call it and print pass
+    // Parallel mode: spawn all tests, then await all handles
+    if parallel && test_count > 0 {
+        // Pre-allocate handle temps (consecutive)
+        first_handle := _lnew_temp(ll)
+        ll = first_handle.l
+        mut hi := 1
+        while hi < test_count {
+            pad := _lnew_temp(ll)
+            ll = pad.l
+            hi = hi + 1
+        }
+        // Spawn each test into its handle slot
+        mut si := 0
+        while si < test_count {
+            test_fn_name := "_test_" + i2s(si)
+            tramp_name := "_tramp_" + test_fn_name
+            fn_ref := _lnew_temp(ll)
+            ll = fn_ref.l
+            ll = _lemit(ll, new_inst(OpFnRef, fn_ref.temp, 0, 0, tramp_name, 0))
+            null_env := _lnew_temp(ll)
+            ll = null_env.l
+            ll = _lemit(ll, new_inst(OpConst, null_env.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpCall, first_handle.temp + si, fn_ref.temp, 2, "_aria_spawn", 1))
+            si = si + 1
+        }
+        // Await all handles
+        mut ai := 0
+        while ai < test_count {
+            await_nt := _lnew_temp(ll)
+            ll = await_nt.l
+            ll = _lemit(ll, new_inst(OpCall, await_nt.temp, first_handle.temp + ai, 1, "_aria_task_await", 1))
+            ai = ai + 1
+        }
+        // Print summary
+        mut done_idx := mod_find_string(ll.module, "all tests passed")
+        if done_idx == 0 {
+            new_mod := mod_add_string(ll.module, "all tests passed")
+            done_idx = new_mod.string_constants.len() - 1
+            ll = _lset_mod(ll, new_mod)
+        }
+        done_nt := _lnew_str_temp(ll)
+        ll = done_nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, 16, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, done_nt.temp, 2, "_aria_println_str", 0))
+        ll = _lfinish_func(ll)
+        mut new_mod_e := mod_set_entry(ll.module, "_main")
+        ll = _lset_mod(ll, new_mod_e)
+        return ll
+    }
+
+    // Sequential mode: For each test, call it and print pass
     mut ti := 0
     while ti < test_count {
         test_fn_name := "_test_" + i2s(ti)
