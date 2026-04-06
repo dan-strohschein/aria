@@ -1,0 +1,14 @@
+// test-expect: user_effect_test passed
+
+fn log_msg(msg: str) with [log] = println(msg)
+fn save(x: i64) with [db] = println("saved")
+
+fn process(x: i64) with [log, db] {
+    log_msg("processing")
+    save(x)
+}
+
+entry {
+    process(42)
+    println("user_effect_test passed")
+}

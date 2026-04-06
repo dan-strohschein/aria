@@ -1380,6 +1380,7 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
     mut eff_net := false
     mut eff_ffi := false
     mut eff_async := false
+    mut user_effs := [""]
     // Scan forward to find "with" clause
     lb := "\{"
     mut scan_limit := 0
@@ -1391,11 +1392,14 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
                 while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
                     if _ck2(cc) == "IDENT" {
                         eff := _ccur(cc).text
+                        mut is_builtin := false
                         if eff == "Io" { eff_io = true }
                         if eff == "Fs" { eff_fs = true }
                         if eff == "Net" { eff_net = true }
                         if eff == "Ffi" { eff_ffi = true }
                         if eff == "Async" { eff_async = true }
+                        if eff == "Io" || eff == "Fs" || eff == "Net" || eff == "Ffi" || eff == "Async" { is_builtin = true }
+                        if is_builtin == false { user_effs = user_effs.append(eff) }
                         cc = _cadv(cc)
                     } else {
                         cc = _cadv(cc)
@@ -1446,6 +1450,9 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
     }
     if eff_io || eff_fs || eff_net || eff_ffi || eff_async {
         sig = sig_set_effects(sig, eff_io, eff_fs, eff_net, eff_ffi, eff_async)
+    }
+    if user_effs.len() > 1 {
+        sig = sig_set_user_effects(sig, user_effs)
     }
     cc = _cset_reg(cc, reg_add_fn(cc.registry, sig))
     cc
@@ -3245,6 +3252,15 @@ fn _check_primary(c: Checker) -> CE {
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
                             cc = _cwarning(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
+                        }
+                        // Check user-defined effects
+                        mut uei := 1
+                        while uei < sig.user_effects.len() {
+                            ue := sig.user_effects[uei]
+                            if fn_has_effect(caller_sig, ue) == false {
+                                cc = _cwarning(cc, "E0305", "function '" + name + "' requires effect [" + ue + "] but '" + cc.fn_current_name + "' does not declare [" + ue + "]")
+                            }
+                            uei = uei + 1
                         }
                     }
                 }
