@@ -127,6 +127,7 @@ fn mk_tuple_type(elem_ids: str, arity: i64) -> TypeInfo =
 
 struct TypeStore {
     types: [TypeInfo]
+    name_index: StrMap
 }
 
 // Well-known type IDs (indices into the store)
@@ -183,11 +184,19 @@ fn new_store() -> TypeStore {
     types = types.append(mk_named_type("Task"))      // 18: TY_TASK
     types = types.append(mk_named_type("ChanSend"))  // 19: TY_CHAN_SEND
     types = types.append(mk_named_type("ChanRecv"))  // 20: TY_CHAN_RECV
-    TypeStore{types: types}
+    TypeStore{types: types, name_index: strmap_new()}
 }
 
-fn store_add(store: TypeStore, info: TypeInfo) -> TypeStore =
-    TypeStore{types: store.types.append(info)}
+fn store_add(store: TypeStore, info: TypeInfo) -> TypeStore {
+    new_types := store.types.append(info)
+    new_idx := new_types.len() - 1
+    kn := type_kind_name(info.kind)
+    // Index named types and type variables for fast resolve_type_name
+    if (kn == "Named" || kn == "TypeVar") && info.name.len() > 0 {
+        return TypeStore{types: new_types, name_index: strmap_put(store.name_index, info.name, new_idx)}
+    }
+    TypeStore{types: new_types, name_index: store.name_index}
+}
 
 fn store_get(store: TypeStore, id: i64) -> TypeInfo {
     if id >= 0 && id < store.types.len() {
@@ -434,12 +443,25 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
     if name == "str" { return TY_STR }
     if name == "char" { return TY_CHAR }
     if name == "unit" { return TY_UNIT }
-    // Search for named types and type variables
-    mut i := 21  // after well-known + reserved concurrency types (0-20)
+    // Fast path: hash index lookup for named types and type variables
+    idx := strmap_get(store.name_index, name)
+    if idx > 0 && idx < store.types.len() {
+        info := store.types[idx]
+        if type_kind_name(info.kind) == "Named" && info.name == name {
+            if info.type_id2 == 1 && info.type_id > 0 {
+                return info.type_id
+            }
+            return idx
+        }
+        if type_kind_name(info.kind) == "TypeVar" && info.name == name {
+            return idx
+        }
+    }
+    // Fallback: linear scan for entries not yet indexed
+    mut i := 21
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {
-            // If this is an alias (marked by type_id2 == 1), return the underlying type
             if info.type_id2 == 1 && info.type_id > 0 {
                 return info.type_id
             }

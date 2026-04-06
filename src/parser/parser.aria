@@ -855,12 +855,24 @@ fn _parse_fn(p: Parser) -> PR {
                        c0: body_idx, c1: ret_tok_pos, c2: err_tok_pos, list_start: list_start, list_count: param_count, span: span}}
 }
 
-fn _skip_type(p: Parser) -> Parser {
+// Parse a type expression, building AST nodes into the pool.
+// Returns PR with the type node. Also serves as _skip_type (advances past all type tokens).
+fn _parse_type(p: Parser) -> PR {
     mut pp := p
     k := _ck(pp)
+    span := _pspan(pp)
+    // Named type: Ident, Ident.Path, Ident[T], Ident?, Ident ! Err
     if k == "IDENT" || k == "Self" {
+        mut name := _cur(pp).text
         pp = _adv(pp)
-        while _ck(pp) == "." && _pk(pp) != "." { pp = _adv(_adv(pp)) }
+        // Qualified path: Mod.Type
+        while _ck(pp) == "." && _pk(pp) != "." {
+            pp = _adv(pp)
+            name = name + "." + _cur(pp).text
+            pp = _adv(pp)
+        }
+        // Generic args: Type[A, B]
+        mut type_arg_idx := 0
         if _ck(pp) == "[" {
             pp = _adv(pp)
             mut d := 1
@@ -871,49 +883,99 @@ fn _skip_type(p: Parser) -> Parser {
             }
             pp = _adv(pp)
         }
-        if _ck(pp) == "?" { pp = _adv(pp) }
+        // Optional: Type?
+        if _ck(pp) == "?" {
+            pp = _adv(pp)
+            base := Expr{kind: EkTypeRef, s1: name, s2: "", b1: false, b2: false,
+                         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+            base_idx := _pidx(pp)
+            pp = _padd(pp, base)
+            return PR{p: pp, e: Expr{kind: EkTypeOptional, s1: "", s2: "", b1: false, b2: false,
+                                      c0: base_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+        }
+        // Result: Type ! ErrType
         if _ck(pp) == "!" {
             pp = _adv(pp)
-            pp = _skip_type(pp)
+            err := _parse_type(pp)
+            err_idx := _pidx(err.p)
+            pp = _padd(err.p, err.e)
+            base := Expr{kind: EkTypeRef, s1: name, s2: "", b1: false, b2: false,
+                         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+            base_idx := _pidx(pp)
+            pp = _padd(pp, base)
+            return PR{p: pp, e: Expr{kind: EkTypeResult, s1: "", s2: "", b1: false, b2: false,
+                                      c0: base_idx, c1: err_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
         }
-        return pp
+        return PR{p: pp, e: Expr{kind: EkTypeRef, s1: name, s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
+    // Array type: [T]
     if k == "[" {
         pp = _adv(pp)
-        pp = _skip_type(pp)
+        elem := _parse_type(pp)
+        elem_idx := _pidx(elem.p)
+        pp = _padd(elem.p, elem.e)
         pp = _expect(pp, "]")
-        return pp
+        return PR{p: pp, e: Expr{kind: EkTypeArray, s1: "", s2: "", b1: false, b2: false,
+                                  c0: elem_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
+    // Tuple type: (A, B, C) or fn type starting with (
     if k == "(" {
         pp = _adv(pp)
+        list_start := _pidx(pp)
+        mut count := 0
         while _ck(pp) != ")" && _ck(pp) != "EOF" {
-            pp = _skip_type(pp)
+            sub := _parse_type(pp)
+            pp = _padd(sub.p, sub.e)
+            count = count + 1
             if _ck(pp) == "," { pp = _adv(pp) }
         }
         pp = _adv(pp)
+        // Check for -> (function type without fn keyword)
         if _ck(pp) == "->" {
             pp = _adv(pp)
-            pp = _skip_type(pp)
+            ret := _parse_type(pp)
+            ret_idx := _pidx(ret.p)
+            pp = _padd(ret.p, ret.e)
+            return PR{p: pp, e: Expr{kind: EkTypeFn, s1: "", s2: "", b1: false, b2: false,
+                                      c0: ret_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
         }
-        return pp
+        return PR{p: pp, e: Expr{kind: EkTypeTuple, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
+    // Function type: fn(A, B) -> C
     if k == "fn" {
         pp = _adv(pp)
-        // Optional `once`
         if _ck(pp) == "IDENT" && _cur(pp).text == "once" { pp = _adv(pp) }
         pp = _expect(pp, "(")
+        list_start := _pidx(pp)
+        mut count := 0
         while _ck(pp) != ")" && _ck(pp) != "EOF" {
-            pp = _skip_type(pp)
+            sub := _parse_type(pp)
+            pp = _padd(sub.p, sub.e)
+            count = count + 1
             if _ck(pp) == "," { pp = _adv(pp) }
         }
         pp = _adv(pp)
+        mut ret_idx := 0
         if _ck(pp) == "->" {
             pp = _adv(pp)
-            pp = _skip_type(pp)
+            ret := _parse_type(pp)
+            ret_idx = _pidx(ret.p)
+            pp = _padd(ret.p, ret.e)
         }
-        return pp
+        return PR{p: pp, e: Expr{kind: EkTypeFn, s1: "", s2: "", b1: false, b2: false,
+                                  c0: ret_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
-    pp
+    // Unknown — return empty and don't advance
+    PR{p: pp, e: Expr{kind: EkTypeRef, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
+// Backward-compatible: _skip_type advances past type tokens (used by callers that don't need AST)
+fn _skip_type(p: Parser) -> Parser {
+    result := _parse_type(p)
+    result.p
 }
 
 fn _skip_braces(p: Parser) -> Parser {
@@ -1522,7 +1584,7 @@ fn _parse_prefix(p: Parser) -> PR {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_size_lit(tok.text, _pspan(p))}
     }
-    if k == "STRING" {
+    if k == "STRING" || k == "RAW_STRING" || k == "TRIPLE_STRING" {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_string_lit(tok.text, _pspan(p))}
     }
@@ -1929,7 +1991,7 @@ fn _parse_pattern(p: Parser) -> PR {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_float_lit(tok.text, span)}
     }
-    if k == "STRING" {
+    if k == "STRING" || k == "RAW_STRING" || k == "TRIPLE_STRING" {
         tok := _cur(p)
         return PR{p: _adv(p), e: mk_string_lit(tok.text, span)}
     }

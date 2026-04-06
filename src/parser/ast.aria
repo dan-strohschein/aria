@@ -60,6 +60,12 @@ type ExprKind =
     | EkNone
     | EkDurationLit
     | EkSizeLit
+    | EkTypeRef
+    | EkTypeArray
+    | EkTypeOptional
+    | EkTypeResult
+    | EkTypeFn
+    | EkTypeTuple
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
     EkIntLit => "IntLit"
@@ -111,6 +117,12 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkNone => "None"
     EkDurationLit => "DurationLit"
     EkSizeLit => "SizeLit"
+    EkTypeRef => "TypeRef"
+    EkTypeArray => "TypeArray"
+    EkTypeOptional => "TypeOptional"
+    EkTypeResult => "TypeResult"
+    EkTypeFn => "TypeFn"
+    EkTypeTuple => "TypeTuple"
 }
 
 // --- Expr node ---

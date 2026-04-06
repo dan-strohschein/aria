@@ -46,24 +46,40 @@ struct TraitRegistry {
     // Parallel to impl_defs: the package (directory) where each impl was registered.
     // Empty string means builtin or unknown origin. Used for orphan rule enforcement.
     impl_pkgs: [str]
+    // Hash indices for O(1) lookup (populated on add)
+    trait_index: StrMap
+    impl_index: StrMap
 }
 
 fn new_trait_registry() -> TraitRegistry =
     TraitRegistry{
         trait_defs: [_sentinel_trait_def()],
         impl_defs: [_sentinel_impl_def()],
-        impl_pkgs: [""]
+        impl_pkgs: [""],
+        trait_index: strmap_new(),
+        impl_index: strmap_new()
     }
 
-fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs, impl_pkgs: reg.impl_pkgs}
+fn _impl_key(type_name: str, trait_name: str) -> str = type_name + ":" + trait_name
 
-fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append("")}
+fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry {
+    idx := reg.trait_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs, impl_pkgs: reg.impl_pkgs,
+                  trait_index: strmap_put(reg.trait_index, def.name, idx), impl_index: reg.impl_index}
+}
+
+fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry {
+    idx := reg.impl_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(""),
+                  trait_index: reg.trait_index, impl_index: strmap_put(reg.impl_index, _impl_key(def.type_name, def.trait_name), idx)}
+}
 
 // Add impl with package tracking (for orphan rule enforcement)
-fn treg_add_impl_pkg(reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(pkg)}
+fn treg_add_impl_pkg(reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry {
+    idx := reg.impl_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(pkg),
+                  trait_index: reg.trait_index, impl_index: strmap_put(reg.impl_index, _impl_key(def.type_name, def.trait_name), idx)}
+}
 
 // Extract directory (package) portion of a file path.
 // Returns "" for no-slash paths, "<builtin>" for the builtin marker.
@@ -95,6 +111,12 @@ fn treg_impl_pkg(reg: TraitRegistry, type_name: str, trait_name: str) -> str {
 }
 
 fn treg_find_trait(reg: TraitRegistry, name: str) -> TraitDef {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.trait_index, name)
+    if idx > 0 && idx < reg.trait_defs.len() {
+        return reg.trait_defs[idx]
+    }
+    // Fallback: linear scan (for entries added before index existed)
     mut i := 1
     while i < reg.trait_defs.len() {
         if reg.trait_defs[i].name == name {
@@ -106,6 +128,10 @@ fn treg_find_trait(reg: TraitRegistry, name: str) -> TraitDef {
 }
 
 fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.impl_index, _impl_key(type_name, trait_name))
+    if idx > 0 { return true }
+    // Fallback: linear scan
     mut i := 1
     while i < reg.impl_defs.len() {
         imp := reg.impl_defs[i]
@@ -119,6 +145,12 @@ fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
 
 // Returns the ImplDef for a given (type, trait) pair; sentinel (name="") if not found.
 fn treg_find_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> ImplDef {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.impl_index, _impl_key(type_name, trait_name))
+    if idx > 0 && idx < reg.impl_defs.len() {
+        return reg.impl_defs[idx]
+    }
+    // Fallback: linear scan
     mut i := 1
     while i < reg.impl_defs.len() {
         imp := reg.impl_defs[i]

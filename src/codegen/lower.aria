@@ -259,6 +259,56 @@ fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     return -1
 }
 
+// --- Additional DRY helpers (SRP: each changes exactly one field group) ---
+
+fn _lset_error_type(l: Lowerer, et: i64) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types,
+            fn_error_type: et, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+
+fn _ladd_const(l: Lowerer, name: str, val: i64) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names.append(name), const_vals: l.const_vals.append(val),
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types,
+            fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+
+fn _ladd_const_str(l: Lowerer, name: str, val: str) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names.append(name), const_str_vals: l.const_str_vals.append(val),
+            temp_types: l.temp_types,
+            fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+
+fn _lenv_restore(l: Lowerer, names: [str], slots: [i64]) -> Lowerer =
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: names, env_slots: slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types,
+            fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+
 // Helper: allocate 2 consecutive temp slots for a string fat pointer (ptr + len)
 fn _lnew_str_temp(l: Lowerer) -> LT {
     nt := _lnew_temp(l)
@@ -582,29 +632,11 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                             ci = ci + 1
                         }
                         if neg { num = 0 - num }
-                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                                     table: ll.table, file: ll.file, module: ll.module,
-                                     current_func: ll.current_func,
-                                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                                     env_names: ll.env_names, env_slots: ll.env_slots,
-                                     loop_start: ll.loop_start, loop_end: ll.loop_end,
-                                     const_names: ll.const_names.append(cname), const_vals: ll.const_vals.append(num),
-                                     const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                                     temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                        ll = _ladd_const(ll, cname, num)
                         ll = _ladv(ll)
                     } else if _lk(ll) == "STRING" {
                         sval := _lcur(ll).text
-                        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                                     table: ll.table, file: ll.file, module: ll.module,
-                                     current_func: ll.current_func,
-                                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                                     env_names: ll.env_names, env_slots: ll.env_slots,
-                                     loop_start: ll.loop_start, loop_end: ll.loop_end,
-                                     const_names: ll.const_names, const_vals: ll.const_vals,
-                                     const_str_names: ll.const_str_names.append(cname), const_str_vals: ll.const_str_vals.append(sval),
-                                     temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                        ll = _ladd_const_str(ll, cname, sval)
                         ll = _ladv(ll)
                     } else if _lk(ll) == "-" {
                         // Negative int: - INT
@@ -810,16 +842,7 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
 
     // Track error type for Ok wrapping and ? operator
     if sig.error_type > 0 {
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                table: ll.table, file: ll.file, module: ll.module,
-                current_func: ll.current_func,
-                temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                env_names: ll.env_names, env_slots: ll.env_slots,
-                loop_start: ll.loop_start, loop_end: ll.loop_end,
-                const_names: ll.const_names, const_vals: ll.const_vals,
-                const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                temp_types: ll.temp_types,
-                fn_error_type: sig.error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+        ll = _lset_error_type(ll, sig.error_type)
     }
 
     // Allocate temps for parameters
@@ -1117,16 +1140,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if str_idx == 0 {
             new_mod := mod_add_string(ll.module, val)
             str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -2058,16 +2072,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if panic_str_idx == 0 {
             new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
             panic_str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         panic_ptr := _lnew_str_temp(ll)
         ll = panic_ptr.l
@@ -2613,16 +2618,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
             if panic_str_idx == 0 {
                 new_mod := mod_add_string(ll.module, "assertion failed")
                 panic_str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
@@ -2861,16 +2857,7 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
 
     // Track error type for Ok wrapping and ? operator
     if sig.error_type > 0 {
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                table: ll.table, file: ll.file, module: ll.module,
-                current_func: ll.current_func,
-                temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                env_names: ll.env_names, env_slots: ll.env_slots,
-                loop_start: ll.loop_start, loop_end: ll.loop_end,
-                const_names: ll.const_names, const_vals: ll.const_vals,
-                const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                temp_types: ll.temp_types,
-                fn_error_type: sig.error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+        ll = _lset_error_type(ll, sig.error_type)
     }
 
     // Allocate temps for parameters
@@ -2972,16 +2959,7 @@ fn _lower_entry(l: Lowerer) -> Lowerer {
     ll = _lfinish_func(ll)
     mut new_mod := ll.module
     new_mod = mod_set_entry(new_mod, "_main")
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-            table: ll.table, file: ll.file, module: new_mod,
-            current_func: ll.current_func,
-            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots,
-            loop_start: ll.loop_start, loop_end: ll.loop_end,
-            const_names: ll.const_names, const_vals: ll.const_vals,
-            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-            temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    _lset_mod(ll, new_mod)
 }
 
 // --- Lower test block ---
@@ -3016,16 +2994,7 @@ fn _lower_test(l: Lowerer) -> Lowerer {
     mut new_mod := mod_add_test(ll.module, test_label)
     // Also add the string constant for the test name for printing
     new_mod = mod_add_string(new_mod, test_label)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-            table: ll.table, file: ll.file, module: new_mod,
-            current_func: ll.current_func,
-            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots,
-            loop_start: ll.loop_start, loop_end: ll.loop_end,
-            const_names: ll.const_names, const_vals: ll.const_vals,
-            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-            temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    _lset_mod(ll, new_mod)
 }
 
 // --- Lower extern declaration ---
@@ -3122,16 +3091,7 @@ fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
 
     // Register extern function in module
     new_mod := mod_add_extern(ll.module, name, param_count, ret_type, lib)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-            table: ll.table, file: ll.file, module: new_mod,
-            current_func: ll.current_func,
-            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots,
-            loop_start: ll.loop_start, loop_end: ll.loop_end,
-            const_names: ll.const_names, const_vals: ll.const_vals,
-            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-            temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    _lset_mod(ll, new_mod)
 }
 
 // --- Lower bench block ---
@@ -3159,16 +3119,7 @@ fn _lower_bench(l: Lowerer) -> Lowerer {
     // Register as test (bench runner treats these specially)
     mut new_mod := mod_add_test(ll.module, bench_label)
     new_mod = mod_add_string(new_mod, bench_label)
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-            table: ll.table, file: ll.file, module: new_mod,
-            current_func: ll.current_func,
-            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots,
-            loop_start: ll.loop_start, loop_end: ll.loop_end,
-            const_names: ll.const_names, const_vals: ll.const_vals,
-            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-            temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    _lset_mod(ll, new_mod)
 }
 
 // --- Lower before/after test fixtures ---
@@ -5093,16 +5044,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             if panic_str_idx == 0 {
                 new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
                 panic_str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
@@ -5195,16 +5137,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         if str_idx == 0 {
             new_mod := mod_add_string(ll.module, val)
             str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         // Use OpConstStr with arg2 = -9 as float marker
         // arg1 = string constant index, arg2 = -9 signals float
@@ -5222,16 +5155,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         if str_idx == 0 {
             new_mod := mod_add_string(ll.module, val)
             str_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         nt := _lnew_str_temp(ll)
         ll = nt.l
@@ -7922,16 +7846,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if hdr_idx == 0 {
                 new_mod := mod_add_string(ll.module, sname + "\{")
                 hdr_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             hdr_len := sname.len() + 1
             result_nt := _lnew_str_temp(ll)
@@ -8029,16 +7944,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
             if close_idx == 0 {
                 new_mod := mod_add_string(ll.module, "\}")
                 close_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             close_nt := _lnew_str_temp(ll)
             ll = close_nt.l
@@ -8722,16 +8628,7 @@ fn _lower_atom(l: Lowerer) -> LT {
             if panic_str_idx == 0 {
                 new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
                 panic_str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-                             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
@@ -8995,31 +8892,13 @@ fn _lower_while(l: Lowerer) -> Lowerer {
     // Set loop labels for break/continue
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, loop_lbl.temp, end_lbl.temp)
 
     // Body
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: prev_start, loop_end: prev_end,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, prev_start, prev_end)
 
     // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -9103,16 +8982,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: prev_start, loop_end: prev_end,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, prev_start, prev_end)
 
     // Increment label (continue target)
     ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
@@ -9150,31 +9020,13 @@ fn _lower_loop(l: Lowerer) -> Lowerer {
     // Set loop labels for break/continue
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, loop_lbl.temp, end_lbl.temp)
 
     // Body
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: prev_start, loop_end: prev_end,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, prev_start, prev_end)
 
     // Jump back to loop start
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -9299,16 +9151,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: prev_start, loop_end: prev_end,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, prev_start, prev_end)
 
     // Increment label (continue target)
     ll = _lemit(ll, new_inst(OpLabel, 0, inc_lbl.temp, 0, "", 0))
@@ -9376,31 +9219,13 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
     // Set loop labels
     prev_start := ll.loop_start
     prev_end := ll.loop_end
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: loop_lbl.temp, loop_end: end_lbl.temp,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, loop_lbl.temp, end_lbl.temp)
 
     // Body
     ll = _lower_block(ll)
 
     // Restore loop labels
-    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                 table: ll.table, file: ll.file, module: ll.module,
-                 current_func: ll.current_func,
-                 temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                 env_names: ll.env_names, env_slots: ll.env_slots,
-                 loop_start: prev_start, loop_end: prev_end,
-                 const_names: ll.const_names, const_vals: ll.const_vals,
-                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    ll = _lset_loop(ll, prev_start, prev_end)
 
     // Jump back
     ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
@@ -12361,16 +12186,7 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
         if no_tests_idx == 0 {
             new_mod := mod_add_string(ll.module, "no tests found")
             no_tests_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         nt := _lnew_str_temp(ll)
         ll = nt.l
@@ -12476,16 +12292,7 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
         if pass_idx == 0 {
             new_mod := mod_add_string(ll.module, "PASS: ")
             pass_idx = new_mod.string_constants.len() - 1
-            ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                         table: ll.table, file: ll.file, module: new_mod,
-                         current_func: ll.current_func,
-                         temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                         env_names: ll.env_names, env_slots: ll.env_slots,
-                         loop_start: ll.loop_start, loop_end: ll.loop_end,
-                         const_names: ll.const_names, const_vals: ll.const_vals,
-                         const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                         temp_types: ll.temp_types,
-                         fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+            ll = _lset_mod(ll, new_mod)
         }
         // Print "PASS: " + test name by concatenating
         pass_nt := _lnew_str_temp(ll)
@@ -12541,16 +12348,7 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
 
     ll = _lfinish_func(ll)
     mut new_mod := mod_set_entry(ll.module, "_main")
-    Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-            table: ll.table, file: ll.file, module: new_mod,
-            current_func: ll.current_func,
-            temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-            env_names: ll.env_names, env_slots: ll.env_slots,
-            loop_start: ll.loop_start, loop_end: ll.loop_end,
-            const_names: ll.const_names, const_vals: ll.const_vals,
-            const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-            temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+    _lset_mod(ll, new_mod)
 }
 
 // Monomorphization pass: generate specialized copies of generic functions
