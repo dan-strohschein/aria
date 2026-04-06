@@ -2,7 +2,12 @@
 .vscode-test/**
 .gitignore
 src/**
-node_modules/**
 tsconfig.json
 **/*.ts
 **/*.map
+!out/**
+!server/**
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-languageserver-protocol/**
+!node_modules/vscode-languageserver-types/**
+!node_modules/vscode-jsonrpc/**
