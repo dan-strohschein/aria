@@ -1111,11 +1111,8 @@ fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
                         cc = _cset_reg(cc, reg_add_cold(cc.registry, fn_name))
                     }
                 }
-                if decl.node_idx > 0 {
-                    cc = _register_fn_sig_ast(cc, decl.node_idx, decl.token_start)
-                } else {
-                    cc = _register_fn_sig(cc)
-                }
+                // Always use token-walking path — AST path has gen2 fidelity issue
+                cc = _register_fn_sig(cc)
             }
         } else if kname == "impl" {
             cc = _register_impl_fns(cc, decl.node_idx)
