@@ -86,30 +86,18 @@ jobs:
             go build -o ../bootstrap-aria ./cmd/aria
           fi
 
-      - name: Bootstrap → Gen0
+      - name: Build gen1 (bootstrap → Aria compiler)
+        timeout-minutes: 10
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             export PATH="/c/Program Files/LLVM/bin:$PATH"
             ./bootstrap-aria.exe build ${{ env.ARIA_SOURCES }}
-            mv main main.exe 2>/dev/null || true
-          else
-            ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
-          fi
-
-      - name: Gen0 → Gen1 (self-compile)
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            export PATH="/c/Program Files/LLVM/bin:$PATH"
-            ./main.exe build ${{ env.ARIA_SOURCES }}
-            mv src/main src/main.exe 2>/dev/null || true
-            cp src/main.exe gen1.exe
+            cp main gen1.exe
             echo "Gen1 built: $(wc -c < gen1.exe) bytes"
           else
-            ./main build ${{ env.ARIA_SOURCES }}
-            cp src/main gen1
+            ./bootstrap-aria build ${{ env.ARIA_SOURCES }}
+            cp main gen1
             echo "Gen1 built: $(wc -c < gen1) bytes"
           fi
 
