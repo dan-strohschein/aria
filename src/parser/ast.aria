@@ -66,6 +66,8 @@ type ExprKind =
     | EkTypeResult
     | EkTypeFn
     | EkTypeTuple
+    | EkMapLit
+    | EkSetLit
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
     EkIntLit => "IntLit"
@@ -123,6 +125,8 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkTypeResult => "TypeResult"
     EkTypeFn => "TypeFn"
     EkTypeTuple => "TypeTuple"
+    EkMapLit => "MapLit"
+    EkSetLit => "SetLit"
 }
 
 // --- Expr node ---
@@ -249,6 +253,16 @@ fn mk_array(count: i64, span: Span) -> Expr =
 fn mk_struct_lit(name: str, field_count: i64, span: Span) -> Expr =
     Expr{kind: EkStruct, s1: name, s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: field_count, span: span}
+
+// Map literal: list stores alternating key/value indices, count = number of pairs
+fn mk_map_lit(pair_count: i64, span: Span) -> Expr =
+    Expr{kind: EkMapLit, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: pair_count, span: span}
+
+// Set literal: list stores element indices, count = number of elements
+fn mk_set_lit(elem_count: i64, span: Span) -> Expr =
+    Expr{kind: EkSetLit, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: elem_count, span: span}
 
 fn mk_assign(span: Span) -> Expr =
     Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,

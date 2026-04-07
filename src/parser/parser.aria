@@ -1611,6 +1611,8 @@ fn _parse_prefix(p: Parser) -> PR {
     if k == "fn" { return _parse_closure_expr(p) }
     if k == "(" { return _parse_grouped(p) }
     if k == "[" { return _parse_array(p) }
+    lb := "\{"
+    if k == lb { return _parse_brace_expr(p) }
     if k == "IDENT" || k == "Self" || k == "self" {
         name := _cur(p).text
         span := _pspan(p)
@@ -2153,6 +2155,99 @@ fn _parse_grouped(p: Parser) -> PR {
     while _ck(pp) != ")" && _ck(pp) != "EOF" { pp = _adv(pp) }
     pp = _adv(pp)
     PR{p: pp, e: result.e}
+}
+
+// Disambiguate { in expression position: map literal, set literal, or block
+fn _parse_brace_expr(p: Parser) -> PR {
+    span := _pspan(p)
+    rb := "\}"
+    mut pp := _adv(p)
+    pp = _skip_nl(pp)
+    // Empty braces: empty map literal
+    if _ck(pp) == rb {
+        pp = _adv(pp)
+        return PR{p: pp, e: Expr{kind: EkMapLit, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
+    // Parse first expression to disambiguate
+    first := _parse_expr(pp, 0)
+    first_idx := _pidx(first.p)
+    pp = _padd(first.p, first.e)
+    pp = _skip_nl(pp)
+    // { expr : expr ... } → map literal
+    if _ck(pp) == ":" {
+        pp = _adv(pp)
+        val := _parse_expr(pp, 0)
+        val_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        // Collect key-value indices (alternating: key, value, key, value, ...)
+        mut kv_indices := [0]
+        kv_indices = kv_indices.append(first_idx)
+        kv_indices = kv_indices.append(val_idx)
+        mut count := 1
+        pp = _skip_nl(pp)
+        if _ck(pp) == "," { pp = _adv(pp) }
+        while _ck(pp) != rb && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            kr := _parse_expr(pp, 0)
+            ki := _pidx(kr.p)
+            pp = _padd(kr.p, kr.e)
+            if _ck(pp) == ":" { pp = _adv(pp) }
+            vr := _parse_expr(pp, 0)
+            vi := _pidx(vr.p)
+            pp = _padd(vr.p, vr.e)
+            kv_indices = kv_indices.append(ki)
+            kv_indices = kv_indices.append(vi)
+            count = count + 1
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _adv(pp)
+        list_start := _pidx(pp)
+        mut mi := 0
+        while mi < count * 2 {
+            pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                 c0: kv_indices[mi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+            mi = mi + 1
+        }
+        return PR{p: pp, e: Expr{kind: EkMapLit, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+    }
+    // { expr , expr ... } → set literal
+    if _ck(pp) == "," {
+        pp = _adv(pp)
+        mut set_indices := [0]
+        set_indices = set_indices.append(first_idx)
+        mut count := 1
+        while _ck(pp) != rb && _ck(pp) != "EOF" {
+            pp = _skip_nl(pp)
+            r := _parse_expr(pp, 0)
+            ei := _pidx(r.p)
+            pp = _padd(r.p, r.e)
+            set_indices = set_indices.append(ei)
+            count = count + 1
+            pp = _skip_nl(pp)
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
+        pp = _adv(pp)
+        list_start := _pidx(pp)
+        mut si := 0
+        while si < count {
+            pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                 c0: set_indices[si + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+            si = si + 1
+        }
+        return PR{p: pp, e: Expr{kind: EkSetLit, s1: "", s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+    }
+    // { expr } → block with single expression (not set literal)
+    pp = _skip_nl(pp)
+    if _ck(pp) == rb { pp = _adv(pp) }
+    list_start := _pidx(pp)
+    pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                         c0: first_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+    PR{p: pp, e: Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: 1, span: span}}
 }
 
 fn _parse_array(p: Parser) -> PR {

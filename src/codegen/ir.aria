@@ -323,22 +323,28 @@ fn _is_def_op(op: IrOp) -> bool {
 // Validate a single IR function: check label targets and return path
 fn _validate_func(f: IrFunc) -> [str] {
     mut errors := [""]
-    // Collect all defined labels
+    // Collect all defined labels — lowerer stores label ID in arg1
     mut labels := [0]
     mut ii := 1
     while ii < f.insts.len() {
         inst := f.insts[ii]
         if ir_op_name(inst.op) == "Label" {
-            labels = labels.append(inst.dest)
+            labels = labels.append(inst.arg1)
         }
         ii = ii + 1
     }
     // Check jump targets reference existing labels
+    // OpJump: target in arg1
+    // OpBranchTrue/OpBranchFalse: condition in arg1, target in arg2
     mut ji := 1
     while ji < f.insts.len() {
         inst := f.insts[ji]
         if _is_jump_op(inst.op) {
+            op_name := ir_op_name(inst.op)
             target := inst.arg1
+            if op_name == "BranchTrue" || op_name == "BranchFalse" {
+                target = inst.arg2
+            }
             mut found := false
             mut li := 1
             while li < labels.len() {
