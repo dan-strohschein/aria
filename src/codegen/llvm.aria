@@ -1233,6 +1233,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%load_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, v, idx)
         return gg
     }
 
@@ -1303,6 +1304,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             result := "%icall_r_" + i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(" + args + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+            gg = _gc_frame_update(gg, f, inst.dest, result, idx)
         }
         return gg
     }
@@ -1354,6 +1356,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%to_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = ptrtoint i64* " + ptr + " to i64")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
@@ -1402,6 +1405,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
             result := "%vc_result_" + i2s(idx)
             gg = _lg_emit(gg, result + " = call i64 " + fn_cast + "(i64 " + data_ptr + ")")
             gg = _lg_emit(gg, "store i64 " + result + ", i64* " + _t(inst.dest))
+            gg = _gc_frame_update(gg, f, inst.dest, result, idx)
         }
         return gg
     }
@@ -1721,6 +1725,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%mnew_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_new(i64 " + cap_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
@@ -1755,6 +1760,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%mget_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_get(i64 " + map_v + ", i8* " + key_pc + ", i64 " + key_l + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
@@ -1791,6 +1797,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%mkeys_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_map_keys(i64 " + map_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
@@ -1801,6 +1808,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%snew_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_set_new(i64 " + cap_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
@@ -1852,6 +1860,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%svals_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_set_values(i64 " + set_v + ")")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        gg = _gc_frame_update(gg, f, inst.dest, res, idx)
         return gg
     }
 
