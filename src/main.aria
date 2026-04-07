@@ -33,6 +33,9 @@ struct Options {
     format: str
     target: str
     runtime_path: str
+    parallel: bool
+    output_path: str
+    help_requested: bool
 }
 
 fn default_options() -> Options =
@@ -41,8 +44,29 @@ fn default_options() -> Options =
         files: [""],
         format: "text",
         target: "native",
-        runtime_path: "runtime/runtime.c"
+        runtime_path: "runtime/runtime.c",
+        parallel: false,
+        output_path: "",
+        help_requested: false
     }
+
+// DRY: Options setter helpers (avoid duplicating 8-field struct literal)
+fn _opts_set_cmd(o: Options, c: Command) -> Options =
+    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_format(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_target(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_runtime(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_parallel(o: Options) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_output(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested}
+fn _opts_set_files(o: Options, f: [str]) -> Options =
+    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+fn _opts_set_help(o: Options) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true}
 
 // --- Argument parsing ---
 
@@ -91,7 +115,10 @@ fn _parse_flag_value(arg: str) -> str {
     ""
 }
 
-fn parse_args(args: [str]) -> Options {
+fn _validate_format(v: str) -> bool =
+    v == "text" || v == "json"
+
+fn parse_args(args: [str]) -> Options with [Io] {
     mut opts := default_options()
     mut cmd_set := false
     mut files := [""]
@@ -101,41 +128,38 @@ fn parse_args(args: [str]) -> Options {
     while i < args.len() {
         arg := args[i]
         if _is_flag(arg) {
-            if arg.startsWith("--format=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: _parse_flag_value(arg),
-                    target: opts.target,
-                    runtime_path: opts.runtime_path
+            if arg == "--help" || arg == "-h" {
+                opts = _opts_set_help(opts)
+            } else if arg.startsWith("--format=") {
+                fv := _parse_flag_value(arg)
+                if _validate_format(fv) {
+                    opts = _opts_set_format(opts, fv)
+                } else {
+                    println("error: invalid format '" + fv + "' (expected 'text' or 'json')")
                 }
-            }
-            if arg.startsWith("--target=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: opts.format,
-                    target: _parse_flag_value(arg),
-                    runtime_path: opts.runtime_path
+            } else if arg.startsWith("--target=") {
+                opts = _opts_set_target(opts, _parse_flag_value(arg))
+            } else if arg.startsWith("--runtime=") {
+                opts = _opts_set_runtime(opts, _parse_flag_value(arg))
+            } else if arg.startsWith("--output=") {
+                opts = _opts_set_output(opts, _parse_flag_value(arg))
+            } else if arg == "-o" {
+                // -o PATH: value is next argument
+                if i + 1 < args.len() {
+                    i = i + 1
+                    opts = _opts_set_output(opts, args[i])
+                } else {
+                    println("error: -o requires a path argument")
                 }
-            }
-            if arg.startsWith("--runtime=") {
-                opts = Options{
-                    command: opts.command,
-                    files: opts.files,
-                    format: opts.format,
-                    target: opts.target,
-                    runtime_path: _parse_flag_value(arg)
-                }
+            } else if arg == "--parallel" {
+                opts = _opts_set_parallel(opts)
+            } else if arg == "--version" || arg == "-v" {
+                opts = _opts_set_cmd(opts, CmdVersion)
+            } else {
+                println("error: unknown flag '" + arg + "'")
             }
         } else if cmd_set == false {
-            opts = Options{
-                command: parse_command(arg),
-                files: opts.files,
-                format: opts.format,
-                target: opts.target,
-                runtime_path: opts.runtime_path
-            }
+            opts = _opts_set_cmd(opts, parse_command(arg))
             cmd_set = true
         } else {
             files = files.append(arg)
@@ -143,28 +167,28 @@ fn parse_args(args: [str]) -> Options {
         i = i + 1
     }
 
-    opts = Options{
-        command: opts.command,
-        files: files,
-        format: opts.format,
-        target: opts.target,
-        runtime_path: opts.runtime_path
-    }
-    opts
+    _opts_set_files(opts, files)
 }
 
 // --- Version ---
 
-const COMPILER_VERSION: str = "0.1.0-dev"
+const COMPILER_VERSION: str = "0.5.0"
 
-fn print_version() -> i64 {
+fn print_version() -> i64 with [Io] {
     println("aria " + COMPILER_VERSION + " (self-hosting)")
     0
 }
 
 // --- Help ---
 
-fn print_help() -> i64 {
+fn _print_command_header(name: str, desc: str) with [Io] {
+    println("aria " + name + " -- " + desc)
+    println("")
+    println("Usage: aria " + name + " [flags] <files...>")
+    println("")
+}
+
+fn print_help() -> i64 with [Io] {
     println("aria " + COMPILER_VERSION + " -- the Aria self-hosting compiler")
     println("")
     println("Usage: aria <command> [flags] [files...]")
@@ -179,11 +203,59 @@ fn print_help() -> i64 {
     println("  explain   Explain an error code (e.g., aria explain E0100)")
     println("")
     println("Flags:")
-    println("  --format=text|json  Output format (default: text)")
-    println("  --target=TARGET     Target platform")
-    println("  --runtime=PATH      Path to runtime.c (default: runtime/runtime.c)")
-    println("  --version, -v       Print version")
-    println("  --help, -h          Print this help")
+    println("  -o PATH              Output path for compiled binary")
+    println("  --output=PATH        Output path (same as -o)")
+    println("  --format=text|json   Output format (default: text)")
+    println("  --target=TARGET      Target platform")
+    println("  --runtime=PATH       Path to runtime.c (default: runtime/runtime.c)")
+    println("  --parallel           Run tests in parallel")
+    println("  --version, -v        Print version")
+    println("  --help, -h           Print this help")
+    println("")
+    println("Run 'aria <command> --help' for command-specific help.")
+    0
+}
+
+fn _print_build_help() -> i64 with [Io] {
+    _print_command_header("build", "Compile source files to an executable")
+    println("Flags:")
+    println("  -o PATH              Output binary path (default: derived from input)")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --target=TARGET      Target platform (default: native)")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_run_help() -> i64 with [Io] {
+    _print_command_header("run", "Compile and run source files")
+    println("Flags:")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_check_help() -> i64 with [Io] {
+    _print_command_header("check", "Type-check source files without compiling")
+    println("Flags:")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_test_help() -> i64 with [Io] {
+    _print_command_header("test", "Compile and run test blocks")
+    println("Flags:")
+    println("  -o PATH              Output test binary path")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --parallel           Run tests in parallel (experimental)")
+    println("  --format=text|json   Diagnostic output format")
+    0
+}
+
+fn _print_bench_help() -> i64 with [Io] {
+    _print_command_header("bench", "Compile and run bench blocks")
+    println("Flags:")
+    println("  --runtime=PATH       Path to runtime.c")
+    println("  --format=text|json   Diagnostic output format")
     0
 }
 
@@ -202,7 +274,7 @@ fn _ends_with_aria(s: str) -> bool {
 fn _is_stdlib_module(name: str) -> bool =
     name == "json" || name == "http" || name == "db"
 
-fn _find_aria_home() -> str {
+fn _find_aria_home() -> str with [Fs] {
     // Check ARIA_HOME env var first
     home := _ariaGetenv("ARIA_HOME")
     if home.len() > 0 { return home }
@@ -213,7 +285,7 @@ fn _find_aria_home() -> str {
 fn _stdlib_path(aria_home: str, module_name: str) -> str =
     aria_home + "/lib/" + module_name + ".aria"
 
-fn _scan_file_for_stdlib_imports(file_path: str) -> [str] {
+fn _scan_file_for_stdlib_imports(file_path: str) -> [str] with [Fs] {
     // Read file and look for `use <module>` lines where module is a stdlib module
     mut modules := [""]
     source := _ariaReadFile(file_path)
@@ -253,7 +325,7 @@ fn _scan_file_for_stdlib_imports(file_path: str) -> [str] {
     modules
 }
 
-fn _resolve_stdlib_files(files: [str]) -> [str] {
+fn _resolve_stdlib_files(files: [str]) -> [str] with [Fs] {
     // Scan all user files for stdlib imports, return additional files to include
     aria_home := _find_aria_home()
     mut extra := [""]
@@ -272,12 +344,20 @@ fn _resolve_stdlib_files(files: [str]) -> [str] {
                 si = si + 1
             }
             if already == false {
-                lib_path := _stdlib_path(aria_home, mod_name)
-                // Check if file exists by trying to read it
-                content := _ariaReadFile(lib_path)
-                if content.len() > 0 {
-                    extra = extra.append(lib_path)
+                // Try local lib/<module>.aria first (works in dev without ARIA_HOME)
+                local_path := "lib/" + mod_name + ".aria"
+                local_content := _ariaReadFile(local_path)
+                if local_content.len() > 0 {
+                    extra = extra.append(local_path)
                     seen = seen.append(mod_name)
+                } else if aria_home != "/usr/local/lib/aria" {
+                    // Only try ARIA_HOME if it was explicitly set
+                    lib_path := _stdlib_path(aria_home, mod_name)
+                    content := _ariaReadFile(lib_path)
+                    if content.len() > 0 {
+                        extra = extra.append(lib_path)
+                        seen = seen.append(mod_name)
+                    }
                 }
             }
             mi = mi + 1
@@ -297,7 +377,7 @@ fn _merge_file_lists(a: [str], b: [str]) -> [str] {
     result
 }
 
-fn _resolve_runtime_path(explicit: str) -> str {
+fn _resolve_runtime_path(explicit: str) -> str with [Fs] {
     // If the explicit path exists (relative to CWD), use it
     // Otherwise, look in ARIA_HOME
     content := _ariaReadFile(explicit)
@@ -306,7 +386,47 @@ fn _resolve_runtime_path(explicit: str) -> str {
     aria_home + "/runtime/runtime.c"
 }
 
-fn _expand_dir(path: str) -> [str] {
+// Validate runtime path exists and return it, or print error and return ""
+fn _resolve_and_validate_runtime(runtime_path: str) -> str with [Io, Fs] {
+    rt := _resolve_runtime_path(runtime_path)
+    content := _ariaReadFile(rt)
+    if content.len() > 0 { return rt }
+    println("error: runtime not found at '" + rt + "'")
+    println("hint: set ARIA_HOME or use --runtime=PATH")
+    ""
+}
+
+// Determine output path: explicit > derived from file > derived from directory > a.out
+fn _determine_output_path(raw_files: [str], file: str, explicit: str) -> str with [Fs] {
+    if explicit.len() > 0 { return explicit }
+    mut output := "a.out"
+    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
+        output = file.substring(0, file.len() - 5)
+    }
+    if raw_files.len() > 1 {
+        raw_input := raw_files[1]
+        if _ariaIsDir(raw_input) == 1 {
+            mut out := raw_input
+            if out.len() > 1 && out.charAt(out.len() - 1) == "/" {
+                out = out.substring(0, out.len() - 1)
+            }
+            mut last_slash := 0 - 1
+            mut si := 0
+            while si < out.len() {
+                if out.charAt(si) == "/" { last_slash = si }
+                si = si + 1
+            }
+            if last_slash >= 0 {
+                output = out + "/" + out.substring(last_slash + 1, out.len())
+            } else {
+                output = out + "/" + out
+            }
+        }
+    }
+    output
+}
+
+fn _expand_dir(path: str) -> [str] with [Fs] {
     mut result := [""]
     entries := _ariaListDir(path)
     mut i := 1
@@ -334,7 +454,75 @@ fn _expand_dir(path: str) -> [str] {
     result
 }
 
-fn expand_files(files: [str]) -> [str] {
+// Module priority for dependency ordering: lower number = processed first.
+// Ensures type definitions are available before they're referenced.
+// Within each module, type-definition files (token, ast, types, scope, ir)
+// are prioritized before implementation files (lexer, parser, checker, etc.)
+fn _module_priority(path: str) -> i64 {
+    mut base := 30
+    if path.contains("/lexer/") { base = 10 }
+    if path.contains("/parser/") { base = 20 }
+    if path.contains("/diagnostic/") { base = 30 }
+    if path.contains("/resolver/") { base = 40 }
+    if path.contains("/checker/") { base = 50 }
+    if path.contains("/codegen/") { base = 60 }
+    if path.contains("/main.aria") { base = 70 }
+    // Within a module, type/data files before implementation files
+    if path.contains("/token.aria") { return base }
+    if path.contains("/ast.aria") { return base }
+    if path.contains("/types.aria") { return base }
+    if path.contains("/scope.aria") { return base }
+    if path.contains("/ir.aria") { return base }
+    if path.contains("/precedence.aria") { return base }
+    if path.contains("/diagnostic.aria") { return base }
+    // Tests come last within a module
+    if path.contains("/tests.aria") { return base + 5 }
+    if path.contains("_tests.aria") { return base + 5 }
+    // Implementation files
+    base + 2
+}
+
+// Sort files by module dependency order using insertion sort
+fn _sort_by_module_priority(files: [str]) -> [str] {
+    mut sorted := [""]
+    mut i := 1
+    while i < files.len() {
+        sorted = sorted.append(files[i])
+        i = i + 1
+    }
+    // Insertion sort by priority
+    mut si := 2
+    while si < sorted.len() {
+        key := sorted[si]
+        key_pri := _module_priority(key)
+        mut j := si - 1
+        while j >= 1 && _module_priority(sorted[j]) > key_pri {
+            // Shift — rebuild array (Aria arrays are immutable, so swap via temp)
+            sorted = _arr_set(sorted, j + 1, sorted[j])
+            j = j - 1
+        }
+        sorted = _arr_set(sorted, j + 1, key)
+        si = si + 1
+    }
+    sorted
+}
+
+// Set element at index in a string array (returns new array)
+fn _arr_set(arr: [str], idx: i64, val: str) -> [str] {
+    mut result := [""]
+    mut i := 1
+    while i < arr.len() {
+        if i == idx {
+            result = result.append(val)
+        } else {
+            result = result.append(arr[i])
+        }
+        i = i + 1
+    }
+    result
+}
+
+fn expand_files(files: [str]) -> [str] with [Fs] {
     mut result := [""]
     mut i := 1
     while i < files.len() {
@@ -351,7 +539,8 @@ fn expand_files(files: [str]) -> [str] {
         }
         i = i + 1
     }
-    result
+    // Sort by module dependency order so types are defined before referenced
+    _sort_by_module_priority(result)
 }
 
 // --- Pipeline skeleton ---
@@ -372,7 +561,7 @@ fn check_source(source: str, file: str) -> DiagnosticBag {
     return cr.diagnostics
 }
 
-fn run_check(raw_files: [str], format: str) -> i64 {
+fn run_check(raw_files: [str], format: str) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -393,7 +582,7 @@ fn run_check(raw_files: [str], format: str) -> i64 {
     0
 }
 
-fn _print_diagnostics(diags: DiagnosticBag, format: str) {
+fn _print_diagnostics(diags: DiagnosticBag, format: str) with [Io] {
     if format == "json" {
         println(render_json_bag(diags))
     } else {
@@ -410,7 +599,7 @@ fn _print_diagnostics(diags: DiagnosticBag, format: str) {
     mut _unused := 0
 }
 
-fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+fn run_build(raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -418,37 +607,10 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
-
-    // Determine output path: strip .aria extension, or use directory name
-    mut output := "a.out"
-    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
-        output = file.substring(0, file.len() - 5)
-    }
-    // If original input was a directory, use directory path as output
-    if raw_files.len() > 1 {
-        raw_input := raw_files[1]
-        if _ariaIsDir(raw_input) == 1 {
-            // Strip trailing slash
-            mut out := raw_input
-            if out.len() > 1 && out.charAt(out.len() - 1) == "/" {
-                out = out.substring(0, out.len() - 1)
-            }
-            // Use last path component + /main
-            mut last_slash := 0 - 1
-            mut si := 0
-            while si < out.len() {
-                if out.charAt(si) == "/" { last_slash = si }
-                si = si + 1
-            }
-            if last_slash >= 0 {
-                output = out + "/" + out.substring(last_slash + 1, out.len())
-            } else {
-                output = out + "/" + out
-            }
-        }
-    }
+    output := _determine_output_path(raw_files, file, output_path)
 
     // Run full pipeline: lex → resolve → check → lower → LLVM IR → clang
     diags := generate_from_sources(files, output, rt)
@@ -464,7 +626,7 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str) -> i
     0
 }
 
-fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64 {
+fn run_run(raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 with [Io, Fs] {
     // Build to temp path, then execute
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
@@ -473,14 +635,10 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
-
-    // Output path: strip .aria, add _run suffix to avoid clobbering
-    mut output := "a.out"
-    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
-        output = file.substring(0, file.len() - 5)
-    }
+    output := _determine_output_path(raw_files, file, output_path)
 
     // Build
     diags := generate_from_sources(files, output, rt)
@@ -497,7 +655,7 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str) -> i64
     return exit_code
 }
 
-fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
+fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -505,7 +663,8 @@ fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
 
     // Build test binary to temp path
@@ -516,20 +675,19 @@ fn run_test(raw_files: [str], format: str, runtime_path: str) -> i64 {
     output = output + "_test_runner"
 
     // Compile with test runner
-    diags := generate_tests_from_sources(files, output, rt)
+    diags := generate_tests_from_sources(files, output, rt, parallel)
     if bag_has_errors(diags) {
         _print_diagnostics(diags, format)
         return 1
     }
 
     // Run the test binary
-    _ariaExec(output)
-    0
+    return _ariaExec(output)
 }
 
 // --- Explain command ---
 
-fn run_explain(files: [str]) -> i64 {
+fn run_explain(files: [str]) -> i64 with [Io] {
     // aria explain E0042 — print detailed error explanation
     if files.len() <= 1 {
         println("Usage: aria explain <error-code>")
@@ -586,7 +744,7 @@ fn _error_explanation(code: str) -> str {
 
 // --- Fix command ---
 
-fn run_fix(raw_files: [str], format: str) -> i64 {
+fn run_fix(raw_files: [str], format: str) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -622,7 +780,7 @@ fn run_fix(raw_files: [str], format: str) -> i64 {
 
 // --- Bench command ---
 
-fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
+fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -630,7 +788,8 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
     }
     stdlib_files := _resolve_stdlib_files(user_files)
     files := _merge_file_lists(user_files, stdlib_files)
-    rt := _resolve_runtime_path(runtime_path)
+    rt := _resolve_and_validate_runtime(runtime_path)
+    if rt == "" { return 1 }
     file := files[1]
     mut output := file
     if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
@@ -644,8 +803,7 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 {
         return 1
     }
     // Run the bench binary
-    _ariaExec(output)
-    0
+    return _ariaExec(output)
 }
 
 // --- Entry point ---
@@ -657,14 +815,29 @@ entry {
     } else {
         opts := parse_args(args)
         cmd := command_to_str(opts.command)
-        if cmd == "build" {
-            run_build(opts.files, opts.format, opts.target, opts.runtime_path)
+        // Per-command help: aria <command> --help
+        if opts.help_requested {
+            if cmd == "build" {
+                _print_build_help()
+            } else if cmd == "run" {
+                _print_run_help()
+            } else if cmd == "check" {
+                _print_check_help()
+            } else if cmd == "test" {
+                _print_test_help()
+            } else if cmd == "bench" {
+                _print_bench_help()
+            } else {
+                print_help()
+            }
+        } else if cmd == "build" {
+            run_build(opts.files, opts.format, opts.target, opts.runtime_path, opts.output_path)
         } else if cmd == "run" {
-            run_run(opts.files, opts.format, opts.target, opts.runtime_path)
+            run_run(opts.files, opts.format, opts.target, opts.runtime_path, opts.output_path)
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {
-            run_test(opts.files, opts.format, opts.runtime_path)
+            run_test(opts.files, opts.format, opts.runtime_path, opts.parallel)
         } else if cmd == "bench" {
             run_bench(opts.files, opts.format, opts.runtime_path)
         } else if cmd == "fix" {

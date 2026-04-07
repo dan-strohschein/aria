@@ -1,5 +1,6 @@
 // test-files: ../lib/http.aria http_test.aria
 // test-requires: http
+use http
 // Required handler for http_serve (not called in this test)
 fn http_handler(req: HttpRequest) -> HttpResponse =
     http_response(200, "ok")

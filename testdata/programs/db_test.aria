@@ -1,4 +1,5 @@
 // test-requires: postgres
+use db
 // PostgreSQL integration test
 // Requires: local PostgreSQL with a "test" database
 //   createdb test

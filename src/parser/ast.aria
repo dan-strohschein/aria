@@ -58,6 +58,16 @@ type ExprKind =
     | EkYield
     | EkSelect
     | EkNone
+    | EkDurationLit
+    | EkSizeLit
+    | EkTypeRef
+    | EkTypeArray
+    | EkTypeOptional
+    | EkTypeResult
+    | EkTypeFn
+    | EkTypeTuple
+    | EkMapLit
+    | EkSetLit
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
     EkIntLit => "IntLit"
@@ -107,6 +117,16 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkYield => "Yield"
     EkSelect => "Select"
     EkNone => "None"
+    EkDurationLit => "DurationLit"
+    EkSizeLit => "SizeLit"
+    EkTypeRef => "TypeRef"
+    EkTypeArray => "TypeArray"
+    EkTypeOptional => "TypeOptional"
+    EkTypeResult => "TypeResult"
+    EkTypeFn => "TypeFn"
+    EkTypeTuple => "TypeTuple"
+    EkMapLit => "MapLit"
+    EkSetLit => "SetLit"
 }
 
 // --- Expr node ---
@@ -172,6 +192,14 @@ fn mk_string_lit(value: str, span: Span) -> Expr =
     Expr{kind: EkStringLit, s1: value, s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
 
+fn mk_duration_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkDurationLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
+fn mk_size_lit(value: str, span: Span) -> Expr =
+    Expr{kind: EkSizeLit, s1: value, s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
+
 fn mk_bool_lit(value: bool, span: Span) -> Expr =
     Expr{kind: EkBoolLit, s1: "", s2: "", b1: value, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}
@@ -225,6 +253,16 @@ fn mk_array(count: i64, span: Span) -> Expr =
 fn mk_struct_lit(name: str, field_count: i64, span: Span) -> Expr =
     Expr{kind: EkStruct, s1: name, s2: "", b1: false, b2: false,
          c0: 0, c1: 0, c2: 0, list_start: 0, list_count: field_count, span: span}
+
+// Map literal: list stores alternating key/value indices, count = number of pairs
+fn mk_map_lit(pair_count: i64, span: Span) -> Expr =
+    Expr{kind: EkMapLit, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: pair_count, span: span}
+
+// Set literal: list stores element indices, count = number of elements
+fn mk_set_lit(elem_count: i64, span: Span) -> Expr =
+    Expr{kind: EkSetLit, s1: "", s2: "", b1: false, b2: false,
+         c0: 0, c1: 0, c2: 0, list_start: 0, list_count: elem_count, span: span}
 
 fn mk_assign(span: Span) -> Expr =
     Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,

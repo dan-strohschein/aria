@@ -1,0 +1,13 @@
+// test-expect: all tests passed
+// test-requires: test-mode
+
+fn get_time() -> i64 = 42
+
+test "mock replaces function" {
+    mock get_time with fn() -> i64 => 100
+    assert get_time() == 100
+}
+
+test "unmocked works normally" {
+    assert get_time() == 42
+}

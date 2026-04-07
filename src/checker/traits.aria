@@ -43,21 +43,80 @@ fn _mk_impl(tname: str, typename: str) -> ImplDef =
 struct TraitRegistry {
     trait_defs: [TraitDef]
     impl_defs: [ImplDef]
+    // Parallel to impl_defs: the package (directory) where each impl was registered.
+    // Empty string means builtin or unknown origin. Used for orphan rule enforcement.
+    impl_pkgs: [str]
+    // Hash indices for O(1) lookup (populated on add)
+    trait_index: StrMap
+    impl_index: StrMap
 }
 
 fn new_trait_registry() -> TraitRegistry =
     TraitRegistry{
         trait_defs: [_sentinel_trait_def()],
-        impl_defs: [_sentinel_impl_def()]
+        impl_defs: [_sentinel_impl_def()],
+        impl_pkgs: [""],
+        trait_index: strmap_new(),
+        impl_index: strmap_new()
     }
 
-fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs}
+fn _impl_key(type_name: str, trait_name: str) -> str = type_name + ":" + trait_name
 
-fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry =
-    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def)}
+fn treg_add_trait(reg: TraitRegistry, def: TraitDef) -> TraitRegistry {
+    idx := reg.trait_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs.append(def), impl_defs: reg.impl_defs, impl_pkgs: reg.impl_pkgs,
+                  trait_index: strmap_put(reg.trait_index, def.name, idx), impl_index: reg.impl_index}
+}
+
+fn treg_add_impl(reg: TraitRegistry, def: ImplDef) -> TraitRegistry {
+    idx := reg.impl_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(""),
+                  trait_index: reg.trait_index, impl_index: strmap_put(reg.impl_index, _impl_key(def.type_name, def.trait_name), idx)}
+}
+
+// Add impl with package tracking (for orphan rule enforcement)
+fn treg_add_impl_pkg(reg: TraitRegistry, def: ImplDef, pkg: str) -> TraitRegistry {
+    idx := reg.impl_defs.len()
+    TraitRegistry{trait_defs: reg.trait_defs, impl_defs: reg.impl_defs.append(def), impl_pkgs: reg.impl_pkgs.append(pkg),
+                  trait_index: reg.trait_index, impl_index: strmap_put(reg.impl_index, _impl_key(def.type_name, def.trait_name), idx)}
+}
+
+// Extract directory (package) portion of a file path.
+// Returns "" for no-slash paths, "<builtin>" for the builtin marker.
+fn _pkg_from_path(path: str) -> str {
+    if path == "" { return "" }
+    if path == "<builtin>" { return "<builtin>" }
+    mut last_slash := 0 - 1
+    mut i := 0
+    while i < path.len() {
+        if path.charAt(i) == "/" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "" }
+    path.substring(0, last_slash)
+}
+
+// Query: returns the package of the first impl of (type_name, trait_name), or "".
+fn treg_impl_pkg(reg: TraitRegistry, type_name: str, trait_name: str) -> str {
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.type_name == type_name && imp.trait_name == trait_name {
+            if i < reg.impl_pkgs.len() { return reg.impl_pkgs[i] }
+            return ""
+        }
+        i = i + 1
+    }
+    ""
+}
 
 fn treg_find_trait(reg: TraitRegistry, name: str) -> TraitDef {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.trait_index, name)
+    if idx > 0 && idx < reg.trait_defs.len() {
+        return reg.trait_defs[idx]
+    }
+    // Fallback: linear scan (for entries added before index existed)
     mut i := 1
     while i < reg.trait_defs.len() {
         if reg.trait_defs[i].name == name {
@@ -69,6 +128,10 @@ fn treg_find_trait(reg: TraitRegistry, name: str) -> TraitDef {
 }
 
 fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.impl_index, _impl_key(type_name, trait_name))
+    if idx > 0 { return true }
+    // Fallback: linear scan
     mut i := 1
     while i < reg.impl_defs.len() {
         imp := reg.impl_defs[i]
@@ -78,6 +141,69 @@ fn treg_has_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> bool {
         i = i + 1
     }
     false
+}
+
+// Returns the ImplDef for a given (type, trait) pair; sentinel (name="") if not found.
+fn treg_find_impl(reg: TraitRegistry, type_name: str, trait_name: str) -> ImplDef {
+    // Fast path: hash index lookup
+    idx := strmap_get(reg.impl_index, _impl_key(type_name, trait_name))
+    if idx > 0 && idx < reg.impl_defs.len() {
+        return reg.impl_defs[idx]
+    }
+    // Fallback: linear scan
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.type_name == type_name && imp.trait_name == trait_name {
+            return imp
+        }
+        i = i + 1
+    }
+    _sentinel_impl_def()
+}
+
+// Looks up the impl's value for a given associated type name; "" if not bound.
+fn treg_find_assoc_value(reg: TraitRegistry, type_name: str, trait_name: str, assoc_name: str) -> str {
+    imp := treg_find_impl(reg, type_name, trait_name)
+    if imp.trait_name == "" { return "" }
+    mut i := 1
+    while i < imp.assoc_type_names.len() {
+        if imp.assoc_type_names[i] == assoc_name {
+            return imp.assoc_type_values[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
+// Returns list of concrete type names that implement a given bound trait.
+// Skips blanket markers (type_name starts with "*"). Used for eager
+// monomorphization of blanket impl methods.
+fn treg_types_implementing(reg: TraitRegistry, bound: str) -> [str] {
+    mut types := [""]
+    mut i := 1
+    while i < reg.impl_defs.len() {
+        imp := reg.impl_defs[i]
+        if imp.trait_name == bound {
+            if imp.type_name.len() > 0 {
+                first := imp.type_name.substring(0, 1)
+                if first != "*" {
+                    // Dedup
+                    mut found := false
+                    mut j := 1
+                    while j < types.len() {
+                        if types[j] == imp.type_name { found = true }
+                        j = j + 1
+                    }
+                    if found == false {
+                        types = types.append(imp.type_name)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    types
 }
 
 // --- Populate built-in traits and impls ---

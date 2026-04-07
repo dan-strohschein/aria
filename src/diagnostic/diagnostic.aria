@@ -140,6 +140,13 @@ fn new_error(code: str, message: str, span: Span) -> Diagnostic =
 fn new_warning(code: str, message: str, span: Span) -> Diagnostic =
     new_diagnostic(code, Warning, message, span)
 
+fn diag_with_note(diag: Diagnostic, note: str) -> Diagnostic =
+    Diagnostic{code: diag.code, severity: diag.severity, message: diag.message, span: diag.span,
+               labels: diag.labels, notes: diag.notes.append(note), suggestions: diag.suggestions}
+
+fn bag_add_error_with_note(bag: DiagnosticBag, code: str, message: str, span: Span, note: str) -> DiagnosticBag =
+    bag_add_diagnostic(bag, diag_with_note(new_error(code, message, span), note))
+
 // --- DiagnosticBag ---
 
 struct DiagnosticBag {
@@ -156,6 +163,15 @@ fn new_bag() -> DiagnosticBag =
     }
 
 fn bag_add_diagnostic(bag: DiagnosticBag, diag: Diagnostic) -> DiagnosticBag {
+    // Deduplicate: skip if same code + line already exists
+    mut i := 1
+    while i < bag.diagnostics.len() {
+        existing := bag.diagnostics[i]
+        if existing.code == diag.code && existing.span.line == diag.span.line && existing.span.file == diag.span.file {
+            return bag
+        }
+        i = i + 1
+    }
     new_diagnostics := bag.diagnostics.append(diag)
     mut new_errors := bag.error_count
     mut new_warnings := bag.warning_count
@@ -252,6 +268,9 @@ const E0205: str = "E0205"
 // Effect Errors (E0300-E0399)
 const E0300: str = "E0300"
 const E0301: str = "E0301"
+const E0302: str = "E0302"
+const E0303: str = "E0303"
+const E0304: str = "E0304"
 
 // Pattern Errors (E0400-E0499)
 const E0400: str = "E0400"
@@ -275,6 +294,8 @@ const W0002: str = "W0002"
 const W0003: str = "W0003"
 const W0004: str = "W0004"
 const W0005: str = "W0005"
+const W0008: str = "W0008"
+const W0009: str = "W0009"
 const W0100: str = "W0100"
 
 fn describe_code(code: str) -> str {
@@ -311,7 +332,12 @@ fn describe_code(code: str) -> str {
     if code == E0110 { return "duplicate field" }
     if code == E0200 { return "trait not satisfied" }
     if code == E0201 { return "missing trait method" }
-    if code == E0300 { return "effect not declared" }
+    if code == E0202 { return "orphan impl" }
+    if code == E0300 { return "missing effect [Io]" }
+    if code == E0301 { return "missing effect [Fs]" }
+    if code == E0302 { return "missing effect [Net]" }
+    if code == E0303 { return "missing effect [Ffi]" }
+    if code == E0304 { return "missing effect [Async]" }
     if code == E0400 { return "non-exhaustive match" }
     if code == E0500 { return "immutable binding" }
     if code == E0401 { return "unreachable pattern" }
@@ -325,6 +351,8 @@ fn describe_code(code: str) -> str {
     if code == W0003 { return "unused import" }
     if code == W0004 { return "shadowed variable" }
     if code == "W0005" { return "use of deprecated function" }
+    if code == W0008 { return "once closure called multiple times" }
+    if code == W0009 { return "orphan impl across packages" }
     if code == W0100 { return "unreachable code" }
     return "unknown error code"
 }

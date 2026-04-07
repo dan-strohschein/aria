@@ -60,9 +60,13 @@ lib/json
 *.swo
 *~
 
+# VSCode extension build artifacts
+*.vsix
+
 # Plan files (local working notes)
 plan.md
 Gaps1.md
 goal1.md
 launch-plan.md
 examples.md
+CR1.md

@@ -1,0 +1,812 @@
+@module parser
+@layer 2
+@lang aria
+@aid_version 0.2
+@purpose Recursive descent parser producing AST node pool and declaration index
+@depends [lexer, diagnostic]
+@workflow The parser is the second stage of the compilation pipeline. Lexer produces tokens, parser consumes them to build a flat AST node pool and a declaration index. The resolver and checker then walk the pool via DeclIndex entries.
+@invariants
+  - NodePool index 0 is always a sentinel EkNone node; valid node indices start at 1
+  - DeclIndex index 0 is always a sentinel DkNone entry; valid decl indices start at 1
+  - Child lists use indirection: EkNone nodes with c0 pointing to the actual child node
+  - Parser state is threaded immutably — every mutation returns a new Parser struct
+@notes
+  - The AST uses a flat pool design (no recursive Expr trees) to stay within bootstrap compiler limitations (no recursive types without auto-boxing)
+  - All internal parser functions use underscore prefix convention (_parse_fn, _ck, _adv, etc.)
+  - The Expr struct is intentionally generic with s1/s2/b1/b2/c0/c1/c2 fields overloaded per ExprKind — see mk_* constructors for the encoding contract of each kind
+
+---
+
+@type ExprKind
+@kind sum
+@purpose Discriminator tag for AST nodes. Every syntactic construct in Aria maps to one variant. Declarations, expressions, statements, and structural nodes (params, fields, variants) all share the same Expr representation, distinguished only by this tag.
+@variants
+  EkIntLit — Integer literal expression
+  EkFloatLit — Float literal expression
+  EkStringLit — String literal expression
+  EkBoolLit — Boolean literal expression
+  EkIdent — Identifier reference
+  EkBinary — Binary operator expression
+  EkUnary — Unary operator expression
+  EkCall — Function call (also used for destructure patterns in match arms)
+  EkMethodCall — Method call (dot syntax)
+  EkFieldAccess — Field access (dot syntax)
+  EkIndex — Index expression (brackets)
+  EkBlock — Block expression (braces); also used for entry blocks (s1="_entry") and test blocks (s1="_test:name")
+  EkIf — If/else expression
+  EkMatch — Match expression
+  EkClosure — Closure expression
+  EkArray — Array literal
+  EkStruct — Struct literal; also used for record update (s1="_update")
+  EkAssign — Assignment expression
+  EkBinding — Variable binding (:= or mut)
+  EkReturn — Return expression
+  EkBreak — Break expression
+  EkContinue — Continue expression
+  EkFor — For loop
+  EkWhile — While loop
+  EkLoop — Infinite loop
+  EkDefer — Defer expression
+  EkWith — With expression (resource management)
+  EkTuple — Tuple expression
+  EkCatch — Catch expression (error recovery)
+  EkPipeline — Pipeline expression (|>)
+  EkRange — Range expression (.. or ..=)
+  EkPropagate — Error propagation (?); b1=true when using transform syntax (? |e| body)
+  EkAssertOk — Assert success (!)
+  EkFnDecl — Function declaration
+  EkTypeDecl — Type declaration (struct, sum type, newtype)
+  EkEnumDecl — Enum declaration
+  EkTraitDecl — Trait declaration
+  EkImplDecl — Impl block declaration
+  EkConstDecl — Constant declaration
+  EkUseDecl — Use/import declaration
+  EkParam — Function parameter
+  EkField — Struct field or variant field
+  EkVariant — Sum type / enum variant
+  EkListComp — List comprehension [expr for x in iter where cond]
+  EkYield — Yield expression
+  EkSelect — Select expression (channel multiplexing)
+  EkNone — Sentinel / empty; also used as indirection nodes in child lists (c0 points to actual node)
+@antipatterns
+  - Do not compare ExprKind values directly for dispatch; use expr_kind_name() which returns a string — this avoids bootstrap codegen issues with large sum type matching
+@source_file src/parser/ast.aria
+@source_line 13
+
+---
+
+@type DeclKind
+@kind sum
+@purpose Discriminator for top-level declaration types. Used by DeclIndex to categorize declarations without needing to inspect the full AST node.
+@variants
+  DkFn — Function declaration (also used for extern fns and fixture blocks with name prefix "_extern"/"_fixture:")
+  DkType — Type declaration (struct, sum type, newtype; also used for aliases with name prefix "_alias:")
+  DkEnum — Enum declaration
+  DkTrait — Trait declaration
+  DkImpl — Impl block
+  DkConst — Constant declaration
+  DkEntry — Entry block (program main)
+  DkTest — Test block (also used for bench blocks with name prefix "_bench:")
+  DkUse — Use/import declaration
+  DkNone — Sentinel
+@source_file src/parser/ast.aria
+@source_line 349
+
+---
+
+@type Expr
+@kind struct
+@purpose Universal AST node. All syntactic constructs use this same flat struct with fields overloaded per ExprKind. This avoids recursive types (which the bootstrap compiler cannot handle without auto-boxing) and enables a flat pool-based storage model.
+@fields
+  kind: ExprKind — Node type discriminator
+  s1: str — Primary string payload (name, operator, literal value, binding name)
+  s2: str — Secondary string payload (generic params for fn/type, trait name for impl, variant names for enum, supertrait info for trait)
+  b1: bool — Primary boolean flag (is_mut for binding, has_else for if, is_sum for type, has_value for return, inclusive for range, is_tuple for variant, has_body for fn, is_self for param)
+  b2: bool — Secondary boolean flag (has_ret for fn, has_generics for type)
+  c0: i64 — Child node index 0 (body/condition/lhs/operand/value; type_tok_pos for param/field)
+  c1: i64 — Child node index 1 (then_branch/rhs/body; ret_tok_pos for fn)
+  c2: i64 — Child node index 2 (else_branch; err_tok_pos for fn)
+  list_start: i64 — Start index into pool for child lists (params, fields, variants, args, stmts)
+  list_count: i64 — Number of children in list (param_count, field_count, arm_count, etc.)
+  span: Span — Source location
+@invariants
+  - c0/c1/c2 are pool indices; 0 means "no child" (index 0 is the sentinel)
+  - list_start..list_start+list_count are EkNone indirection nodes whose c0 fields point to actual child nodes
+  - For match arms: list uses pairs (pattern, body) so actual pool entries = list_count * 2
+  - For select arms: list uses pairs (arm_info, body) so actual pool entries = list_count * 2
+@source_file src/parser/ast.aria
+@source_line 115
+
+---
+
+@type NodePool
+@kind struct
+@purpose Flat array storage for all AST nodes. Avoids heap-allocated tree structures. Nodes reference children by integer index into this pool. The pool is append-only during parsing.
+@fields
+  nodes: [Expr] — Flat array of all AST nodes; index 0 is always a sentinel
+@invariants
+  - Index 0 is always an EkNone sentinel created by new_pool()
+  - Nodes are never removed or reordered after creation
+  - pool_size() returns len(nodes), so valid indices are 0..pool_size()-1
+@source_file src/parser/ast.aria
+@source_line 133
+
+---
+
+@type DeclInfo
+@kind struct
+@purpose Metadata about a single top-level declaration. Records token ranges for the declaration body so the resolver/checker can parse individual declarations on demand without re-parsing the entire file.
+@fields
+  kind: DeclKind — Declaration type
+  name: str — Declaration name (empty for entry blocks; prefixed for special forms like "_bench:", "_extern", "_alias:", "_fixture:")
+  token_start: i64 — Token index where declaration starts (at the keyword)
+  body_start: i64 — Token index where body starts (at = or {)
+  body_end: i64 — Token index where body ends (one past the closing brace or expression end)
+  is_pub: bool — Whether declaration is public (preceded by pub keyword)
+  node_idx: i64 — Index into NodePool for the parsed AST node; 0 until _bridge_ast_to_decl_index populates it
+@source_file src/parser/ast.aria
+@source_line 376
+
+---
+
+@type DeclIndex
+@kind struct
+@purpose Registry of all top-level declarations in a source file. Enables the resolver and checker to look up declarations by name and kind without walking the full AST. Built by build_decl_index via a fast token scan, then enriched with node_idx values by bridging against the full parse.
+@fields
+  decls: [DeclInfo] — All top-level declarations; index 0 is a sentinel
+@invariants
+  - Index 0 is always a DkNone sentinel
+  - Declarations are stored in source order
+  - After build_decl_index completes, every non-sentinel entry has node_idx populated (pointing into the companion NodePool)
+@source_file src/parser/ast.aria
+@source_line 386
+
+---
+
+@type ParseResult
+@kind struct
+@purpose Combined output of build_decl_index: the declaration index, the full AST node pool, and any parse diagnostics. This is the primary data structure handed to downstream compiler stages.
+@fields
+  index: DeclIndex — Declaration index
+  pool: NodePool — AST node pool
+  diagnostics: DiagnosticBag — Parse diagnostics
+@source_file src/parser/ast.aria
+@source_line 426
+
+---
+
+@type Program
+@kind struct
+@purpose Minimal program metadata extracted during parsing. Currently holds only the module name and total node count.
+@fields
+  module_name: str — Module name from mod declaration
+  node_count: i64 — Total AST nodes parsed
+@source_file src/parser/ast.aria
+@source_line 434
+
+---
+
+@type Parser
+@kind struct
+@purpose Immutable parser state threaded through all parse functions. Every mutation (advancing position, adding a node, recording an error) returns a new Parser value. This functional style is required because the bootstrap compiler does not support mutable struct fields.
+@fields
+  tokens: [Token] — Token stream from lexer
+  pos: i64 — Current token position
+  pool: NodePool — AST node accumulator
+  diagnostics: DiagnosticBag — Parse diagnostics
+@invariants
+  - pos is always in range [0, tokens.len()]
+  - pool grows monotonically — nodes are never removed
+@effects Allocates new Parser/NodePool values on every mutation (append-heavy)
+@source_file src/parser/parser.aria
+@source_line 8
+
+---
+
+@type PR
+@kind struct
+@purpose Parse result pair returned by every internal parse function. Bundles the updated parser state with the expression node that was just parsed. This is the universal return type for the recursive descent functions.
+@fields
+  p: Parser — Updated parser state (advanced position, possibly new nodes in pool, possibly new diagnostics)
+  e: Expr — Parsed expression result (not yet added to pool — caller decides where to place it)
+@notes The returned Expr in PR.e is NOT yet in the pool. The caller must explicitly call _padd() to add it. This separation allows the caller to control the pool index where the node lands, which is critical for the child list indirection pattern.
+@source_file src/parser/parser.aria
+@source_line 69
+
+---
+
+@type BindingPower
+@kind struct
+@purpose Pratt parser binding power pair for infix operators. Left and right values determine associativity: left-associative has right=left+1, right-associative has right=left-1, non-associative has right=left.
+@fields
+  left: i64 — Left binding power (compared against min_bp to decide whether to consume this operator)
+  right: i64 — Right binding power (passed as min_bp when parsing the right-hand operand)
+@source_file src/parser/precedence.aria
+@source_line 15
+
+---
+
+@fn expr_kind_name
+@sig (k: ExprKind) -> str
+@purpose Maps an ExprKind variant to its human-readable string name. Used extensively for dispatch throughout the codebase since the bootstrap compiler has issues with large sum type pattern matching — string comparison on the kind name is the workaround.
+@notes Returns names without the "Ek" prefix (e.g. EkIntLit -> "IntLit", EkFnDecl -> "FnDecl")
+@source_file src/parser/ast.aria
+@source_line 62
+
+---
+
+@fn decl_kind_name
+@sig (k: DeclKind) -> str
+@purpose Maps a DeclKind variant to its keyword string (e.g. DkFn -> "fn", DkType -> "type"). Used for dispatch and error messages.
+@source_file src/parser/ast.aria
+@source_line 361
+
+---
+
+@fn new_pool
+@sig () -> NodePool
+@purpose Creates a new NodePool with a sentinel EkNone node at index 0. This sentinel ensures that index 0 always means "no node" and out-of-bounds lookups return a safe default.
+@post Pool has exactly 1 node (the sentinel) at index 0
+[src: src/parser/ast.aria:143]
+@source_file src/parser/ast.aria
+@source_line 143
+
+---
+
+@fn pool_add
+@sig (pool: NodePool, e: Expr) -> NodePool
+@purpose Appends a node to the pool and returns the updated pool. The new node's index is the previous pool_size().
+@effects Allocates a new NodePool with the appended node (immutable append)
+@post pool_size(result) == pool_size(pool) + 1
+[src: src/parser/ast.aria:146]
+@source_file src/parser/ast.aria
+@source_line 146
+
+---
+
+@fn pool_get
+@sig (pool: NodePool, idx: i64) -> Expr
+@purpose Retrieves a node by index. Returns a sentinel EkNone if the index is out of bounds, providing safe default behavior instead of panicking.
+@pre idx should be a valid pool index (0..pool_size-1) for meaningful results
+@post Returns the sentinel _sentinel_expr() for out-of-bounds indices
+[src: src/parser/ast.aria:150]
+@source_file src/parser/ast.aria
+@source_line 150
+
+---
+
+@fn pool_size
+@sig (pool: NodePool) -> i64
+@purpose Returns the total number of nodes in the pool (including the sentinel at index 0).
+@source_file src/parser/ast.aria
+@source_line 157
+
+---
+
+# mk_* Constructor Functions
+#
+# These are pure factory functions that construct Expr nodes with the correct ExprKind
+# and field encoding for each AST node type. They exist to provide a documented API for
+# the Expr struct's overloaded fields (s1/s2/b1/b2/c0/c1/c2/list_start/list_count).
+#
+# All mk_* functions:
+# - Are pure (no side effects, no pool mutation)
+# - Return an Expr that is NOT yet in the pool — the caller adds it via _padd/pool_add
+# - Initialize unused fields to zero values ("", false, 0)
+# - Take a Span for source location tracking
+#
+# The parser itself often constructs Expr literals directly (bypassing mk_*) when it
+# needs to set c0/c1/c2/list_start/list_count to specific pool indices. The mk_*
+# functions primarily document the field encoding contract.
+
+---
+
+@fn mk_int_lit
+@sig (value: str, span: Span) -> Expr
+@purpose Constructs an integer literal node. s1=value text (e.g. "42", "-7").
+@source_file src/parser/ast.aria
+@source_line 163
+
+---
+
+@fn mk_float_lit
+@sig (value: str, span: Span) -> Expr
+@purpose Constructs a float literal node. s1=value text (e.g. "3.14").
+@source_file src/parser/ast.aria
+@source_line 167
+
+---
+
+@fn mk_string_lit
+@sig (value: str, span: Span) -> Expr
+@purpose Constructs a string literal node. s1=value text. For string interpolation, the parser produces a single mk_string_lit("", span) as a placeholder.
+@source_file src/parser/ast.aria
+@source_line 171
+
+---
+
+@fn mk_bool_lit
+@sig (value: bool, span: Span) -> Expr
+@purpose Constructs a boolean literal node. b1=value (true/false).
+@source_file src/parser/ast.aria
+@source_line 175
+
+---
+
+@fn mk_ident
+@sig (name: str, span: Span) -> Expr
+@purpose Constructs an identifier reference node. s1=name. Also used in patterns for wildcard ("_") and qualified names ("Mod.Variant").
+@source_file src/parser/ast.aria
+@source_line 179
+
+---
+
+@fn mk_binary
+@sig (op: str, left: Expr, right: Expr, span: Span) -> Expr
+@purpose Constructs a binary operation node. s1=operator text. Note: the left/right Expr args are accepted but NOT stored — the parser sets c0/c1 to pool indices directly when constructing binary nodes.
+@antipatterns Do not rely on the left/right parameters being stored; the parser bypasses this constructor and builds binary Expr literals with c0/c1 set to pool indices.
+@source_file src/parser/ast.aria
+@source_line 185
+
+---
+
+@fn mk_unary
+@sig (op: str, operand: Expr, span: Span) -> Expr
+@purpose Constructs a unary operation node. s1=operator text ("-", "!", "~"). Like mk_binary, the operand is not stored; the parser uses c0 for the operand pool index.
+@source_file src/parser/ast.aria
+@source_line 189
+
+---
+
+@fn mk_call
+@sig (callee: Expr, args_count: i64, span: Span) -> Expr
+@purpose Constructs a function call node. s1=callee name (copied from callee.s1), list_count=args_count. The parser sets c0 to callee pool index and list_start to the arg index nodes.
+@source_file src/parser/ast.aria
+@source_line 193
+
+---
+
+@fn mk_method_call
+@sig (method: str, span: Span) -> Expr
+@purpose Constructs a method call node. s1=method name, s2=type argument for conversion methods like .to[Type]() and .trunc[Type](). c0=receiver pool index, list_start/list_count for arguments.
+@source_file src/parser/ast.aria
+@source_line 197
+
+---
+
+@fn mk_field_access
+@sig (field: str, span: Span) -> Expr
+@purpose Constructs a field access node. s1=field name, c0=receiver pool index.
+@source_file src/parser/ast.aria
+@source_line 201
+
+---
+
+@fn mk_index
+@sig (span: Span) -> Expr
+@purpose Constructs an index expression node (a[b]). c0=object pool index, c1=index expression pool index.
+@source_file src/parser/ast.aria
+@source_line 205
+
+---
+
+@fn mk_block
+@sig (count: i64, span: Span) -> Expr
+@purpose Constructs a block expression node. list_count=statement count. list_start points to EkNone indirection nodes. Also used for entry blocks (s1="_entry") and test blocks (s1="_test:name").
+@source_file src/parser/ast.aria
+@source_line 209
+
+---
+
+@fn mk_if
+@sig (has_else: bool, span: Span) -> Expr
+@purpose Constructs an if/else expression node. b1=has_else, c0=condition, c1=then_block, c2=else_block (0 if no else). Else-if chains are represented as nested EkIf nodes in the c2 slot.
+@source_file src/parser/ast.aria
+@source_line 213
+
+---
+
+@fn mk_match
+@sig (arms_count: i64, span: Span) -> Expr
+@purpose Constructs a match expression node. c0=subject, list_count=number of arms. Arms are stored as pairs of index nodes (pattern, body), so the pool contains list_count*2 index entries starting at list_start.
+@source_file src/parser/ast.aria
+@source_line 217
+
+---
+
+@fn mk_array
+@sig (count: i64, span: Span) -> Expr
+@purpose Constructs an array literal node. list_count=element count, list_start points to element index nodes.
+@source_file src/parser/ast.aria
+@source_line 221
+
+---
+
+@fn mk_struct_lit
+@sig (name: str, field_count: i64, span: Span) -> Expr
+@purpose Constructs a struct literal node. s1=type name (or "_update" for record update syntax .{field: val}), list_count=field count. list_start points to field value index nodes.
+@source_file src/parser/ast.aria
+@source_line 225
+
+---
+
+@fn mk_assign
+@sig (span: Span) -> Expr
+@purpose Constructs an assignment expression node. c0=lhs pool index, c1=rhs pool index.
+@source_file src/parser/ast.aria
+@source_line 229
+
+---
+
+@fn mk_binding
+@sig (name: str, is_mut: bool, span: Span) -> Expr
+@purpose Constructs a variable binding node (:= or mut :=). s1=binding name, b1=is_mut, c0=initializer pool index.
+@source_file src/parser/ast.aria
+@source_line 233
+
+---
+
+@fn mk_return
+@sig (has_value: bool, span: Span) -> Expr
+@purpose Constructs a return expression node. b1=has_value. When b1 is true, c0=value pool index.
+@source_file src/parser/ast.aria
+@source_line 237
+
+---
+
+@fn mk_break
+@sig (span: Span) -> Expr
+@purpose Constructs a break expression node. No payload.
+@source_file src/parser/ast.aria
+@source_line 241
+
+---
+
+@fn mk_continue
+@sig (span: Span) -> Expr
+@purpose Constructs a continue expression node. No payload.
+@source_file src/parser/ast.aria
+@source_line 245
+
+---
+
+@fn mk_for
+@sig (pattern_name: str, span: Span) -> Expr
+@purpose Constructs a for loop node. s1=loop variable name, c0=iterator pool index, c1=body pool index.
+@source_file src/parser/ast.aria
+@source_line 249
+
+---
+
+@fn mk_while
+@sig (span: Span) -> Expr
+@purpose Constructs a while loop node. c0=condition pool index, c1=body pool index.
+@source_file src/parser/ast.aria
+@source_line 253
+
+---
+
+@fn mk_loop
+@sig (span: Span) -> Expr
+@purpose Constructs an infinite loop node. c0=body pool index.
+@source_file src/parser/ast.aria
+@source_line 257
+
+---
+
+@fn mk_closure
+@sig (params_str: str, span: Span) -> Expr
+@purpose Constructs a closure expression node. s1=comma-joined parameter names, c0=body pool index. Uses fn(params) => expr or fn(params) { block } syntax.
+@source_file src/parser/ast.aria
+@source_line 261
+
+---
+
+@fn mk_propagate
+@sig (span: Span) -> Expr
+@purpose Constructs an error propagation node (? postfix). c0=inner expression pool index. When b1=true, represents the transform variant (? |e| body) with s1=error binding name and c1=transform body.
+@source_file src/parser/ast.aria
+@source_line 265
+
+---
+
+@fn mk_assert_ok
+@sig (span: Span) -> Expr
+@purpose Constructs an assert-success node (! postfix). c0=inner expression pool index. Panics at runtime if the Result is an error.
+@source_file src/parser/ast.aria
+@source_line 269
+
+---
+
+@fn mk_pipeline
+@sig (span: Span) -> Expr
+@purpose Constructs a pipeline expression node (|>). Parsed as a binary operator by the Pratt parser with binding power 20/21 (left-associative).
+@source_file src/parser/ast.aria
+@source_line 273
+
+---
+
+@fn mk_range
+@sig (inclusive: bool, span: Span) -> Expr
+@purpose Constructs a range expression node (.. or ..=). b1=inclusive (true for ..=). Parsed as a non-associative infix operator at binding power 70.
+@source_file src/parser/ast.aria
+@source_line 277
+
+---
+
+@fn mk_deferred
+@sig (span: Span) -> Expr
+@purpose Constructs a defer expression node. c0=deferred expression pool index. Executes the expression when the enclosing scope exits.
+@source_file src/parser/ast.aria
+@source_line 281
+
+---
+
+@fn mk_with
+@sig (name: str, span: Span) -> Expr
+@purpose Constructs a with expression node (resource management). s1=binding name, c0=resource expression pool index, c1=body pool index. Syntax: with name := expr { body }.
+@source_file src/parser/ast.aria
+@source_line 285
+
+---
+
+@fn mk_tuple
+@sig (count: i64, span: Span) -> Expr
+@purpose Constructs a tuple expression node. list_count=element count, list_start points to element index nodes. Detected by _parse_grouped when a comma follows the first expression inside parentheses.
+@source_file src/parser/ast.aria
+@source_line 289
+
+---
+
+@fn mk_catch
+@sig (span: Span) -> Expr
+@purpose Constructs a catch expression node (error recovery). c0=inner expression pool index, c1=catch body pool index. Syntax: expr catch |err| { body }.
+@source_file src/parser/ast.aria
+@source_line 293
+
+---
+
+@fn mk_fn_decl
+@sig (name: str, params: str, param_count: i64, has_body: bool, span: Span) -> Expr
+@purpose Constructs a function declaration node. s1=name, s2=generics string ("T:Eq,U" format with colon for bounds and + for multiple bounds), b1=has_body, b2=has_return_type, c0=body pool index, c1=return type token position, c2=error type token position, list_start/list_count=parameter index nodes.
+@notes Type information is stored as token positions (c1, c2) rather than parsed type AST nodes. The checker reads tokens directly from those positions to resolve types.
+[src: src/parser/parser.aria:819]
+@source_file src/parser/ast.aria
+@source_line 301
+
+---
+
+@fn mk_type_decl
+@sig (name: str, is_sum: bool, count: i64, span: Span) -> Expr
+@purpose Constructs a type declaration node. s1=name, s2=generics string, b1=is_sum (true for sum types with | variants), b2=has_generics, c0=newtype_tok_pos (token position of the aliased type for newtypes), list_start/list_count=child index nodes (fields for structs, variants for sum types).
+[src: src/parser/parser.aria:1072]
+@source_file src/parser/ast.aria
+@source_line 305
+
+---
+
+@fn mk_enum_decl
+@sig (name: str, span: Span) -> Expr
+@purpose Constructs an enum declaration node. s1=name, s2=comma-joined variant names, list_count=variant count. Enum variants are simple named constants (no payloads).
+[src: src/parser/parser.aria:1106]
+@source_file src/parser/ast.aria
+@source_line 309
+
+---
+
+@fn mk_trait_decl
+@sig (name: str, method_count: i64, span: Span) -> Expr
+@purpose Constructs a trait declaration node. s1=name, s2=supertrait info (comma-separated supertrait names, optionally followed by ";assoc_type1,assoc_type2" for associated types), list_start/list_count=method FnDecl index nodes.
+@notes The s2 encoding uses ";" as a separator between supertrait names and associated type names. For example: "Eq,Ord;Element,Key" means supertraits Eq and Ord with associated types Element and Key.
+[src: src/parser/parser.aria:1184-1191]
+@source_file src/parser/ast.aria
+@source_line 313
+
+---
+
+@fn mk_impl_decl
+@sig (type_name: str, trait_name: str, method_count: i64, span: Span) -> Expr
+@purpose Constructs an impl block node. s1=implementing type name, s2=trait name (empty for inherent impls), list_start/list_count=method FnDecl index nodes.
+@source_file src/parser/ast.aria
+@source_line 317
+
+---
+
+@fn mk_const_decl
+@sig (name: str, span: Span) -> Expr
+@purpose Constructs a constant declaration node. s1=name, c0=value expression pool index, c1=type annotation token position.
+@source_file src/parser/ast.aria
+@source_line 321
+
+---
+
+@fn mk_use_decl
+@sig (module: str, span: Span) -> Expr
+@purpose Constructs a use/import declaration node. s1=module name.
+@source_file src/parser/ast.aria
+@source_line 325
+
+---
+
+@fn mk_param
+@sig (name: str, type_tok_pos: i64, is_self: bool, span: Span) -> Expr
+@purpose Constructs a function parameter node. s1=parameter name ("self" for self param), c0=type annotation token position (0 for self), b1=is_self.
+@notes Type is stored as a token position rather than a parsed type — the checker reads tokens from that position.
+@source_file src/parser/ast.aria
+@source_line 331
+
+---
+
+@fn mk_field
+@sig (name: str, type_tok_pos: i64, span: Span) -> Expr
+@purpose Constructs a struct field node. s1=field name (or "_N" for positional tuple variant fields), c0=type annotation token position.
+@notes Tuple variant fields use generated names "_0", "_1", etc.
+[src: src/parser/parser.aria:965]
+@source_file src/parser/ast.aria
+@source_line 336
+
+---
+
+@fn mk_variant
+@sig (name: str, is_tuple: bool, span: Span) -> Expr
+@purpose Constructs a sum type variant node. s1=variant name, b1=is_tuple (true for tuple-style Variant(T1, T2), false for struct-style Variant{field: T}), list_start/list_count=field index nodes.
+@source_file src/parser/ast.aria
+@source_line 341
+
+---
+
+@fn new_decl_index
+@sig () -> DeclIndex
+@purpose Creates a new DeclIndex with a sentinel DkNone entry at index 0.
+@post Index has exactly 1 entry (the sentinel) at index 0
+@source_file src/parser/ast.aria
+@source_line 393
+
+---
+
+@fn decl_index_add
+@sig (idx: DeclIndex, d: DeclInfo) -> DeclIndex
+@purpose Appends a declaration to the index and returns the updated index.
+@effects Allocates a new DeclIndex with the appended declaration
+@source_file src/parser/ast.aria
+@source_line 396
+
+---
+
+@fn decl_index_len
+@sig (idx: DeclIndex) -> i64
+@purpose Returns the total number of entries in the index (including the sentinel).
+@source_file src/parser/ast.aria
+@source_line 399
+
+---
+
+@fn decl_index_get
+@sig (idx: DeclIndex, i: i64) -> DeclInfo
+@purpose Retrieves a declaration by index. Returns a sentinel DkNone for out-of-bounds indices.
+@source_file src/parser/ast.aria
+@source_line 401
+
+---
+
+@fn new_parser
+@sig (tokens: [Token]) -> Parser
+@purpose Creates a new parser initialized at position 0 with an empty pool and empty diagnostics bag.
+@post Parser.pos == 0, pool has 1 sentinel node, diagnostics is empty
+@source_file src/parser/parser.aria
+@source_line 16
+
+---
+
+@fn parse
+@sig (tokens: [Token]) -> PR
+@purpose Top-level parse entry point. Consumes a full token stream and produces a root EkBlock node containing all top-level declarations as children. Handles mod declaration, use declarations, and iterates over all top-level forms.
+@calls [new_parser, _skip_nl, _parse_top, _padd, _pidx]
+@pre tokens is a complete lexer output ending with TkEof
+@post PR.e is an EkBlock with list_start/list_count covering all top-level declarations
+@effects Builds the full NodePool as a side effect of parsing
+@workflow Called by build_decl_index to produce the full AST pool, which is then bridged to the DeclIndex for downstream stages.
+@notes The root block's children are EkNone indirection nodes whose c0 fields point to the actual declaration nodes. Skips the sentinel token at index 0 if present.
+[src: src/parser/parser.aria:112-167]
+@source_file src/parser/parser.aria
+@source_line 112
+
+---
+
+@fn build_decl_index
+@sig (tokens: [Token]) -> ParseResult
+@purpose Main entry point for the parser module. Performs two passes: (1) a fast token scan to build the DeclIndex with token ranges, then (2) a full parse via parse() to build the AST pool, and finally bridges node_idx values into the DeclIndex entries.
+@calls [new_parser, parse, _bridge_ast_to_decl_index]
+@pre tokens is a complete lexer output ending with TkEof
+@post ParseResult.index has all top-level declarations with node_idx populated; ParseResult.pool has the complete AST
+@workflow This is the function that downstream stages (resolver, checker) call. The DeclIndex allows them to look up and process individual declarations without re-parsing.
+@notes
+  - The two-pass approach is intentional: the token scan is fast and gives the resolver declaration boundaries early, while the full parse provides the AST nodes
+  - Handles pub visibility, annotations (@attr), all declaration keywords (fn, type, struct, enum, trait, impl, const, entry, test, bench, extern, alias, before, after)
+  - The _bridge_ast_to_decl_index function matches DeclIndex entries to AST nodes by name and kind, setting the node_idx field
+[src: src/parser/parser.aria:187-451]
+@source_file src/parser/parser.aria
+@source_line 187
+
+---
+
+@fn parser_diagnostics
+@sig (p: Parser) -> DiagnosticBag
+@purpose Extracts the diagnostic bag from a parser. Simple accessor.
+@source_file src/parser/parser.aria
+@source_line 2208
+
+---
+
+@fn no_binding_power
+@sig () -> BindingPower
+@purpose Returns a zero binding power, indicating the token is not an operator. Used as the default/fallback return from infix_binding_power.
+@source_file src/parser/precedence.aria
+@source_line 20
+
+---
+
+@fn infix_binding_power
+@sig (kind: TokenKind) -> BindingPower
+@purpose Returns the left and right binding powers for an infix operator token. The Pratt parser uses these to determine operator precedence and associativity. Returns no_binding_power() for non-operator tokens.
+@notes Precedence levels (ascending): 10=assignment/binding, 20=pipeline, 30=null coalesce, 40=logical OR, 50=logical AND, 60=comparison, 70=range, 80=bitwise OR, 90=XOR, 100=bitwise AND, 110=shift, 120=additive, 130=multiplicative. Comparison and range are non-associative (left==right). Assignment is non-associative.
+[src: src/parser/precedence.aria:24-78]
+@source_file src/parser/precedence.aria
+@source_line 24
+
+---
+
+@fn prefix_binding_power
+@sig (kind: TokenKind) -> i64
+@purpose Returns the binding power for a prefix unary operator (-, !, ~). Returns 0 for non-prefix tokens. Prefix operators bind at level 140, tighter than all infix operators.
+@source_file src/parser/precedence.aria
+@source_line 82
+
+---
+
+@fn postfix_binding_power
+@sig (kind: TokenKind) -> i64
+@purpose Returns the binding power for a postfix operator or postfix-position token. Returns 0 for non-postfix tokens. Level 150: ? (propagate), ! (assert-ok), catch. Level 160: . (field/method), ?. (optional chain), ( (call), [ (index).
+@notes Postfix operators bind tighter than prefix (150/160 vs 140), ensuring correct parsing of expressions like -x.field and !result?.
+@source_file src/parser/precedence.aria
+@source_line 93
+
+---
+
+@fn is_infix_op
+@sig (kind: TokenKind) -> bool
+@purpose Tests whether a token kind is a valid infix operator by checking if its left binding power is positive.
+@source_file src/parser/precedence.aria
+@source_line 109
+
+---
+
+@fn is_prefix_op
+@sig (kind: TokenKind) -> bool
+@purpose Tests whether a token kind is a valid prefix operator (-, !, ~).
+@source_file src/parser/precedence.aria
+@source_line 114
+
+---
+
+@fn is_postfix_op
+@sig (kind: TokenKind) -> bool
+@purpose Tests whether a token kind is a valid postfix operator (?, !, catch, ., ?., (, [).
+@source_file src/parser/precedence.aria
+@source_line 117
+
+---
+
+@fn is_comparison_op
+@sig (kind: TokenKind) -> bool
+@purpose Tests whether a token kind is a comparison operator (==, !=, <, >, <=, >=). Used by the checker for type checking comparison expressions.
+@source_file src/parser/precedence.aria
+@source_line 120
+
+---
+
+@fn is_assignment_op
+@sig (kind: TokenKind) -> bool
+@purpose Tests whether a token kind is an assignment operator (= or :=). Used to detect binding/assignment statements in the parser.
+@source_file src/parser/precedence.aria
+@source_line 126

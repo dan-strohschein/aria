@@ -1,0 +1,221 @@
+@module main
+@lang aria
+@aid_version 0.2
+@layer 2
+@purpose CLI entry point — command parsing and pipeline orchestration
+@depends [lexer, parser, resolver, checker, codegen, diagnostic]
+@workflow The entry block receives OS args, parses them into an Options struct, then dispatches to the appropriate run_* function which orchestrates the compilation pipeline stages.
+
+---
+
+@type Command
+@kind sum
+@variants
+  CmdCheck — Type-check without codegen
+  CmdBuild — Compile to executable
+  CmdRun — Build and execute
+  CmdTest — Run test blocks
+  CmdFix — Auto-fix diagnostics
+  CmdExplain — Explain an error code
+  CmdBench — Run bench blocks
+  CmdHelp — Print help text
+  CmdVersion — Print version
+  CmdUnknown — Unrecognized command
+@source_file src/main.aria
+@source_line 16
+@purpose Represents the user's requested compiler action, parsed from the first positional CLI argument. CmdUnknown is a catch-all for unrecognized commands (falls through to help).
+@notes The entry block dispatches on the string form via command_to_str rather than matching the sum type directly, likely due to bootstrap compiler limitations with sum type matching.
+
+---
+
+@type Options
+@kind struct
+@fields
+  command: Command — Parsed command
+  files: [str] — Source file paths
+  format: str — Output format (text/json)
+  target: str — Target platform
+  runtime_path: str — Runtime library path
+@source_file src/main.aria
+@source_line 30
+@purpose Aggregates all parsed CLI arguments into a single value passed to the run_* dispatch functions.
+@invariants files always has a sentinel empty string at index 0; real files start at index 1. This is a pervasive Aria array convention due to bootstrap compiler constraints.
+@antipatterns Do not index files[0] expecting a real path — it is always the sentinel empty string "".
+
+---
+
+@const COMPILER_VERSION
+@value_type str
+@value "0.1.0-dev"
+@source_file src/main.aria
+@source_line 158
+@purpose Single source of truth for the version string printed by `aria version` and `aria help`.
+
+---
+
+@fn default_options
+@sig () -> Options
+@source_file src/main.aria
+@source_line 38
+@purpose Constructs Options with sensible defaults: CmdHelp command, text format, native target, and runtime/runtime.c path. Used as the initial accumulator in parse_args.
+@post Returns Options with command=CmdHelp, format="text", target="native", runtime_path="runtime/runtime.c".
+
+---
+
+@fn parse_command
+@sig (arg: str) -> Command
+@source_file src/main.aria
+@source_line 49
+@purpose Maps a CLI string argument to its Command variant. Supports both bare commands ("check") and flag forms ("--help", "-h", "--version", "-v").
+@post Returns CmdUnknown for any unrecognized string — never fails.
+@notes Uses a chain of if-return statements rather than match because the bootstrap compiler handles this pattern reliably. [src: src/main.aria:49-64]
+
+---
+
+@fn command_to_str
+@sig (cmd: Command) -> str
+@source_file src/main.aria
+@source_line 66
+@purpose Converts a Command variant back to its canonical string name. Used by the entry block for dispatch since it uses string equality chains rather than match on the sum type.
+@notes Inverse of parse_command for recognized commands. CmdUnknown maps to "unknown".
+
+---
+
+@fn parse_args
+@sig (args: [str]) -> Options
+@calls [parse_command]
+@source_file src/main.aria
+@source_line 94
+@purpose Parses the raw OS argument array into a structured Options value. Handles flag extraction (--format=, --target=, --runtime=), command detection, and file accumulation.
+@pre args[0] is a sentinel, args[1] is the program name; real arguments start at index 2. [src: src/main.aria:99]
+@effects None — pure argument parsing.
+@notes Options struct is immutable, so each flag update reconstructs the entire struct. Files accumulate into a separate mutable list merged at the end. [src: src/main.aria:105-153]
+@antipatterns The first positional non-flag argument is always treated as the command. There is no way to pass a file whose name matches a command name (e.g., a file called "check").
+
+---
+
+@fn print_version
+@sig () -> i64
+@source_file src/main.aria
+@source_line 160
+@purpose Prints the compiler version string to stdout and returns exit code 0.
+@effects Writes one line to stdout.
+
+---
+
+@fn print_help
+@sig () -> i64
+@source_file src/main.aria
+@source_line 167
+@purpose Prints the full CLI usage guide including all commands and flags.
+@effects Writes multiple lines to stdout.
+
+---
+
+@fn expand_files
+@sig (files: [str]) -> [str]
+@source_file src/main.aria
+@source_line 337
+@purpose Expands the file list by recursively finding all .aria files inside any directory arguments. Non-directory arguments pass through unchanged.
+@pre files[0] is the sentinel empty string.
+@post Returned list has sentinel at index 0; all entries from index 1 onward are file paths (not directories) ending in .aria.
+@effects Calls _ariaIsDir and _ariaListDir (filesystem intrinsics) to probe the filesystem.
+@notes Uses _expand_dir for recursive traversal. [src: src/main.aria:309-335]
+
+---
+
+@fn check_source
+@sig (source: str, file: str) -> DiagnosticBag
+@calls [tokenize, build_decl_index, resolve, check]
+@source_file src/main.aria
+@source_line 359
+@purpose Runs the full front-end pipeline (lex, parse/index, resolve, check) on a single source string and returns accumulated diagnostics. This is the single-file checking entry point.
+@workflow Stages are run sequentially with early return on errors: lexer -> declaration index -> resolver -> checker. Each stage's diagnostics are checked before proceeding.
+@pre source is the full file content; file is the filename used for diagnostic spans.
+@post Returns a DiagnosticBag that may contain errors from any pipeline stage (first stage that fails).
+@notes This function operates on a single file. The multi-file variant check_sources (in codegen module) handles cross-file compilation. [src: src/main.aria:359-373]
+
+---
+
+@fn run_check
+@sig (raw_files: [str], format: str) -> i64
+@calls [expand_files, check_source, render_text, render_json_bag]
+@source_file src/main.aria
+@source_line 375
+@purpose Implements the `aria check` command: expands files, resolves stdlib dependencies, runs the full checker pipeline, and prints results.
+@effects Reads source files from disk; writes diagnostics or success message to stdout.
+@errors Returns 1 if no input files provided or if any errors are found. Returns 0 on success (even with warnings).
+@workflow expand_files -> _resolve_stdlib_files -> _merge_file_lists -> check_sources -> print results. [src: src/main.aria:375-394]
+
+---
+
+@fn run_build
+@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
+@calls [expand_files, generate_from_sources]
+@source_file src/main.aria
+@source_line 413
+@purpose Implements the `aria build` command: compiles source files to a native executable via the full pipeline (lex -> resolve -> check -> lower -> LLVM IR -> clang).
+@effects Reads source files; writes LLVM IR to temp files; invokes clang to produce a native binary; writes diagnostics to stdout.
+@errors Returns 1 if no input files or compilation errors. Returns 0 on success.
+@notes Output path is derived from the first source file by stripping .aria, or from directory name if input is a directory. For directory inputs, output goes to dir/dirname. [src: src/main.aria:424-451]
+@workflow expand_files -> _resolve_stdlib_files -> _resolve_runtime_path -> generate_from_sources -> print result.
+
+---
+
+@fn run_run
+@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
+@calls [run_build]
+@source_file src/main.aria
+@source_line 467
+@purpose Implements `aria run`: builds the executable then immediately executes it, returning the child process exit code.
+@effects All effects of run_build plus executes the compiled binary via _ariaExec.
+@errors Returns 1 on build failure; otherwise returns the executed program's exit code.
+@notes Despite the L1 annotation showing @calls [run_build], the implementation actually duplicates the build logic inline rather than calling run_build, and uses _ariaExec to run the result. [src: src/main.aria:467-498]
+
+---
+
+@fn run_test
+@sig (raw_files: [str], format: str, runtime_path: str) -> i64
+@calls [expand_files, generate_tests_from_sources]
+@source_file src/main.aria
+@source_line 500
+@purpose Implements `aria test`: compiles a test runner binary (with test block harness) and executes it.
+@effects Reads files, resolves stdlib dependencies, compiles test binary with _test_runner suffix, executes it.
+@errors Returns 1 on compilation failure. Returns the test binary's exit code on execution. [src: src/main.aria:526]
+@notes Exit code propagation was fixed in Sprint 1 — previously discarded _ariaExec return value.
+
+---
+
+@fn run_explain
+@sig (files: [str]) -> i64
+@calls [describe_code]
+@source_file src/main.aria
+@source_line 532
+@purpose Implements `aria explain E0100`: looks up an error code and prints a human-readable explanation with category information.
+@effects Writes explanation to stdout.
+@errors Returns 1 if no error code argument given or if the code is unknown.
+@notes Error categories are determined by prefix ranges (E000x=Syntax, E001x=Type, etc.). Only a handful of codes have detailed explanations; others get a generic message. [src: src/main.aria:565-585]
+
+---
+
+@fn run_fix
+@sig (raw_files: [str], format: str) -> i64
+@calls [expand_files, check_source]
+@source_file src/main.aria
+@source_line 589
+@purpose Implements `aria fix`: runs the checker and prints auto-fix suggestions from diagnostics. Does not yet apply fixes automatically.
+@effects Reads files, runs checker, prints fix suggestions to stdout.
+@notes Currently suggestion-only — prints "Use --apply to apply them" but --apply is not yet implemented. Fix suggestions come from the diagnostic's suggestions field. [src: src/main.aria:618]
+@post Always returns 0 regardless of whether fixable issues were found.
+
+---
+
+@fn run_bench
+@sig (raw_files: [str], format: str, runtime_path: str) -> i64
+@calls [expand_files, generate_bench_from_sources]
+@source_file src/main.aria
+@source_line 625
+@purpose Implements `aria bench`: compiles a benchmark runner binary and executes it.
+@effects Reads files, resolves stdlib dependencies, compiles bench binary with _bench_runner suffix, executes it.
+@errors Returns 1 on compilation failure. Returns the bench binary's exit code on execution. [src: src/main.aria:646]
+@notes Mirrors run_test structure but uses generate_bench_from_sources instead. Exit code propagation fixed in Sprint 1.

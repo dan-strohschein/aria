@@ -1,0 +1,406 @@
+@module lexer
+@lang aria
+@aid_version 0.2
+@purpose Tokenizes Aria source code into a stream of typed tokens
+@depends [diagnostic]
+
+---
+
+@type TokenKind
+@kind sum
+@variants
+  TkIdent — Identifier
+  TkIntLit — Integer literal
+  TkFloatLit — Float literal
+  TkStringLit — String literal
+  TkCharLit — Character literal
+  TkBoolTrue — true keyword
+  TkBoolFalse — false keyword
+  TkRawStringLit — Raw string r"..."
+  TkTripleStringLit — Triple-quoted string
+  TkDurationLit — Duration literal
+  TkSizeLit — Size literal
+  TkStringStart — Start of interpolated string
+  TkStringMiddle — Middle segment of interpolated string
+  TkStringEnd — End of interpolated string
+  TkMod — mod keyword
+  TkUse — use keyword
+  TkPub — pub keyword
+  TkFn — fn keyword
+  TkType — type keyword
+  TkEnum — enum keyword
+  TkTrait — trait keyword
+  TkImpl — impl keyword
+  TkStruct — struct keyword
+  TkEntry — entry keyword
+  TkIf — if keyword
+  TkElse — else keyword
+  TkMatch — match keyword
+  TkFor — for keyword
+  TkIn — in keyword
+  TkWhile — while keyword
+  TkLoop — loop keyword
+  TkBreak — break keyword
+  TkContinue — continue keyword
+  TkReturn — return keyword
+  TkMut — mut keyword
+  TkConst — const keyword
+  TkDefer — defer keyword
+  TkWith — with keyword
+  TkCatch — catch keyword
+  TkTest — test keyword
+  TkAssert — assert keyword
+  TkDerives — derives keyword
+  TkWhere — where keyword
+  TkAs — as keyword
+  TkIs — is keyword
+  TkSelf — self keyword
+  TkSelfType — Self keyword
+  TkSpawn — spawn keyword
+  TkScope — scope keyword
+  TkSelect — select keyword
+  TkBench — bench keyword
+  TkBefore — before keyword
+  TkAfter — after keyword
+  TkYield — yield keyword
+  TkMock — mock keyword
+  TkExtern — extern keyword
+  TkPlus — +
+  TkMinus — -
+  TkStar — *
+  TkSlash — /
+  TkPercent — %
+  TkAmpersand — &
+  TkPipe — |
+  TkCaret — ^
+  TkTilde — ~
+  TkBang — !
+  TkLShift — <<
+  TkRShift — >>
+  TkEqEq — ==
+  TkBangEq — !=
+  TkLt — <
+  TkGt — >
+  TkLtEq — <=
+  TkGtEq — >=
+  TkAmpAmp — &&
+  TkPipePipe — ||
+  TkDotDot — ..
+  TkDotDotEq — ..=
+  TkPipeGt — |>
+  TkQuestion — ?
+  TkQuestionDot — ?.
+  TkQuestionQuestion — ??
+  TkArrow — ->
+  TkFatArrow — =>
+  TkLParen — (
+  TkRParen — )
+  TkLBracket — [
+  TkRBracket — ]
+  TkLBrace — {
+  TkRBrace — }
+  TkComma — ,
+  TkColon — :
+  TkDot — .
+  TkDotLBrace — .{
+  TkAt — @
+  TkEq — =
+  TkColonEq — :=
+  TkNewline — Newline (statement terminator)
+  TkEof — End of file
+  TkIllegal — Unrecognized token
+@source_file src/lexer/token.aria
+@source_line 12
+
+---
+
+@type Token
+@kind struct
+@fields
+  kind: TokenKind — Token classification
+  text: str — Source text of the token
+  line: i64 — 1-based line number
+  col: i64 — 1-based column number
+  offset: i64 — Byte offset into source
+@source_file src/lexer/token.aria
+@source_line 124
+
+---
+
+@type Lexer
+@kind struct
+@fields
+  source: str — Full source text
+  file: str — Source file path
+  pos: i64 — Current byte position
+  line: i64 — Current line number
+  col: i64 — Current column number
+  tokens: [Token] — Accumulated tokens
+  diagnostics: DiagnosticBag — Accumulated diagnostics
+  paren_depth: i64 — Parenthesis nesting depth
+  bracket_depth: i64 — Bracket nesting depth
+  brace_depth: i64 — Brace nesting depth
+  interp_depth: i64 — String interpolation nesting depth
+  interp_brace_depth: i64 — Brace depth within interpolation
+@source_file src/lexer/lexer.aria
+@source_line 49
+
+---
+
+@fn new_token
+@sig (kind: TokenKind, text: str, line: i64, col: i64, offset: i64) -> Token
+@source_file src/lexer/token.aria
+@source_line 132
+
+---
+
+@fn token_name
+@sig (kind: TokenKind) -> str
+@source_file src/lexer/token.aria
+@source_line 137
+
+---
+
+@fn lookup_keyword
+@sig (text: str) -> TokenKind
+@source_file src/lexer/token.aria
+@source_line 242
+
+---
+
+@fn is_keyword
+@sig (kind: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 290
+
+---
+
+@fn terminates_statement
+@sig (kind: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 307
+
+---
+
+@fn kind_eq
+@sig (a: TokenKind, b: TokenKind) -> bool
+@source_file src/lexer/token.aria
+@source_line 335
+
+---
+
+@fn new_lexer
+@sig (source: str, file: str) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 69
+
+---
+
+@fn tokenize
+@sig (source: str, file: str) -> Lexer
+@calls [new_lexer, _scan_ident, _scan_number, _scan_string, _scan_char, _scan_raw_string, _scan_triple_string, _scan_comment]
+@source_file src/lexer/lexer.aria
+@source_line 518
+
+---
+
+@fn get_tokens
+@sig (lex: Lexer) -> [Token]
+@source_file src/lexer/lexer.aria
+@source_line 807
+
+---
+
+@fn get_diagnostics
+@sig (lex: Lexer) -> DiagnosticBag
+@source_file src/lexer/lexer.aria
+@source_line 809
+
+---
+
+@fn _is_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 15
+
+---
+
+@fn _is_hex_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 19
+
+---
+
+@fn _is_octal_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 24
+
+---
+
+@fn _is_binary_digit
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 28
+
+---
+
+@fn _is_alpha
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 30
+
+---
+
+@fn _is_alpha_num
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 43
+
+---
+
+@fn _is_whitespace
+@sig (c: str) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 45
+
+---
+
+@fn _peek
+@sig (lex: Lexer) -> str
+@source_file src/lexer/lexer.aria
+@source_line 85
+
+---
+
+@fn _peek_next
+@sig (lex: Lexer) -> str
+@source_file src/lexer/lexer.aria
+@source_line 92
+
+---
+
+@fn _at_end
+@sig (lex: Lexer) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 99
+
+---
+
+@fn _advance
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 101
+
+---
+
+@fn _add_token
+@sig (lex: Lexer, kind: TokenKind, text: str, start_line: i64, start_col: i64, start_offset: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 120
+
+---
+
+@fn _add_error
+@sig (lex: Lexer, code: str, message: str) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 140
+
+---
+
+@fn _in_delimiters
+@sig (lex: Lexer) -> bool
+@source_file src/lexer/lexer.aria
+@source_line 158
+
+---
+
+@fn _set_depth
+@sig (lex: Lexer, paren: i64, bracket: i64, brace: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 161
+
+---
+
+@fn _set_interp_brace
+@sig (lex: Lexer, bd: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 172
+
+---
+
+@fn _set_interp
+@sig (lex: Lexer, depth: i64) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 186
+
+---
+
+@fn _newline
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 200
+
+---
+
+@fn _last_token_kind
+@sig (lex: Lexer) -> TokenKind
+@source_file src/lexer/lexer.aria
+@source_line 215
+
+---
+
+@fn _scan_ident
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 225
+
+---
+
+@fn _scan_number
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 237
+
+---
+
+@fn _scan_char
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 350
+
+---
+
+@fn _scan_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 367
+
+---
+
+@fn _scan_string_impl
+@sig (lex: Lexer, is_continuation: bool) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 371
+
+---
+
+@fn _scan_raw_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 441
+
+---
+
+@fn _scan_triple_string
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 477
+
+---
+
+@fn _scan_comment
+@sig (lex: Lexer) -> Lexer
+@source_file src/lexer/lexer.aria
+@source_line 518

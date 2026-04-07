@@ -1,0 +1,10 @@
+// test-expect: hkt_test passed
+
+fn identity_wrap[F[_], A](val: F[A]) -> F[A] = val
+
+entry {
+    xs := [1, 2, 3]
+    ys := identity_wrap(xs)
+    assert ys.len() == 3
+    println("hkt_test passed")
+}

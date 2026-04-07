@@ -1,0 +1,96 @@
+mod property
+
+// ============================================================
+// Property-Based Testing Library for Aria
+//
+// Provides forAll for testing invariants over generated values.
+// Uses a linear congruential generator (LCG) for reproducible
+// pseudo-random sequences.
+//
+// Usage:
+//   test "addition is commutative" {
+//     forAll(gen_i64, fn(x: i64) -> bool => x + 0 == x, 42, 100)
+//   }
+// ============================================================
+
+// --- Random Number Generator (LCG) ---
+
+// Linear congruential generator: seed → next pseudo-random i64.
+// Constants from Knuth's MMIX. Deterministic given the same seed.
+fn lcg_next(seed: i64) -> i64 {
+    raw := seed * 6364136223846793005 + 1442695040888963407
+    // Mask to positive range
+    if raw < 0 { return 0 - raw }
+    raw
+}
+
+// --- Generators ---
+// Each generator takes a seed and returns a value in its domain.
+
+// Generates an i64 in the range [0, max). Returns (value, next_seed).
+fn gen_range(seed: i64, max: i64) -> i64 {
+    s := lcg_next(seed)
+    if max <= 0 { return 0 }
+    r := s % max
+    if r < 0 { return 0 - r }
+    r
+}
+
+// Generates an i64 in [-1000, 1000)
+fn gen_i64_small(seed: i64) -> i64 {
+    s := lcg_next(seed)
+    r := s % 2000
+    if r < 0 { return r + 2000 - 1000 }
+    r - 1000
+}
+
+// Generates a bool
+fn gen_bool(seed: i64) -> bool {
+    s := lcg_next(seed)
+    s % 2 == 0
+}
+
+// --- forAll ---
+
+// Tests a property over `count` randomly generated i64 values.
+// Asserts the property holds for each; fails on first violation.
+// Returns the seed after all iterations (for chaining).
+fn forAll_i64(prop: fn(i64) -> bool, seed: i64, count: i64) -> i64 {
+    mut s := seed
+    mut i := 0
+    while i < count {
+        s = lcg_next(s)
+        val := gen_i64_small(s)
+        assert prop(val)
+        i = i + 1
+    }
+    s
+}
+
+// Tests a property over generated bools.
+fn forAll_bool(prop: fn(bool) -> bool, seed: i64, count: i64) -> i64 {
+    mut s := seed
+    mut i := 0
+    while i < count {
+        s = lcg_next(s)
+        val := gen_bool(s)
+        assert prop(val)
+        i = i + 1
+    }
+    s
+}
+
+// Tests a 2-argument property over pairs of i64 values.
+fn forAll_pair(prop: fn(i64, i64) -> bool, seed: i64, count: i64) -> i64 {
+    mut s := seed
+    mut i := 0
+    while i < count {
+        s = lcg_next(s)
+        a := gen_i64_small(s)
+        s = lcg_next(s)
+        b := gen_i64_small(s)
+        assert prop(a, b)
+        i = i + 1
+    }
+    s
+}

@@ -472,6 +472,72 @@ Aria is designed for AI-assisted development. Three files enable any AI to gener
 | [`.cursorrules`](.cursorrules) | Auto-loaded by Cursor IDE |
 | [`.github/copilot-instructions.md`](.github/copilot-instructions.md) | Auto-loaded by GitHub Copilot |
 
+## Editor Support (LSP)
+
+Aria includes a Language Server Protocol (LSP) server and a VSCode extension for editor integration.
+
+### Features
+
+- **Real-time diagnostics** — syntax errors, type errors, and warnings appear inline as you type
+- **Document symbols** — Outline view (Cmd+Shift+O) shows functions, types, traits, constants, entry blocks, and tests
+- **Syntax highlighting** — full TextMate grammar for all Aria constructs
+
+### Building the LSP Server
+
+The LSP server lives in the `lsp/` directory as a standalone Go module:
+
+```bash
+cd lsp
+
+# Build just the LSP server
+make build
+
+# Build everything (compiler + LSP + VSCode extension)
+make all
+
+# Run tests
+make test
+
+# Install aria-lsp to ~/go/bin/
+make install
+```
+
+#### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Build the `aria-lsp` binary |
+| `make clean` | Remove the binary |
+| `make test` | Run Go tests |
+| `make vet` | Run `go vet` |
+| `make compiler` | Build the bootstrap compiler |
+| `make vscode` | Install npm deps and compile the VSCode extension |
+| `make install` | Build and copy `aria-lsp` to `~/go/bin/` |
+| `make all` | Build compiler, LSP server, and VSCode extension |
+
+### VSCode Extension Setup
+
+```bash
+# Build the extension
+cd vscode
+npm install
+npx tsc -p ./
+
+# Install in VSCode (from the vscode/ directory)
+code --install-extension .
+```
+
+The extension requires `aria-lsp` and `aria` (the compiler) on your PATH. You can configure custom paths in VSCode settings:
+
+- `aria.lsp.path` — path to the `aria-lsp` binary (default: `"aria-lsp"`)
+- `aria.compiler.path` — path to the `aria` compiler binary (default: `"aria"`)
+
+The LSP server can also be configured via environment variable `ARIA_COMPILER` or the `--compiler` flag:
+
+```bash
+aria-lsp --compiler /path/to/aria
+```
+
 ## Documentation
 
 - **Language specification**: [`aria-docs`](https://github.com/dan-strohschein/aria-docs) (33 spec files)

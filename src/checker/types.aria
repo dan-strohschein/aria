@@ -38,6 +38,7 @@ type TypeKind =
     | TyNever
     | TyUnknown
     | TyNone
+    | TyApplied
 
 fn type_kind_name(k: TypeKind) -> str = match k {
     TyI8 => "i8"
@@ -65,6 +66,7 @@ fn type_kind_name(k: TypeKind) -> str = match k {
     TyNever => "Never"
     TyUnknown => "Unknown"
     TyNone => "None"
+    TyApplied => "Applied"
 }
 
 fn tk_eq(a: TypeKind, b: TypeKind) -> bool =
@@ -110,6 +112,12 @@ fn mk_optional_type(inner_id: i64) -> TypeInfo =
 fn mk_typevar(name: str) -> TypeInfo =
     TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: 0}
 
+fn mk_hkt_typevar(name: str, arity: i64) -> TypeInfo =
+    TypeInfo{kind: TyTypeVar, name: name, type_id: 0, type_id2: 0, param_start: 0, param_count: arity}
+
+fn mk_applied_type(constructor_id: i64, arg_id: i64) -> TypeInfo =
+    TypeInfo{kind: TyApplied, name: "", type_id: constructor_id, type_id2: arg_id, param_start: 0, param_count: 0}
+
 // Tuple type: element type IDs encoded as comma-delimited string in name field,
 // param_count = arity (number of elements)
 fn mk_tuple_type(elem_ids: str, arity: i64) -> TypeInfo =
@@ -119,6 +127,7 @@ fn mk_tuple_type(elem_ids: str, arity: i64) -> TypeInfo =
 
 struct TypeStore {
     types: [TypeInfo]
+    name_index: StrMap
 }
 
 // Well-known type IDs (indices into the store)
@@ -175,11 +184,19 @@ fn new_store() -> TypeStore {
     types = types.append(mk_named_type("Task"))      // 18: TY_TASK
     types = types.append(mk_named_type("ChanSend"))  // 19: TY_CHAN_SEND
     types = types.append(mk_named_type("ChanRecv"))  // 20: TY_CHAN_RECV
-    TypeStore{types: types}
+    TypeStore{types: types, name_index: strmap_new()}
 }
 
-fn store_add(store: TypeStore, info: TypeInfo) -> TypeStore =
-    TypeStore{types: store.types.append(info)}
+fn store_add(store: TypeStore, info: TypeInfo) -> TypeStore {
+    new_types := store.types.append(info)
+    new_idx := new_types.len() - 1
+    kn := type_kind_name(info.kind)
+    // Index named types and type variables for fast resolve_type_name
+    if (kn == "Named" || kn == "TypeVar") && info.name.len() > 0 {
+        return TypeStore{types: new_types, name_index: strmap_put(store.name_index, info.name, new_idx)}
+    }
+    TypeStore{types: new_types, name_index: store.name_index}
+}
 
 fn store_get(store: TypeStore, id: i64) -> TypeInfo {
     if id >= 0 && id < store.types.len() {
@@ -189,6 +206,26 @@ fn store_get(store: TypeStore, id: i64) -> TypeInfo {
 }
 
 fn store_last_id(store: TypeStore) -> i64 = store.types.len() - 1
+
+// Canonicalized store_add: find existing equivalent type or add new one.
+// Returns the type ID (existing or newly added).
+fn store_find_type(store: TypeStore, info: TypeInfo) -> i64 {
+    kn := type_kind_name(info.kind)
+    mut i := 1
+    while i < store.types.len() {
+        existing := store.types[i]
+        if type_kind_name(existing.kind) == kn {
+            if kn == "Array" && existing.type_id == info.type_id { return i }
+            if kn == "Optional" && existing.type_id == info.type_id { return i }
+            if kn == "Result" && existing.type_id == info.type_id && existing.type_id2 == info.type_id2 { return i }
+            if kn == "Named" && existing.name == info.name { return i }
+            if kn == "TypeVar" && existing.name == info.name { return i }
+            if kn == "Tuple" && existing.name == info.name && existing.param_count == info.param_count { return i }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
 
 fn store_size(store: TypeStore) -> i64 = store.types.len()
 
@@ -271,6 +308,19 @@ fn substitute_type(store: TypeStore, tid: i64, typevar_id: i64, concrete_id: i64
         elem := substitute_type(store, info.type_id, typevar_id, concrete_id)
         if elem == info.type_id { return tid }
         return elem  // caller must add new array type
+    }
+    if kn == "Applied" {
+        // F[A] — substitute both constructor and arg
+        new_ctor := substitute_type(store, info.type_id, typevar_id, concrete_id)
+        new_arg := substitute_type(store, info.type_id2, typevar_id, concrete_id)
+        // If constructor resolved to _Array, reconstruct as Array type
+        if new_ctor > 0 && new_ctor < store.types.len() {
+            ctor_info := store.types[new_ctor]
+            if type_kind_name(ctor_info.kind) == "Named" && ctor_info.name == "_Array" {
+                return new_arg  // The array type is just the element type — mk_array_type wraps at call site
+            }
+        }
+        return tid
     }
     tid
 }
@@ -355,6 +405,24 @@ fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
     if types_equal(store, src, dst) { return true }
     if src == TY_NEVER { return true }
     if src == TY_UNKNOWN || dst == TY_UNKNOWN { return true }
+    // Structural assignability: accept Unknown inner types in containers
+    if src > 0 && src < store.types.len() && dst > 0 && dst < store.types.len() {
+        si := store.types[src]
+        di := store.types[dst]
+        sk := type_kind_name(si.kind)
+        dk := type_kind_name(di.kind)
+        if sk == dk {
+            if sk == "Optional" || sk == "Array" {
+                if si.type_id == TY_UNKNOWN || di.type_id == TY_UNKNOWN { return true }
+                return is_assignable(store, si.type_id, di.type_id)
+            }
+            if sk == "Result" {
+                ok_ok := si.type_id == TY_UNKNOWN || di.type_id == TY_UNKNOWN || is_assignable(store, si.type_id, di.type_id)
+                err_ok := si.type_id2 == TY_UNKNOWN || di.type_id2 == TY_UNKNOWN || is_assignable(store, si.type_id2, di.type_id2)
+                return ok_ok && err_ok
+            }
+        }
+    }
     return false
 }
 
@@ -375,11 +443,28 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
     if name == "str" { return TY_STR }
     if name == "char" { return TY_CHAR }
     if name == "unit" { return TY_UNIT }
-    // Search for named types and type variables
-    mut i := 21  // after well-known + reserved concurrency types (0-20)
+    // Fast path: hash index lookup for named types and type variables
+    idx := strmap_get(store.name_index, name)
+    if idx > 0 && idx < store.types.len() {
+        info := store.types[idx]
+        if type_kind_name(info.kind) == "Named" && info.name == name {
+            if info.type_id2 == 1 && info.type_id > 0 {
+                return info.type_id
+            }
+            return idx
+        }
+        if type_kind_name(info.kind) == "TypeVar" && info.name == name {
+            return idx
+        }
+    }
+    // Fallback: linear scan for entries not yet indexed
+    mut i := 21
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {
+            if info.type_id2 == 1 && info.type_id > 0 {
+                return info.type_id
+            }
             return i
         }
         if type_kind_name(info.kind) == "TypeVar" && info.name == name {
@@ -530,25 +615,26 @@ struct FnSig {
     has_net: bool
     has_ffi: bool
     has_async: bool
+    user_effects: [str]
 }
 
 fn _sentinel_fn_sig() -> FnSig =
     FnSig{name: "", param_names: [""], param_types: [0], return_type: 0, error_type: 0,
            generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
            generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0,
-           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false, user_effects: [""]}
 
 fn new_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64) -> FnSig =
     FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
            generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
            generic_bound_0: "", generic_bound_1: "", generic_bound_2: "", token_start: 0,
-           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false, user_effects: [""]}
 
 fn new_generic_fn_sig(name: str, pnames: [str], ptypes: [i64], ret: i64, err: i64, gc: i64, gn0: str, gn1: str, gn2: str, gb0: str, gb1: str, gb2: str, tstart: i64) -> FnSig =
     FnSig{name: name, param_names: pnames, param_types: ptypes, return_type: ret, error_type: err,
            generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2,
            generic_bound_0: gb0, generic_bound_1: gb1, generic_bound_2: gb2, token_start: tstart,
-           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false}
+           has_io: false, has_fs: false, has_net: false, has_ffi: false, has_async: false, user_effects: [""]}
 
 fn fn_is_generic(sig: FnSig) -> bool = sig.generic_count > 0
 
@@ -560,12 +646,39 @@ fn fn_has_effect(sig: FnSig, effect: str) -> bool {
     if effect == "Net" { return sig.has_net }
     if effect == "Ffi" { return sig.has_ffi }
     if effect == "Async" { return sig.has_async }
+    // Check user-defined effects (exact match)
+    mut i := 1
+    while i < sig.user_effects.len() {
+        if sig.user_effects[i] == effect { return true }
+        i = i + 1
+    }
+    false
+}
+
+// Transitive effect check: uses TraitRegistry to resolve effect hierarchy.
+// E.g., if effect "log" implies "Io", then fn_has_effect_t(sig_with_log, "Io", treg) == true.
+fn fn_has_effect_t(sig: FnSig, effect: str, treg: TraitRegistry) -> bool {
+    if fn_has_effect(sig, effect) { return true }
+    // Check if any user effect transitively implies the required effect
+    mut i := 1
+    while i < sig.user_effects.len() {
+        ue := sig.user_effects[i]
+        tdef := treg_find_trait(treg, ue)
+        if tdef.name != "" {
+            mut pi := 1
+            while pi < tdef.parent_traits.len() {
+                if tdef.parent_traits[pi] == effect { return true }
+                pi = pi + 1
+            }
+        }
+        i = i + 1
+    }
     false
 }
 
 fn fn_is_pure(sig: FnSig) -> bool =
     sig.has_io == false && sig.has_fs == false && sig.has_net == false &&
-    sig.has_ffi == false && sig.has_async == false
+    sig.has_ffi == false && sig.has_async == false && sig.user_effects.len() <= 1
 
 fn _builtin_effect(name: str) -> str {
     // File system operations
@@ -594,7 +707,16 @@ fn sig_set_effects(sig: FnSig, io: bool, fs: bool, net: bool, ffi: bool, async_e
            generic_name_1: sig.generic_name_1, generic_name_2: sig.generic_name_2,
            generic_bound_0: sig.generic_bound_0, generic_bound_1: sig.generic_bound_1,
            generic_bound_2: sig.generic_bound_2, token_start: sig.token_start,
-           has_io: io, has_fs: fs, has_net: net, has_ffi: ffi, has_async: async_e}
+           has_io: io, has_fs: fs, has_net: net, has_ffi: ffi, has_async: async_e, user_effects: sig.user_effects}
+
+fn sig_set_user_effects(sig: FnSig, effects: [str]) -> FnSig =
+    FnSig{name: sig.name, param_names: sig.param_names, param_types: sig.param_types,
+           return_type: sig.return_type, error_type: sig.error_type,
+           generic_count: sig.generic_count, generic_name_0: sig.generic_name_0,
+           generic_name_1: sig.generic_name_1, generic_name_2: sig.generic_name_2,
+           generic_bound_0: sig.generic_bound_0, generic_bound_1: sig.generic_bound_1,
+           generic_bound_2: sig.generic_bound_2, token_start: sig.token_start,
+           has_io: sig.has_io, has_fs: sig.has_fs, has_net: sig.has_net, has_ffi: sig.has_ffi, has_async: sig.has_async, user_effects: effects}
 
 // --- MonoSpec (monomorphization specialization record) ---
 
@@ -619,6 +741,10 @@ struct TypeRegistry {
     deprecated_names: [str]
     deprecated_msgs: [str]
     cold_names: [str]
+    // Function names referenced as values (e.g., passed to HOFs) — drives trampoline emission
+    fn_value_refs: [str]
+    // Bound method refs (obj.method) — need a different trampoline that extracts self from env[0]
+    bound_fn_value_refs: [str]
 }
 
 fn new_registry() -> TypeRegistry =
@@ -628,25 +754,50 @@ fn new_registry() -> TypeRegistry =
         mono_specs: [_sentinel_mono_spec()],
         deprecated_names: [""],
         deprecated_msgs: [""],
-        cold_names: [""]
+        cold_names: [""],
+        fn_value_refs: [""],
+        bound_fn_value_refs: [""]
     }
 
 fn reg_add_struct(reg: TypeRegistry, def: StructDef) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
+    TypeRegistry{struct_defs: reg.struct_defs.append(def), fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names, fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs}
 
 fn reg_add_fn(reg: TypeRegistry, sig: FnSig) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig), mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs.append(sig), mono_specs: reg.mono_specs, deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names, fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs}
 
 fn reg_add_mono(reg: TypeRegistry, spec: MonoSpec) -> TypeRegistry =
-    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs.append(spec), deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names}
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs.append(spec), deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names, fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs}
 
 fn reg_add_deprecated(reg: TypeRegistry, name: str, msg: str) -> TypeRegistry =
     TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
-                 deprecated_names: reg.deprecated_names.append(name), deprecated_msgs: reg.deprecated_msgs.append(msg), cold_names: reg.cold_names}
+                 deprecated_names: reg.deprecated_names.append(name), deprecated_msgs: reg.deprecated_msgs.append(msg), cold_names: reg.cold_names, fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs}
 
 fn reg_add_cold(reg: TypeRegistry, name: str) -> TypeRegistry =
     TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
-                 deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names.append(name)}
+                 deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names.append(name), fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs}
+
+fn reg_add_fn_value_ref(reg: TypeRegistry, fname: str) -> TypeRegistry {
+    // Dedup before append
+    mut i := 1
+    while i < reg.fn_value_refs.len() {
+        if reg.fn_value_refs[i] == fname { return reg }
+        i = i + 1
+    }
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
+                 deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names,
+                 fn_value_refs: reg.fn_value_refs.append(fname), bound_fn_value_refs: reg.bound_fn_value_refs}
+}
+
+fn reg_add_bound_fn_value_ref(reg: TypeRegistry, fname: str) -> TypeRegistry {
+    mut i := 1
+    while i < reg.bound_fn_value_refs.len() {
+        if reg.bound_fn_value_refs[i] == fname { return reg }
+        i = i + 1
+    }
+    TypeRegistry{struct_defs: reg.struct_defs, fn_sigs: reg.fn_sigs, mono_specs: reg.mono_specs,
+                 deprecated_names: reg.deprecated_names, deprecated_msgs: reg.deprecated_msgs, cold_names: reg.cold_names,
+                 fn_value_refs: reg.fn_value_refs, bound_fn_value_refs: reg.bound_fn_value_refs.append(fname)}
+}
 
 fn reg_is_deprecated(reg: TypeRegistry, name: str) -> bool {
     mut i := 1
@@ -680,6 +831,21 @@ fn reg_find_mono(reg: TypeRegistry, specialized_name: str) -> MonoSpec {
     while i < reg.mono_specs.len() {
         if reg.mono_specs[i].specialized_name == specialized_name {
             return reg.mono_specs[i]
+        }
+        i = i + 1
+    }
+    _sentinel_mono_spec()
+}
+
+// Finds a mono spec by generic_name matching the first-arg type.
+// Used by the lowerer when generic params derived from assoc-bounds
+// aren't visible in the arg-based name.
+fn reg_find_mono_by_generic(reg: TypeRegistry, generic_name: str, type_arg_0: i64) -> MonoSpec {
+    mut i := 1
+    while i < reg.mono_specs.len() {
+        sp := reg.mono_specs[i]
+        if sp.generic_name == generic_name && sp.type_arg_0 == type_arg_0 {
+            return sp
         }
         i = i + 1
     }

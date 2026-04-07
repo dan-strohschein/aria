@@ -1,0 +1,47 @@
+@project aria-selfhosting-compiler
+@lang aria
+@aid_version 0.2
+@purpose Self-hosting Aria compiler — compiles Aria source to native executables via LLVM IR
+
+@layers
+  main — CLI dispatcher, command parsing, pipeline orchestration
+  lexer — Tokenization of Aria source into token streams
+  parser — Recursive descent parser producing AST node pool and declaration index
+  resolver — Name resolution, scope hierarchy, symbol table construction
+  checker — Type checking, trait resolution, generics, effect verification
+  codegen — IR lowering, LLVM IR generation, ARM64 emission, Mach-O linking
+  diagnostic — Error/warning types, rendering, error code registry
+
+@boundaries
+  lexer -> parser: FORBIDDEN
+  lexer -> resolver: FORBIDDEN
+  lexer -> checker: FORBIDDEN
+  lexer -> codegen: FORBIDDEN
+  parser -> resolver: FORBIDDEN
+  parser -> checker: FORBIDDEN
+  parser -> codegen: FORBIDDEN
+  resolver -> checker: FORBIDDEN
+  resolver -> codegen: FORBIDDEN
+  checker -> codegen: FORBIDDEN
+  codegen -> main: FORBIDDEN
+
+---
+
+@convention immutable_state
+@purpose All compiler state is immutable — functions return new copies
+@rule Functions take state struct as first param and return updated copy
+@rule No mutation of fields; struct updates produce new struct values
+
+---
+
+@convention internal_prefix
+@purpose Internal/private helpers use underscore prefix
+@rule Public API functions have no prefix: `tokenize`, `parse`, `resolve`, `check`
+@rule Internal helpers use underscore prefix: `_scan_number`, `_peek`
+
+---
+
+@convention pipeline_order
+@purpose Compilation follows a strict stage pipeline
+@rule Source -> Lexer -> Parser -> Resolver -> Checker -> Codegen
+@rule Each stage receives output of previous stage, no skipping
