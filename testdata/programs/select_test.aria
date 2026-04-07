@@ -1,4 +1,5 @@
 // Test: select expression with channels
+// test-requires: concurrency
 
 entry {
     // Test 1: select with default (non-blocking)

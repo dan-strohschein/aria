@@ -1,4 +1,5 @@
 // NEGATIVE TEST: effect violation — pure function calling effectful function
+// test-requires: negative-test
 
 fn effectful() with [Io] {
     println("side effect")

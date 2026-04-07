@@ -1,4 +1,5 @@
 // Test: FFI — calling C functions from Aria
+// test-requires: ffi
 
 extern fn abs(n: i64) -> i64
 
