@@ -16,7 +16,7 @@ use checker
 // Full pipeline: generate executable from source
 // ============================================================
 
-fn generate_from_source(source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag {
+fn generate_from_source(source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // 1. Lex
     lex := tokenize(source, file)
     toks := get_tokens(lex)
@@ -46,7 +46,7 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
 // Generate binary from IR module via LLVM IR + clang
 // ============================================================
 
-fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag {
+fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // IR validation available but suppressed — label tracking has false positives on match expressions
     // Uncomment when label encoding is fixed:
     // ir_errors := validate_ir_module(m)
@@ -153,7 +153,7 @@ fn _merge_remaining(result: [Token], new_toks: [Token], start: i64) -> [Token] {
     return out
 }
 
-fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
+fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // Read and lex each file, merge tokens
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true
@@ -201,7 +201,7 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
     generate_from_module(m, output_path, runtime_path)
 }
 
-fn check_sources(files: [str]) -> DiagnosticBag {
+fn check_sources(files: [str]) -> DiagnosticBag with [Fs] {
     // Lex, resolve, and type-check without codegen
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true
@@ -230,7 +230,7 @@ fn check_sources(files: [str]) -> DiagnosticBag {
     cr.diagnostics
 }
 
-fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str, parallel: bool) -> DiagnosticBag {
+fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str, parallel: bool) -> DiagnosticBag with [Io, Fs] {
     // Same pipeline as generate_from_sources but uses lower_for_tests
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true
@@ -264,7 +264,7 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
     generate_from_module(m, output_path, runtime_path)
 }
 
-fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag {
+fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // Same pipeline as test but for bench blocks
     mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}]
     mut first := true

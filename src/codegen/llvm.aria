@@ -269,7 +269,7 @@ fn generate_llvm_ir(m: IrModule) -> str {
 // Streaming variant: writes LLVM IR directly to file in chunks.
 // Each function's IR is generated, joined, written, and discarded.
 // This avoids holding the entire 22MB+ IR in memory at once.
-fn generate_llvm_ir_to_file(m: IrModule, path: str) {
+fn generate_llvm_ir_to_file(m: IrModule, path: str) with [Fs] {
     _generate_llvm_ir_to_file_target(m, path, "native")
     mut _void := 0
 }
@@ -563,7 +563,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
 // Streaming variant: write LLVM IR to file in chunks.
 // Reuses _generate_llvm_ir_target for the header/declarations and tail,
 // but writes each function's IR separately to avoid holding 22MB+ in memory.
-fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) {
+fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [Fs] {
     nl := _nl()
     si64 := _struct_i64_i64()
 

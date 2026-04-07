@@ -346,24 +346,8 @@ fn _pass1(r: Resolver, index: DeclIndex) -> Resolver {
         // Position to the declaration
         rr = _rset_pos(rr, decl.token_start)
 
-        if kname == "use" {
-            // Register imported module names and aliases
-            rr = _radv(rr)  // skip "use"
-            if _rk(rr) == "IDENT" {
-                name := _rcur(rr).text
-                span := _rspan(rr)
-                rr = _add_sym(rr, name, SkModule, span, false, false)
-                rr = _radv(rr)
-                if _rk(rr) == "as" {
-                    rr = _radv(rr)  // skip "as"
-                    if _rk(rr) == "IDENT" {
-                        alias_name := _rcur(rr).text
-                        alias_span := _rspan(rr)
-                        rr = _add_sym(rr, alias_name, SkModule, alias_span, false, false)
-                    }
-                }
-            }
-        } else if kname == "fn" {
+        // use declarations handled by pre-pass token scan above
+        if kname == "fn" {
             // Check for extern (name=="_extern") or alias (name starts with "_alias:")
             if decl.name == "_extern" {
                 // extern fn — scan the extern block for fn declarations
@@ -2256,6 +2240,24 @@ fn resolve(tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> Reso
 
     // Create module scope (id=2)
     r = _push_scope(r, ScModule, "module")
+
+    // Pre-pass: register use-imported module names via direct token scan
+    // (DeclIndex-based use registration may fail due to bootstrap DkUse encoding issues)
+    mut ui := 1
+    while ui < r.tokens.len() {
+        if token_name(r.tokens[ui].kind) == "use" {
+            next := ui + 1
+            if next < r.tokens.len() && token_name(r.tokens[next].kind) == "IDENT" {
+                mod_name := r.tokens[next].text
+                existing := lookup_local(r.table, r.current_scope, mod_name)
+                if existing.name == "" {
+                    sym := new_symbol(mod_name, SkModule, _builtin_span(), r.current_scope, false, false)
+                    r = _rset_table(r, add_symbol(r.table, sym))
+                }
+            }
+        }
+        ui = ui + 1
+    }
 
     // Pass 1: collect top-level declarations
     r = _pass1(r, index)
