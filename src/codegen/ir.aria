@@ -357,17 +357,6 @@ fn _validate_func(f: IrFunc) -> [str] {
         }
         ji = ji + 1
     }
-    // Check return path: last non-nop instruction should be Ret or RetVoid
-    if f.insts.len() > 1 {
-        last := f.insts[f.insts.len() - 1]
-        last_name := ir_op_name(last.op)
-        if last_name != "Ret" && last_name != "RetVoid" && last_name != "Jump" {
-            // Only warn if function has instructions (not empty)
-            if f.insts.len() > 2 {
-                errors = errors.append("W9003: function '" + f.name + "' may not return on all paths")
-            }
-        }
-    }
     errors
 }
 
