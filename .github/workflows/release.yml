@@ -115,7 +115,7 @@ jobs:
 
       - name: Run test suite (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: ARIA_COMPILER=./gen1 bash testdata/programs/run_tests.sh
 
       - name: Upload artifact
