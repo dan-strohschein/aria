@@ -47,11 +47,13 @@ fn generate_from_source(source: str, file: str, output_path: str, runtime_path: 
 // ============================================================
 
 fn generate_from_module(m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
-    // IR validation — check for common lowering errors
+    // IR validation — check for common lowering errors (errors only, not warnings)
     ir_errors := validate_ir_module(m)
     mut ie := 1
     while ie < ir_errors.len() {
-        println("IR validation: " + ir_errors[ie])
+        if ir_errors[ie].startsWith("E") {
+            println("IR validation: " + ir_errors[ie])
+        }
         ie = ie + 1
     }
 
