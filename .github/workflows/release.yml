@@ -98,7 +98,7 @@ jobs:
           fi
 
       - name: Gen0 → Gen1 (self-compile)
-        timeout-minutes: 20
+        timeout-minutes: 40
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
