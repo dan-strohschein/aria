@@ -138,6 +138,7 @@ void _aria_gc_frame_pop(void) {
 #define GC_INITIAL_CAPACITY   (64 * 1024)  // Initial tracking array size
 #define GC_GROWTH_FACTOR      2
 #define GC_DEFAULT_THRESHOLD  (256 * 1024 * 1024)  // 256MB default
+#define GC_INITIAL_THRESHOLD  (64 * 1024 * 1024)    // Start collecting at 64MB
 #define GC_THRESHOLD_GROW     1.5                   // Grow threshold after collection
 #define GC_MAX_THRESHOLD      (512 * 1024 * 1024)  // Cap at 512MB
 #define GC_TENURE_AGE         3   // Promote after surviving 3 minor GCs
@@ -273,6 +274,7 @@ static void _gc_init(void) {
     _gc.total_bytes = 0;
     _gc.enabled = 1;
     _gc.in_gc = 0;
+    _gc.threshold = GC_INITIAL_THRESHOLD;
     // Allow runtime threshold override: ARIA_GC_THRESHOLD=64m or ARIA_GC_THRESHOLD=off
     char *env = getenv("ARIA_GC_THRESHOLD");
     if (env) {
