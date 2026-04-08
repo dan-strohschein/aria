@@ -200,7 +200,10 @@ struct LT_label {
     id: i64
 }
 
-fn _t(n: i64) -> str = "%t" + i2s(n)
+fn _t(n: i64) -> str {
+    if n < 0 { return "%t0" }
+    "%t" + i2s(n)
+}
 fn _v(n: i64) -> str = "%v" + i2s(n)
 fn _lbl(n: i64) -> str = "L" + i2s(n)
 fn _fall(n: i64) -> str = "Lfall" + i2s(n)
