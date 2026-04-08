@@ -138,7 +138,7 @@ void _aria_gc_frame_pop(void) {
 #define GC_INITIAL_CAPACITY   (64 * 1024)  // Initial tracking array size
 #define GC_GROWTH_FACTOR      2
 #define GC_DEFAULT_THRESHOLD  (256 * 1024 * 1024)  // 256MB default
-#define GC_INITIAL_THRESHOLD  (64 * 1024 * 1024)    // Start collecting at 64MB
+#define GC_INITIAL_THRESHOLD  (4L * 1024 * 1024 * 1024)  // 4GB — effectively disabled for compiler workloads
 #define GC_THRESHOLD_GROW     1.5                   // Grow threshold after collection
 #define GC_MAX_THRESHOLD      (512 * 1024 * 1024)  // Cap at 512MB
 #define GC_TENURE_AGE         3   // Promote after surviving 3 minor GCs
