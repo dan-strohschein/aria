@@ -263,7 +263,7 @@ void _aria_gc_set_stack_bottom(void *addr) {
     _gc_stack_bottom = addr;
 }
 
-static void _gc_init(void) {
+void _gc_init(void) {
     if (_gc.ptrs) return;
     _gc.capacity = GC_INITIAL_CAPACITY;
     _gc.ptrs = (void **)calloc((size_t)_gc.capacity, sizeof(void *));
@@ -2797,15 +2797,42 @@ aria_int _aria_cancel_is_triggered(aria_int handle) {
 
 extern void _aria_entry(void);
 
-int main(int argc, char **argv) {
-    // Capture stack bottom for conservative GC scanning.
-    // On most platforms, the stack grows downward. main()'s frame
-    // is near the top (highest address). We want to scan from
-    // the current frame (low address during GC) up to here.
+// Run the Aria entry point on a thread with a large stack (64MB).
+// The default 8MB stack is too small for the self-hosting compiler's
+// deep call chains (lowerer + token array operations + recursive descent).
+#ifndef _WIN32
+#include <pthread.h>
+static int _saved_argc;
+static char **_saved_argv;
+static void *_aria_main_thread(void *arg) {
+    (void)arg;
     volatile aria_int stack_anchor = 0;
     _aria_gc_set_stack_bottom((void *)&stack_anchor);
+    _gc_init();  // Initialize GC before any allocation (reads ARIA_GC_THRESHOLD)
+    _aria_args_init(_saved_argc, _saved_argv);
+    _aria_entry();
+    return NULL;
+}
+#endif
 
+int main(int argc, char **argv) {
+#ifndef _WIN32
+    _saved_argc = argc;
+    _saved_argv = argv;
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);  // 64MB stack
+    pthread_create(&thread, &attr, _aria_main_thread, NULL);
+    pthread_attr_destroy(&attr);
+    void *retval;
+    pthread_join(thread, &retval);
+#else
+    volatile aria_int stack_anchor = 0;
+    _aria_gc_set_stack_bottom((void *)&stack_anchor);
+    _gc_init();  // Initialize GC before any allocation
     _aria_args_init(argc, argv);
     _aria_entry();
+#endif
     return 0;
 }
