@@ -1077,37 +1077,50 @@ fn _lower_block_node_result(l: Lowerer, node: Expr) -> LT {
     while si < node.list_count {
         idx_node := pool_get(ll.pool, node.list_start + si)
         child := pool_get(ll.pool, idx_node.c0)
-        // Position to the START of the statement in token stream
-        // (child.span.offset may point to an operator, not the first token)
+        // Dispatch based on AST node kind (not token position)
+        child_kind := expr_kind_name(child.kind)
+        is_last := si == node.list_count - 1
+        // Position to statement tokens for the token-walking lowerer functions
         tp := _find_tok_pos(ll, _expr_start_offset(ll.pool, idx_node.c0))
         ll = _lset_pos(ll, tp)
-        // Match the existing _lower_fn_body statement dispatch pattern.
-        // Use _lower_stmt for most statements (handles compound assignments),
-        // _lower_expr_result only for the last statement to capture implicit return.
-        k := _lk(ll)
-        is_last := si == node.list_count - 1
-        if k == "return" {
-            ll = _lower_stmt(ll)
+        if child_kind == "Return" {
+            // Use AST path: lower the return value expression via pool
+            if child.b1 {
+                // has value — lower the expression
+                r := _lower_expr_node(ll, child.c0)
+                ll = r.l
+                ll = _emit_defers(ll)
+                ret_type := _lget_type(ll, r.temp)
+                ll = _lemit(ll, new_inst(OpRet, 0, r.temp, 0, "", ret_type))
+            } else {
+                ll = _emit_defers(ll)
+                ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
+            }
             last_temp = -1
-        } else if k == "mut" || k == "break" || k == "continue" || k == "for" || k == "while" || k == "loop" || k == "assert" || k == "defer" || k == "with" {
+        } else if child_kind == "Binding" || child_kind == "Break" || child_kind == "Continue" || child_kind == "For" || child_kind == "While" || child_kind == "Loop" || child_kind == "Defer" || child_kind == "With" {
             ll = _lower_stmt(ll)
-        } else if k == "if" {
+        } else if child_kind == "If" {
             r := _lower_if(ll)
             ll = r.l
             last_temp = r.temp
-        } else if k == "match" {
+        } else if child_kind == "Match" {
             r := _lower_match(ll)
             ll = r.l
             last_temp = r.temp
         } else if is_last {
-            // Last statement — capture temp for implicit return
-            r := _lower_expr_result(ll)
+            // Last statement — try AST path first for expression result
+            r := _lower_expr_node(ll, idx_node.c0)
             ll = r.l
             last_temp = r.temp
         } else {
-            // Non-last statement — use _lower_stmt which handles
-            // compound assignments, catch, etc. via _lower_expr_or_binding
-            ll = _lower_stmt(ll)
+            // Non-last statement — dispatch via AST for expressions, token-walk for others
+            ck := expr_kind_name(child.kind)
+            if ck == "Binary" || ck == "Call" || ck == "MethodCall" || ck == "Unary" || ck == "Ident" || ck == "Assign" {
+                r := _lower_expr_node(ll, idx_node.c0)
+                ll = r.l
+            } else {
+                ll = _lower_stmt(ll)
+            }
         }
         ll = _lskip_nl(ll)
         si = si + 1
