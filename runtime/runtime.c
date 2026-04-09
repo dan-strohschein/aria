@@ -1638,38 +1638,31 @@ aria_int _aria_args_get(void) {
 }
 
 void _aria_args_init(int argc, char **argv) {
-    // Build an array of strings matching Aria's [str] layout
-    // Each string is represented as two i64s: ptr, len
-    // But in the current IR, args are stored as an array of str
-    // which the lowerer treats as pairs of (ptr, len) in fields
+    // Build an [str] array matching the compiler's string array layout.
+    // In Aria's IR, [str] stores each string as TWO consecutive elements
+    // in the underlying i64 array: [ptr, len, ptr, len, ...].
+    // The sentinel at index 0 is a single element (empty string ptr=0).
+    // String elements at index i use array slots i*2 and i*2+1 for ptr and len.
     //
-    // For simplicity, build a simple [str] array where each element
-    // is a pair of i64 values (ptr, len) stored in the array's data
-    aria_int arr = _aria_array_new(argc * 2 + 2);
+    // But actually, the lowerer's OpArrayGet for string arrays returns a POINTER
+    // to a 2-word struct {ptr, len}. So we store each string as a pointer to
+    // a heap-allocated {ptr, len} pair — ONE element per string, not two.
+    aria_int arr = _aria_array_new(argc + 2);
 
-    // Sentinel element (index 0) - empty string (use append to update length)
-    arr = _aria_array_append(arr,0);  // sentinel
+    // Sentinel at index 0: allocate a 2-word struct for empty string
+    aria_int *sentinel = (aria_int *)calloc(1, 16);
+    arr = _aria_array_append(arr, (aria_int)sentinel);
 
-    // For each argv entry, store two elements: ptr and len
-    // Actually, looking at how the bootstrap handles _ariaArgs:
-    // it returns []string with sentinel at index 0
-    // The IR represents this as an array of i64 where each i64
-    // is packed or is a pointer to a str struct.
-    //
-    // Let's match the bootstrap: build array with string representations
-    // Each element is a pointer to a 2-word struct {ptr, len}
     for (int i = 0; i < argc; i++) {
         aria_int slen = (aria_int)strlen(argv[i]);
         char *sptr = (char *)malloc((size_t)(slen + 1));
         memcpy(sptr, argv[i], (size_t)(slen + 1));
 
-        // Allocate a 2-word struct for the string
         aria_int *str_struct = (aria_int *)malloc(16);
         str_struct[0] = (aria_int)sptr;
         str_struct[1] = slen;
 
-        // Append the pointer to the struct as the element
-        arr = _aria_array_append(arr,(aria_int)str_struct);
+        arr = _aria_array_append(arr, (aria_int)str_struct);
     }
 
     _aria_args_array = arr;
