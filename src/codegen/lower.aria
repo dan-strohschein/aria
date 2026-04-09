@@ -3264,6 +3264,18 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             if sig.name != "" && fn_is_generic(sig) && is_blanket && bound_trait != "" && method_node.b1 {
                 // Generic blanket method: register per-concrete-type generic sigs
                 // so the mono pass can create _method_ConcreteType_U specializations.
+                // Find correct token_start by scanning the impl body for fn <raw_name>
+                mut method_tstart := sig.token_start
+                mut scan_pos := decl.body_start
+                while scan_pos < ll.tokens.len() - 1 {
+                    if token_name(ll.tokens[scan_pos].kind) == "fn" {
+                        if ll.tokens[scan_pos + 1].text == raw_name {
+                            method_tstart = scan_pos
+                            scan_pos = ll.tokens.len()
+                        }
+                    }
+                    scan_pos = scan_pos + 1
+                }
                 concrete_types := treg_types_implementing(ll.treg, bound_trait)
                 mut ci := 1
                 while ci < concrete_types.len() {
@@ -3271,8 +3283,6 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
                     spec_base := "_" + raw_name + "_" + ctype_name
                     existing_sig := reg_find_fn(ll.registry, spec_base)
                     if existing_sig.name == "" {
-                        // Create a generic FnSig with self typed to the concrete type
-                        // Copy sig but change name and set self's param type to concrete tid
                         ctype_id := _struct_type_id(ll.registry, ctype_name)
                         mut sp_ptypes := [0]
                         mut spi := 1
@@ -3284,7 +3294,7 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
                         }
                         sp_sig := new_generic_fn_sig(spec_base, sig.param_names, sp_ptypes, sig.return_type, sig.error_type,
                             sig.generic_count, sig.generic_name_0, sig.generic_name_1, sig.generic_name_2,
-                            sig.generic_bound_0, sig.generic_bound_1, sig.generic_bound_2, sig.token_start)
+                            sig.generic_bound_0, sig.generic_bound_1, sig.generic_bound_2, method_tstart)
                         ll = _lset_reg(ll, reg_add_fn(ll.registry, sp_sig))
                     }
                     ci = ci + 1
@@ -9687,8 +9697,9 @@ fn _lower_closure(l: Lowerer) -> LT {
     if _lk(ll) == "IDENT" && _lcur(ll).text == "once" {
         ll = _ladv(ll)
     }
-    // Generate unique closure name based on module function count
-    closure_name := "_closure_" + i2s(ll.module.funcs.len())
+    // Generate unique closure name using module-level counter
+    closure_name := "_closure_" + i2s(ll.module.closure_count)
+    ll = _lset_mod(ll, mod_next_closure(ll.module))
 
     // Parse parameter names and types from annotations via resolve_type_name
     mut param_names := [""]
