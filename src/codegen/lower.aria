@@ -1703,15 +1703,28 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // Lower receiver from AST
         recv := _lower_expr_node(ll, node.c0)
         ll = recv.l
+        method := node.s1
         // .to[Type]() and .trunc[Type]() — conversion with type arg in s2
-        if node.s2.len() > 0 && (node.s1 == "to" || node.s1 == "trunc") {
-            return _lower_conversion(ll, recv.temp, node.s1, node.s2)
+        if node.s2.len() > 0 && (method == "to" || method == "trunc") {
+            return _lower_conversion(ll, recv.temp, method, node.s2)
         }
-        // Find "(" token for this method call and delegate to token-walking
+        // AST path: lower arguments from pool, then dispatch to method codegen
+        if node.list_count > 0 {
+            arg1_r := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+            ll = arg1_r.l
+            mut arg2 := 0
+            if node.list_count > 1 {
+                arg2_r := _lower_expr_node(ll, pool_get(ll.pool, node.list_start + 1).c0)
+                ll = arg2_r.l
+                arg2 = arg2_r.temp
+            }
+            return _lower_method_with_args(ll, recv.temp, method, arg1_r.temp, arg2, node.list_count)
+        }
+        // Zero-arg methods: token-walking fallback
         mut tp := _find_tok_pos(ll, node.span.offset)
         while tp < ll.tokens.len() && token_name(ll.tokens[tp].kind) != "(" { tp = tp + 1 }
         ll = _lset_pos(ll, tp)
-        return _lower_method_call(ll, recv.temp, node.s1)
+        return _lower_method_call(ll, recv.temp, method)
     }
 
     // --- FieldAccess ---
@@ -8459,6 +8472,167 @@ fn _struct_field_count(reg: TypeRegistry, struct_name: str) -> i64 {
         i = i + 1
     }
     slots
+}
+
+// --- AST-based method call with pre-lowered arguments ---
+// Mirrors _lower_method_call but uses arg temps instead of token-walking _lower_expr.
+// This avoids unreliable _find_tok_pos positioning in multi-file compiled binaries.
+
+fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i64, arg_count: i64) -> LT {
+    mut ll := l
+    obj_type := _lget_type(ll, obj)
+
+    // --- String methods (type 12) ---
+    if method == "charAt" {
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrCharAt, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "startsWith" {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrStartsWith, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "endsWith" {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrEndsWith, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "indexOf" {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrIndexOf, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "contains" && obj_type == 12 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrContains, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "substring" {
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSubstring, nt.temp, obj, arg1, "", arg2))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "replace" {
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrReplace, nt.temp, obj, arg1, "", arg2))
+        ll = _lset_type(ll, nt.temp, 12)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "split" {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSplit, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 13)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // --- Array methods ---
+    if method == "append" {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        elem_type := _lget_type(ll, arg1)
+        if elem_type == 12 || obj_type == 13 {
+            ll = _lemit(ll, new_inst(OpArrayAppend, nt.temp, obj, arg1, "", 12))
+            ll = _lset_type(ll, nt.temp, 13)
+        } else {
+            ll = _lemit(ll, new_inst(OpArrayAppend, nt.temp, obj, arg1, "", 0))
+            if obj_type > 0 { ll = _lset_type(ll, nt.temp, obj_type) }
+        }
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "contains" && obj_type != 12 && obj_type != 301 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrContains, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // --- Map methods (type 300) ---
+    if method == "set" && obj_type == 300 {
+        ll = _lemit(ll, new_inst(OpMapSet, 0, obj, arg1, "", arg2))
+        return LT{l: ll, temp: obj}
+    }
+    if method == "get" && obj_type == 300 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpMapGet, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "has" && obj_type == 300 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpMapContains, nt.temp, obj, arg1, "", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // --- Set methods (type 301) ---
+    if method == "add" && obj_type == 301 {
+        ll = _lemit(ll, new_inst(OpSetAdd, 0, obj, arg1, "", 0))
+        return LT{l: ll, temp: obj}
+    }
+    if method == "contains" && obj_type == 301 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpSetContains, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "remove" && (obj_type == 300 || obj_type == 301) {
+        if obj_type == 301 {
+            ll = _lemit(ll, new_inst(OpSetRemove, 0, obj, arg1, "", 0))
+        }
+        return LT{l: ll, temp: obj}
+    }
+
+    // --- Channel methods ---
+    if method == "send" {
+        ll = _lemit(ll, new_inst(OpCall, 0, obj, arg1, "_ariaChanSend", 2))
+        return LT{l: ll, temp: obj}
+    }
+
+    // --- User-defined methods (qualified call: StructName_method) ---
+    sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+    if sname.len() > 0 {
+        qualified := sname + "_" + method
+        sig := reg_find_fn(ll.registry, qualified)
+        if sig.name != "" {
+            // Emit OpCall: pack obj + args into consecutive temps
+            base_nt := _lnew_temp(ll)
+            ll = base_nt.l
+            ll = _lemit(ll, new_inst(OpStore, base_nt.temp, obj, 0, "", 0))
+            if arg_count >= 1 {
+                a1_nt := _lnew_temp(ll)
+                ll = a1_nt.l
+                ll = _lemit(ll, new_inst(OpStore, a1_nt.temp, arg1, 0, "", 0))
+            }
+            if arg_count >= 2 {
+                a2_nt := _lnew_temp(ll)
+                ll = a2_nt.l
+                ll = _lemit(ll, new_inst(OpStore, a2_nt.temp, arg2, 0, "", 0))
+            }
+            result_nt := _lnew_temp(ll)
+            ll = result_nt.l
+            ll = _lemit(ll, new_inst(OpCall, result_nt.temp, base_nt.temp, arg_count + 1, qualified, sig.return_type))
+            if sig.return_type > 0 {
+                ll = _lset_type(ll, result_nt.temp, sig.return_type)
+            }
+            return LT{l: ll, temp: result_nt.temp}
+        }
+    }
+
+    // Fallback: return obj (method not recognized)
+    return LT{l: ll, temp: obj}
 }
 
 // --- Lower struct literal ---
