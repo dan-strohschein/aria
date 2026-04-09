@@ -2877,8 +2877,11 @@ fn _builtin_return_type(name: str) -> i64 {
        name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" {
         return 12
     }
-    if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" || name == "_ariaArgs" ||
-       name == "_ariaListDir" || name == "_ariaTcpClose" || name == "_ariaPgClose" ||
+    if name == "_ariaArgs" || name == "_ariaListDir" {
+        return 13  // returns [str] array
+    }
+    if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" ||
+       name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
        name == "_ariaMutexUnlock" {
         return 0
@@ -10742,10 +10745,11 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
     subj_type := _lget_type(ll, subj.temp)
     mut subj_tag := subj.temp  // for tag-only sums, subject IS the tag
     // For data sum types (struct-allocated), extract tag from slot 0
+    // Simple enums (no payload variants) are just i64 tags — no FieldGet needed
     sname := _struct_name_for_type(ll.store, ll.registry, subj_type)
     if sname.len() > 0 {
         sdef := reg_find_struct(ll.registry, sname)
-        if sdef.is_sum {
+        if sdef.is_sum && sum_has_data(sdef) {
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
             ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, subj.temp, 0, "_tag", 0))

@@ -106,7 +106,7 @@ fn _is_gc_root(f: IrFunc, temp: i64) -> bool {
     // Check temp_types first (set by lowerer)
     tt := _get_temp_type(f, temp)
     if tt == 1 { return false }  // Known i64 scalar
-    if tt == 12 { return false }  // Known string (on stack, not heap ptr)
+    if tt == 12 { return true }  // String temps may hold heap ptrs (concat, i2s, etc.)
     if tt >= 100 { return true }  // Known struct — definitely a root
 
     // Type 0 (unknown): scan ALL instructions writing to this temp.
