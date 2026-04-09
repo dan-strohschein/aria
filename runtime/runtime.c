@@ -2822,7 +2822,7 @@ int main(int argc, char **argv) {
     pthread_t thread;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);  // 64MB stack
+    pthread_attr_setstacksize(&attr, 512UL * 1024 * 1024);  // 512MB stack
     pthread_create(&thread, &attr, _aria_main_thread, NULL);
     pthread_attr_destroy(&attr);
     void *retval;
