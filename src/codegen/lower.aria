@@ -2205,7 +2205,13 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     }
 
     if nk == "Match" {
-        tp := _find_tok_pos(ll, node.span.offset)
+        mut tp := _find_tok_pos(ll, node.span.offset)
+        // Search for "match" token but limit to 20 positions to avoid overflow
+        mut search := 0
+        while tp < ll.tokens.len() && token_name(ll.tokens[tp].kind) != "match" && search < 20 {
+            tp = tp + 1
+            search = search + 1
+        }
         ll = _lset_pos(ll, tp)
         return _lower_match(ll)
     }
