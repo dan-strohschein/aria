@@ -267,6 +267,55 @@ fn _ends_with_aria(s: str) -> bool {
     s.substring(s.len() - 5, s.len()) == ".aria"
 }
 
+// --- Path helpers ---
+
+fn _dir_of(path: str) -> str {
+    mut last_slash := 0 - 1
+    mut i := 0
+    while i < path.len() {
+        if path.charAt(i) == "/" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "" }
+    path.substring(0, last_slash + 1)
+}
+
+// --- test-files directive ---
+// Parse `// test-files: file1.aria file2.aria` from the first 10 lines of a source file.
+// Returns resolved paths relative to the source file's directory.
+
+fn _parse_test_files_directive(file_path: str) -> [str] with [Fs] {
+    source := _ariaReadFile(file_path)
+    dir := _dir_of(file_path)
+    mut line_count := 0
+    mut i := 0
+    while i < source.len() && line_count < 10 {
+        if i == 0 || source.charAt(i - 1) == "\n" {
+            line_count = line_count + 1
+            prefix := "// test-files: "
+            if i + prefix.len() <= source.len() && source.substring(i, i + prefix.len()) == prefix {
+                mut end := i + prefix.len()
+                while end < source.len() && source.charAt(end) != "\n" {
+                    end = end + 1
+                }
+                line_val := source.substring(i + prefix.len(), end)
+                parts := line_val.split(" ")
+                mut result := [""]
+                mut pi := 1
+                while pi < parts.len() {
+                    if parts[pi].len() > 0 {
+                        result = result.append(dir + parts[pi])
+                    }
+                    pi = pi + 1
+                }
+                return result
+            }
+        }
+        i = i + 1
+    }
+    [""]
+}
+
 // --- Standard library auto-resolution ---
 // Detect `use <module>` in source files and auto-include lib/*.aria
 
@@ -538,6 +587,15 @@ fn expand_files(files: [str]) -> [str] with [Fs] {
             result = result.append(file)
         }
         i = i + 1
+    }
+    // Check for // test-files: directive in any input file
+    mut fi := 1
+    while fi < result.len() {
+        directed := _parse_test_files_directive(result[fi])
+        if directed.len() > 1 {
+            return _sort_by_module_priority(directed)
+        }
+        fi = fi + 1
     }
     // Sort by module dependency order so types are defined before referenced
     _sort_by_module_priority(result)
