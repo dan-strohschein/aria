@@ -1737,7 +1737,20 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         sname := _struct_name_for_type(ll.store, ll.registry, left_type)
         mut fidx := 0
         mut ft := 0
-        if sname != "" {
+        // Tuple field access: field name is a digit string ("0", "1", "2")
+        // Use the digit as the field index directly.
+        mut is_tuple_field := false
+        if field.len() > 0 {
+            ch := field.charAt(0)
+            if ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4" ||
+               ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9" {
+                is_tuple_field = true
+            }
+        }
+        if is_tuple_field {
+            fidx = _parse_int_literal(field)
+            ft = 1  // tuple fields default to i64; type system can refine later
+        } else if sname != "" {
             fidx = _field_index(ll.registry, sname, field)
             ft = _field_type_id(ll, sname, field)
         } else {
@@ -2813,9 +2826,83 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         return LT{l: ll, temp: nt_temp}
     }
 
+    // AST-based indirect call: name might be a local closure variable.
+    // Only trigger if the env slot is closure-typed: either the 600 sentinel
+    // (set by _lower_closure*) or a Function kind from the type store.
+    fn_slot := _lenv_lookup(ll, name)
+    mut is_closure_var := false
+    if fn_slot >= 0 {
+        slot_type := _lget_type(ll, fn_slot)
+        if slot_type == 600 {
+            is_closure_var = true
+        } else if slot_type > 16 {
+            ti_chk := store_get(ll.store, slot_type)
+            if type_kind_name(ti_chk.kind) == "Function" {
+                is_closure_var = true
+            }
+        }
+    }
+    if is_closure_var {
+        closure_nt := _lnew_temp(ll)
+        ll = closure_nt.l
+        ll = _lemit(ll, new_inst(OpLoad, closure_nt.temp, fn_slot, 0, "", 0))
+        fn_ptr_nt := _lnew_temp(ll)
+        ll = fn_ptr_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, closure_nt.temp, 0, "_fn", 0))
+        env_ptr_nt := _lnew_temp(ll)
+        ll = env_ptr_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, closure_nt.temp, 1, "_env", 0))
+        pack_start := _lnew_temp(ll)
+        ll = pack_start.l
+        ll = _lemit(ll, new_inst(OpStore, pack_start.temp, env_ptr_nt.temp, 0, "", 0))
+        mut pack_idx := 1
+        mut iai := 1
+        mut total_reg_count := 1
+        while iai < arg_temps.len() {
+            if arg_types[iai] == 12 {
+                pack_t := _lnew_temp(ll)
+                ll = pack_t.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg_temps[iai], 0, "", 0))
+                pack_idx = pack_idx + 1
+                pack_t2 := _lnew_temp(ll)
+                ll = pack_t2.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg_temps[iai] + 1, 0, "", 0))
+                pack_idx = pack_idx + 1
+                total_reg_count = total_reg_count + 2
+            } else {
+                pack_t := _lnew_temp(ll)
+                ll = pack_t.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg_temps[iai], 0, "", 0))
+                pack_idx = pack_idx + 1
+                total_reg_count = total_reg_count + 1
+            }
+            iai = iai + 1
+        }
+        mut ret_hint := ""
+        mut ic_ret_type := 0
+        fn_tid_ic := _lget_type(ll, fn_slot)
+        if fn_tid_ic > 16 {
+            ti_ic := store_get(ll.store, fn_tid_ic)
+            if type_kind_name(ti_ic.kind) == "Function" {
+                ic_ret_type = type_info_type_id(ti_ic)
+                if ic_ret_type == 12 { ret_hint = "str" }
+            }
+        }
+        if ic_ret_type == 12 {
+            ic_nt_s := _lnew_str_temp(ll)
+            ll = ic_nt_s.l
+            ll = _lemit(ll, new_inst(OpCallIndirect, ic_nt_s.temp, fn_ptr_nt.temp, total_reg_count, ret_hint, pack_start.temp))
+            ll = _lset_type(ll, ic_nt_s.temp, 12)
+            return LT{l: ll, temp: ic_nt_s.temp}
+        }
+        ic_nt_r := _lnew_temp(ll)
+        ll = ic_nt_r.l
+        ll = _lemit(ll, new_inst(OpCallIndirect, ic_nt_r.temp, fn_ptr_nt.temp, total_reg_count, "", pack_start.temp))
+        if ic_ret_type > 0 { ll = _lset_type(ll, ic_nt_r.temp, ic_ret_type) }
+        return LT{l: ll, temp: ic_nt_r.temp}
+    }
+
     // Fallback: indirect call (closure variable) or unknown function
-    // Position at the callee expression start, use _lower_primary which handles
-    // IDENT + "(" → closure call via _lower_atom postfix
     tp := _find_tok_pos(ll, _expr_start_offset(ll.pool, node.c0))
     ll = _lset_pos(ll, tp)
     return _lower_primary(ll)
@@ -9929,6 +10016,8 @@ fn _lower_closure(l: Lowerer) -> LT {
         ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
     }
 
+    // Mark closure result with sentinel type 600 so call sites can detect it
+    ll = _lset_type(ll, fat_nt.temp, 600)
     LT{l: ll, temp: fat_nt.temp}
 }
 
@@ -10171,6 +10260,8 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
         ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
     }
 
+    // Mark closure result with sentinel type 600 so call sites can detect it
+    ll = _lset_type(ll, fat_nt.temp, 600)
     LT{l: ll, temp: fat_nt.temp}
 }
 
