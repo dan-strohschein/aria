@@ -2199,9 +2199,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     }
 
     if nk == "Closure" {
-        tp := _find_tok_pos(ll, node.span.offset)
-        ll = _lset_pos(ll, tp)
-        return _lower_closure(ll)
+        return _lower_closure_node(ll, node)
     }
 
     if nk == "Match" {
@@ -9934,6 +9932,248 @@ fn _lower_closure(l: Lowerer) -> LT {
     LT{l: ll, temp: fat_nt.temp}
 }
 
+// --- AST-based closure lowering ---
+// Avoids _find_tok_pos positioning bugs by using the AST directly.
+
+fn _scan_captures_ast(l: Lowerer, pool: NodePool, idx: i64, params: [str]) -> [str] {
+    if idx <= 0 { return [""] }
+    node := pool_get(pool, idx)
+    nk := expr_kind_name(node.kind)
+    mut result := [""]
+
+    // Ident nodes may reference captured variables
+    if nk == "Ident" {
+        name := node.s1
+        outer := _lenv_lookup(l, name)
+        if outer >= 0 {
+            mut is_param := false
+            mut pi := 1
+            while pi < params.len() {
+                if params[pi] == name { is_param = true }
+                pi = pi + 1
+            }
+            if is_param == false {
+                result = result.append(name)
+            }
+        }
+        return result
+    }
+
+    // Recurse into children
+    sub0 := _scan_captures_ast(l, pool, node.c0, params)
+    mut si := 1
+    while si < sub0.len() {
+        result = result.append(sub0[si])
+        si = si + 1
+    }
+    sub1 := _scan_captures_ast(l, pool, node.c1, params)
+    si = 1
+    while si < sub1.len() {
+        result = result.append(sub1[si])
+        si = si + 1
+    }
+    sub2 := _scan_captures_ast(l, pool, node.c2, params)
+    si = 1
+    while si < sub2.len() {
+        result = result.append(sub2[si])
+        si = si + 1
+    }
+
+    // Recurse into list children
+    mut li := 0
+    while li < node.list_count {
+        child_idx := pool_get(pool, node.list_start + li).c0
+        subl := _scan_captures_ast(l, pool, child_idx, params)
+        si = 1
+        while si < subl.len() {
+            result = result.append(subl[si])
+            si = si + 1
+        }
+        li = li + 1
+    }
+    result
+}
+
+fn _dedup_names(names: [str]) -> [str] {
+    mut result := [""]
+    mut i := 1
+    while i < names.len() {
+        mut found := false
+        mut j := 1
+        while j < result.len() {
+            if result[j] == names[i] { found = true }
+            j = j + 1
+        }
+        if found == false { result = result.append(names[i]) }
+        i = i + 1
+    }
+    result
+}
+
+fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
+    mut ll := l
+
+    // Generate unique closure name
+    closure_name := "_closure_" + i2s(ll.module.closure_count)
+    ll = _lset_mod(ll, mod_next_closure(ll.module))
+
+    // Parse parameter names from s1 (comma-separated)
+    mut param_names := [""]
+    mut param_types := [0]
+    if node.s1.len() > 0 {
+        parts := node.s1.split(",")
+        mut pi := 1
+        while pi < parts.len() {
+            if parts[pi].len() > 0 {
+                param_names = param_names.append(parts[pi])
+                param_types = param_types.append(1)  // default i64
+            }
+            pi = pi + 1
+        }
+    }
+
+    // Resolve param types from checker if available
+    // Check if the closure was registered with a temp name
+    mut pi := 1
+    while pi < param_names.len() {
+        // Look up type from the function's type info if the checker annotated it
+        // For now, keep defaults — most closure params are i64
+        pi = pi + 1
+    }
+
+    // Determine return type (default i64)
+    mut ret_type := 1
+
+    // Scan for captured variables using AST walk
+    raw_caps := _scan_captures_ast(ll, ll.pool, node.c0, param_names)
+    cap_unique := _dedup_names(raw_caps)
+    mut cap_names := [""]
+    mut cap_slots := [0]
+    mut ci := 1
+    while ci < cap_unique.len() {
+        cname := cap_unique[ci]
+        slot := _lenv_lookup(ll, cname)
+        if slot >= 0 {
+            cap_names = cap_names.append(cname)
+            cap_slots = cap_slots.append(slot)
+        }
+        ci = ci + 1
+    }
+    cap_count := cap_names.len() - 1
+
+    // Create closure function: env_ptr + user params
+    mut actual_params := 1  // env_ptr
+    mut rpi := 1
+    while rpi < param_types.len() {
+        if param_types[rpi] == 12 { actual_params = actual_params + 2 } else { actual_params = actual_params + 1 }
+        rpi = rpi + 1
+    }
+
+    // Save current function state
+    saved_func := ll.current_func
+    saved_temp := ll.temp_counter
+    saved_label := ll.label_counter
+    saved_env_names := ll.env_names
+    saved_env_slots := ll.env_slots
+    saved_types := ll.temp_types
+
+    ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
+
+    // First param is env_ptr
+    env_param := _lnew_temp(ll)
+    ll = env_param.l
+    ll = _lenv_add(ll, "_env", env_param.temp)
+
+    // Register closure parameters
+    pi = 1
+    while pi < param_names.len() {
+        pt := param_types[pi]
+        pn := param_names[pi]
+        if pt == 12 {
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, pn, nt.temp)
+            ll = _lset_type(ll, nt.temp, 12)
+        } else {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lenv_add(ll, pn, nt.temp)
+            if pt > 0 { ll = _lset_type(ll, nt.temp, pt) }
+        }
+        pi = pi + 1
+    }
+
+    // Load captured variables from env struct
+    if cap_count > 0 {
+        ci = 1
+        while ci < cap_names.len() {
+            cap_nt := _lnew_temp(ll)
+            ll = cap_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, cap_nt.temp, env_param.temp, ci - 1, "", 0))
+            ll = _lenv_add(ll, cap_names[ci], cap_nt.temp)
+            ci = ci + 1
+        }
+    }
+
+    // Lower body from AST
+    if node.c0 > 0 {
+        body := _lower_expr_node(ll, node.c0)
+        ll = body.l
+        if body.temp >= 0 {
+            ll = _lemit(ll, new_inst(OpRet, 0, body.temp, 0, "", 0))
+        }
+    }
+
+    // Finish closure function
+    ll = _lfinish_func(ll)
+
+    // Restore outer function state
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: saved_func,
+                 temp_counter: saved_temp, label_counter: saved_label,
+                 env_names: saved_env_names, env_slots: saved_env_slots,
+                 loop_start: ll.loop_start, loop_end: ll.loop_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: saved_types,
+                 fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
+
+    // Build fat pointer: {fn_ptr, env_ptr}
+    fat_nt := _lnew_temp(ll)
+    ll = fat_nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, fat_nt.temp, 2, 0, "_closure", 0))
+
+    // Store fn_ptr at slot 0
+    fnref_nt := _lnew_temp(ll)
+    ll = fnref_nt.l
+    ll = _lemit(ll, new_inst(OpFnRef, fnref_nt.temp, 0, 0, closure_name, 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, fnref_nt.temp, 0, "_fn", 0))
+
+    // Build and store env at slot 1
+    if cap_count > 0 {
+        env_nt := _lnew_temp(ll)
+        ll = env_nt.l
+        ll = _lemit(ll, new_inst(OpAlloc, env_nt.temp, cap_count, 0, "_env", 0))
+        ci = 1
+        while ci < cap_slots.len() {
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, cap_slots[ci], 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, env_nt.temp, val_nt.temp, ci - 1, "", 0))
+            ci = ci + 1
+        }
+        ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, env_nt.temp, 1, "_env", 0))
+    } else {
+        null_nt := _lnew_temp(ll)
+        ll = null_nt.l
+        ll = _lemit(ll, new_inst(OpConst, null_nt.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
+    }
+
+    LT{l: ll, temp: fat_nt.temp}
+}
+
 // --- Newtype detection ---
 
 fn _is_newtype(def: StructDef) -> bool {
@@ -10793,6 +11033,13 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
 
         if is_wildcard || is_last {
             // Default/wildcard: no comparison, just lower body
+            // If pattern is a binding name (not "_"), bind subject to it first
+            if pat_kind == "Ident" && pat_name != "_" {
+                bind_nt := _lnew_temp(ll)
+                ll = bind_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
+                ll = _lenv_add(ll, pat_name, bind_nt.temp)
+            }
             body := _lower_expr_node(ll, body_idx)
             ll = body.l
             if body.temp >= 0 {
@@ -10812,7 +11059,7 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 vtag = _variant_tag(ll.registry, pat_name)
             }
             if vtag > 0 {
-                // Sum type variant match
+                // Sum type variant match (no destructuring)
                 vtag_nt := _lnew_temp(ll)
                 ll = vtag_nt.l
                 ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
@@ -10821,7 +11068,6 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag, vtag_nt.temp, "", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
 
-                // Lower body
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
                 if body.temp >= 0 {
@@ -10835,6 +11081,75 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 }
                 ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+            } else if pat_kind == "Ident" && pat_name != "_" {
+                // Binding pattern: bind subject value to name, always matches
+                // Create a new temp with the subject's value for the binding
+                bind_nt := _lnew_temp(ll)
+                ll = bind_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
+                ll = _lenv_add(ll, pat_name, bind_nt.temp)
+                body := _lower_expr_node(ll, body_idx)
+                ll = body.l
+                if body.temp >= 0 {
+                    body_type := _lget_type(ll, body.temp)
+                    if body_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
+                }
+                ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+            } else if pat_kind == "Call" {
+                // Variant destructuring: Circle(r) => ..., Rect(w, h) => ...
+                vname := pat.s1
+                dvtag := _variant_tag(ll.registry, vname)
+                if dvtag > 0 {
+                    // Compare tag
+                    dvtag_nt := _lnew_temp(ll)
+                    ll = dvtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, dvtag_nt.temp, dvtag, 0, "", 0))
+                    dcmp_nt := _lnew_temp(ll)
+                    ll = dcmp_nt.l
+                    ll = _lemit(ll, new_inst(OpEq, dcmp_nt.temp, subj_tag, dvtag_nt.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, dcmp_nt.temp, next_lbl.temp, "", 0))
+                    // Extract fields from subject (slot 0 = tag, data at slot 1+)
+                    mut dfi := 0
+                    while dfi < pat.list_count {
+                        field_node := pool_get(ll.pool, pat.list_start + dfi)
+                        fname := field_node.s1
+                        if fname != "_" {
+                            fld_nt := _lnew_temp(ll)
+                            ll = fld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, dfi + 1, fname, 0))
+                            ll = _lenv_add(ll, fname, fld_nt.temp)
+                        }
+                        dfi = dfi + 1
+                    }
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    if body.temp >= 0 {
+                        body_type := _lget_type(ll, body.temp)
+                        if body_type == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        }
+                    }
+                    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+                } else {
+                    // Unknown Call pattern — treat as wildcard
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    if body.temp >= 0 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
+                    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+                }
             } else if pat_kind == "IntLit" {
                 // Integer literal pattern
                 num := _parse_int_literal(pat_name)
@@ -10848,7 +11163,13 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
                 if body.temp >= 0 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    body_type := _lget_type(ll, body.temp)
+                    if body_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
                 }
                 ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
@@ -10887,7 +11208,13 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
                 if body.temp >= 0 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    body_type := _lget_type(ll, body.temp)
+                    if body_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
                 }
                 ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
@@ -10896,7 +11223,13 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
                 if body.temp >= 0 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    body_type := _lget_type(ll, body.temp)
+                    if body_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
                 }
                 ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
