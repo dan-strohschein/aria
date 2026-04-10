@@ -1,5 +1,27 @@
 # Aria Self-Hosting Compiler — AI Assistant Guide
 
+## Tooling — Use Squire/Chisel/Cartograph First
+
+This repo has `.aidocs/` with AID skeletons and a cartograph cache. **Always prefer the AID-based tools for code searches, reads, and refactors.** Fall back to Grep/Read/Edit only when these tools cannot answer the question.
+
+| Task | Tool | Notes |
+|---|---|---|
+| Find callers of a function | `cartograph callstack <fn> --up` | Uses semantic graph |
+| Find callees | `cartograph callstack <fn> --down` | |
+| Find what produces an error type | `cartograph errors <Type>` | |
+| Find what touches a struct field | `cartograph field <Type.Field>` | |
+| Search nodes by name pattern | `cartograph search "<glob>"` | Glob/regex on symbols |
+| Rename a symbol across files | `chisel rename` | Semantic, not text |
+| Move a function between modules | `chisel move` | |
+| Generate/update AID skeletons | `aid-gen` | Run after big changes |
+| Unified search/read/refactor | `squire` | Wraps the above |
+
+The Skill tool exposes `cartograph`, `chisel`, `aid`, and `squire` skills. Invoke them via the Skill tool when relevant. Only use Grep/Read/Edit/Glob when:
+- Looking at a specific known file/line
+- Reading test programs in `testdata/programs/`
+- Editing a single file you've already opened
+- The cartograph graph doesn't include what you need (e.g., raw text in comments)
+
 ## What This Is
 
 This is the **self-hosting Aria compiler**, written in Aria. It compiles Aria source code to native executables. Once this compiler can compile itself, the bootstrap compiler (`../aria-compiler-go/`) is retired.

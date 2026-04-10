@@ -11028,17 +11028,60 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
         next_lbl := _lnew_label(ll)
         ll = next_lbl.l
 
-        is_wildcard := pat_name == "_"
-        is_last := ai == node.list_count - 1
+        // Guard expression info (from parser)
+        guard_idx := pat_idx_node.c1
+        has_guard := guard_idx > 0
+        // Or-pattern alternatives (from parser): each alt is wrapped in an EkNone holder
+        alts_start := pat_idx_node.list_start
+        alts_count := pat_idx_node.list_count
+        has_alts := alts_count > 0
 
-        if is_wildcard || is_last {
-            // Default/wildcard: no comparison, just lower body
-            // If pattern is a binding name (not "_"), bind subject to it first
+        is_wildcard := pat_name == "_"
+        is_last_raw := ai == node.list_count - 1
+        // Don't treat as unconditional default if there's a guard or or-pattern alts
+        is_last := is_last_raw && has_guard == false && has_alts == false
+
+        if (is_wildcard && has_guard == false) || is_last {
+            // Default/wildcard: no comparison needed
+            // Still need to bind/destructure if pattern requires it
             if pat_kind == "Ident" && pat_name != "_" {
+                // Binding pattern: bind subject to name
                 bind_nt := _lnew_temp(ll)
                 ll = bind_nt.l
                 ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
                 ll = _lenv_add(ll, pat_name, bind_nt.temp)
+            } else if pat_kind == "Call" {
+                // Variant destructuring: extract fields without comparison
+                // (last arm is exhaustive, so we trust the tag matches)
+                // String fields take 2 slots (ptr + len)
+                wvname := pat.s1
+                wvtag := _variant_tag(ll.registry, wvname)
+                wvparent := _variant_parent(ll.registry, wvname)
+                mut wfi := 0
+                mut wslot := 1
+                while wfi < pat.list_count {
+                    field_node := pool_get(ll.pool, pat.list_start + wfi)
+                    fname := field_node.s1
+                    wftype := variant_field_type(wvparent, wvtag, wfi)
+                    if fname != "_" {
+                        if wftype == 12 {
+                            wfld_nt := _lnew_str_temp(ll)
+                            ll = wfld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, wfld_nt.temp, subj.temp, wslot, fname, 0))
+                            ll = _lemit(ll, new_inst(OpFieldGet, wfld_nt.temp + 1, subj.temp, wslot + 1, fname, 0))
+                            ll = _lset_type(ll, wfld_nt.temp, 12)
+                            ll = _lenv_add(ll, fname, wfld_nt.temp)
+                        } else {
+                            wfld_nt := _lnew_temp(ll)
+                            ll = wfld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, wfld_nt.temp, subj.temp, wslot, fname, 0))
+                            if wftype > 0 { ll = _lset_type(ll, wfld_nt.temp, wftype) }
+                            ll = _lenv_add(ll, fname, wfld_nt.temp)
+                        }
+                    }
+                    if wftype == 12 { wslot = wslot + 2 } else { wslot = wslot + 1 }
+                    wfi = wfi + 1
+                }
             }
             body := _lower_expr_node(ll, body_idx)
             ll = body.l
@@ -11060,13 +11103,59 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
             }
             if vtag > 0 {
                 // Sum type variant match (no destructuring)
-                vtag_nt := _lnew_temp(ll)
-                ll = vtag_nt.l
-                ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
-                cmp_nt := _lnew_temp(ll)
-                ll = cmp_nt.l
-                ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag, vtag_nt.temp, "", 0))
-                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+                // For or-patterns (Red | Blue | Yellow), emit a chain of comparisons:
+                // each match jumps to matched_lbl; non-match falls through to next test;
+                // final non-match jumps to next_lbl.
+                if has_alts {
+                    matched_lbl := _lnew_label(ll)
+                    ll = matched_lbl.l
+                    // Test main pattern's tag
+                    vtag_nt := _lnew_temp(ll)
+                    ll = vtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                    cmp_nt := _lnew_temp(ll)
+                    ll = cmp_nt.l
+                    ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag, vtag_nt.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, matched_lbl.temp, "", 0))
+                    // Test each alt
+                    mut alti := 0
+                    while alti < alts_count {
+                        alt_holder := pool_get(ll.pool, alts_start + alti)
+                        alt_pat := pool_get(ll.pool, alt_holder.c0)
+                        alt_name := alt_pat.s1
+                        alt_vtag := _variant_tag(ll.registry, alt_name)
+                        if alt_vtag > 0 {
+                            avt_nt := _lnew_temp(ll)
+                            ll = avt_nt.l
+                            ll = _lemit(ll, new_inst(OpConst, avt_nt.temp, alt_vtag, 0, "", 0))
+                            acmp_nt := _lnew_temp(ll)
+                            ll = acmp_nt.l
+                            ll = _lemit(ll, new_inst(OpEq, acmp_nt.temp, subj_tag, avt_nt.temp, "", 0))
+                            mut is_last_alt := alti == alts_count - 1
+                            if is_last_alt {
+                                ll = _lemit(ll, new_inst(OpBranchFalse, 0, acmp_nt.temp, next_lbl.temp, "", 0))
+                            } else {
+                                ll = _lemit(ll, new_inst(OpBranchTrue, 0, acmp_nt.temp, matched_lbl.temp, "", 0))
+                            }
+                        }
+                        alti = alti + 1
+                    }
+                    ll = _lemit(ll, new_inst(OpLabel, 0, matched_lbl.temp, 0, "", 0))
+                } else {
+                    vtag_nt := _lnew_temp(ll)
+                    ll = vtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                    cmp_nt := _lnew_temp(ll)
+                    ll = cmp_nt.l
+                    ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag, vtag_nt.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+                }
+                // Guard check (after pattern match)
+                if has_guard {
+                    g := _lower_expr_node(ll, guard_idx)
+                    ll = g.l
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, g.temp, next_lbl.temp, "", 0))
+                }
 
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
@@ -11088,6 +11177,12 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 ll = bind_nt.l
                 ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
                 ll = _lenv_add(ll, pat_name, bind_nt.temp)
+                // Guard check after binding
+                if has_guard {
+                    g := _lower_expr_node(ll, guard_idx)
+                    ll = g.l
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, g.temp, next_lbl.temp, "", 0))
+                }
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l
                 if body.temp >= 0 {
@@ -11115,17 +11210,39 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                     ll = _lemit(ll, new_inst(OpEq, dcmp_nt.temp, subj_tag, dvtag_nt.temp, "", 0))
                     ll = _lemit(ll, new_inst(OpBranchFalse, 0, dcmp_nt.temp, next_lbl.temp, "", 0))
                     // Extract fields from subject (slot 0 = tag, data at slot 1+)
+                    // String fields take 2 slots (ptr + len)
+                    dvparent := _variant_parent(ll.registry, vname)
                     mut dfi := 0
+                    mut dslot := 1
                     while dfi < pat.list_count {
                         field_node := pool_get(ll.pool, pat.list_start + dfi)
                         fname := field_node.s1
+                        ftype := variant_field_type(dvparent, dvtag, dfi)
                         if fname != "_" {
-                            fld_nt := _lnew_temp(ll)
-                            ll = fld_nt.l
-                            ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, dfi + 1, fname, 0))
-                            ll = _lenv_add(ll, fname, fld_nt.temp)
+                            if ftype == 12 {
+                                // String field: extract ptr + len into a str temp pair
+                                fld_nt := _lnew_str_temp(ll)
+                                ll = fld_nt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, dslot, fname, 0))
+                                ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp + 1, subj.temp, dslot + 1, fname, 0))
+                                ll = _lset_type(ll, fld_nt.temp, 12)
+                                ll = _lenv_add(ll, fname, fld_nt.temp)
+                            } else {
+                                fld_nt := _lnew_temp(ll)
+                                ll = fld_nt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, dslot, fname, 0))
+                                if ftype > 0 { ll = _lset_type(ll, fld_nt.temp, ftype) }
+                                ll = _lenv_add(ll, fname, fld_nt.temp)
+                            }
                         }
+                        if ftype == 12 { dslot = dslot + 2 } else { dslot = dslot + 1 }
                         dfi = dfi + 1
+                    }
+                    // Guard check after destructuring bindings
+                    if has_guard {
+                        g := _lower_expr_node(ll, guard_idx)
+                        ll = g.l
+                        ll = _lemit(ll, new_inst(OpBranchFalse, 0, g.temp, next_lbl.temp, "", 0))
                     }
                     body := _lower_expr_node(ll, body_idx)
                     ll = body.l

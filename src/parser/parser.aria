@@ -1877,24 +1877,69 @@ fn _parse_match(p: Parser) -> PR {
     pp = _skip_nl(pp)
     pp = _expect(pp, lb)
     pp = _skip_nl(pp)
-    // Collect arm pairs: (pattern_idx, body_idx)
+    // Collect arm info: (pattern_idx, guard_idx, alt_start, alt_count, body_idx)
     mut pat_indices := [0]
+    mut guard_indices := [0]
+    mut alt_starts := [0]
+    mut alt_counts := [0]
     mut body_indices := [0]
     mut count := 0
     while _ck(pp) != rb && _ck(pp) != "EOF" {
         pat := _parse_pattern(pp)
         pat_idx := _pidx(pat.p)
         pp = _padd(pat.p, pat.e)
-        // Or-patterns: pat1 | pat2 | pat3
+        // Or-patterns: pat1 | pat2 | pat3 — collect alt indices first
+        mut alt_idx_0 := 0
+        mut alt_idx_1 := 0
+        mut alt_idx_2 := 0
+        mut alt_idx_3 := 0
+        mut alt_idx_4 := 0
+        mut alt_idx_5 := 0
+        mut alt_idx_6 := 0
+        mut alt_idx_7 := 0
+        mut alts_count := 0
         while _ck(pp) == "|" {
             pp = _adv(pp)
             pp = _skip_nl(pp)
             alt := _parse_pattern(pp)
+            alt_idx := _pidx(alt.p)
             pp = _padd(alt.p, alt.e)
+            if alts_count == 0 { alt_idx_0 = alt_idx }
+            if alts_count == 1 { alt_idx_1 = alt_idx }
+            if alts_count == 2 { alt_idx_2 = alt_idx }
+            if alts_count == 3 { alt_idx_3 = alt_idx }
+            if alts_count == 4 { alt_idx_4 = alt_idx }
+            if alts_count == 5 { alt_idx_5 = alt_idx }
+            if alts_count == 6 { alt_idx_6 = alt_idx }
+            if alts_count == 7 { alt_idx_7 = alt_idx }
+            alts_count = alts_count + 1
         }
+        // Add holder nodes consecutively (after all patterns are parsed)
+        mut alts_start := 0
+        if alts_count > 0 {
+            alts_start = _pidx(pp)
+            mut hi := 0
+            while hi < alts_count {
+                mut idx := 0
+                if hi == 0 { idx = alt_idx_0 }
+                if hi == 1 { idx = alt_idx_1 }
+                if hi == 2 { idx = alt_idx_2 }
+                if hi == 3 { idx = alt_idx_3 }
+                if hi == 4 { idx = alt_idx_4 }
+                if hi == 5 { idx = alt_idx_5 }
+                if hi == 6 { idx = alt_idx_6 }
+                if hi == 7 { idx = alt_idx_7 }
+                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                     c0: idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                hi = hi + 1
+            }
+        }
+        // Guard expression: if <expr>
+        mut guard_idx := 0
         if _ck(pp) == "if" {
             pp = _adv(pp)
             g := _parse_expr(pp, 0)
+            guard_idx = _pidx(g.p)
             pp = _padd(g.p, g.e)
         }
         pp = _expect(pp, "=>")
@@ -1902,18 +1947,23 @@ fn _parse_match(p: Parser) -> PR {
         body_idx := _pidx(body.p)
         pp = _padd(body.p, body.e)
         pat_indices = pat_indices.append(pat_idx)
+        guard_indices = guard_indices.append(guard_idx)
+        alt_starts = alt_starts.append(alts_start)
+        alt_counts = alt_counts.append(alts_count)
         body_indices = body_indices.append(body_idx)
         count = count + 1
         pp = _skip_nl(pp)
     }
     pp = _adv(pp)
     // Add index nodes: pairs of (pattern, body) index nodes
+    // Pattern node uses c0=pat_idx, c1=guard_idx, list_start=alt_holders, list_count=alts_count
     list_start := _pidx(pp)
     mut ai := 0
     while ai < count {
-        // Pattern index node
+        // Pattern index node — also carries guard and or-pattern alts
         pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
-                             c0: pat_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                             c0: pat_indices[ai + 1], c1: guard_indices[ai + 1], c2: 0,
+                             list_start: alt_starts[ai + 1], list_count: alt_counts[ai + 1], span: _no_span()})
         // Body index node
         pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
                              c0: body_indices[ai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
