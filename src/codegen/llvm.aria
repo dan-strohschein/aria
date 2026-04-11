@@ -2704,8 +2704,27 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     }
 
     if target_func.name != "" && target_func.return_type == 0 {
-        gg = _lg_emit(gg, "call void @" + name + "(" + args + ")")
-        return gg
+        // Generic specs sometimes have IrFunc.return_type=0 even though they
+        // return i64. Heuristic: monomorphized names end with _i64, _bool,
+        // _f64, or another primitive suffix. If the name has such a suffix,
+        // treat it as a value-returning call rather than emit void.
+        nlen := name.len()
+        mut treat_as_value := false
+        if nlen >= 4 {
+            tail := name.substring(nlen - 4, nlen)
+            if tail == "_i64" || tail == "_f64" || tail == "_i32" || tail == "_i16" || tail == "_i8u" {
+                treat_as_value = true
+            }
+        }
+        if treat_as_value == false && nlen >= 5 {
+            tail5 := name.substring(nlen - 5, nlen)
+            if tail5 == "_bool" { treat_as_value = true }
+        }
+        if treat_as_value == false {
+            gg = _lg_emit(gg, "call void @" + name + "(" + args + ")")
+            return gg
+        }
+        // Fall through to the i64 default path below
     }
 
     res := "%call_r_" + i2s(idx)
