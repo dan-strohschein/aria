@@ -217,6 +217,13 @@ fn func_set_temp_types(f: IrFunc, types: [i64]) -> IrFunc =
 fn func_inst_count(f: IrFunc) -> i64 = f.insts.len() - 1  // minus sentinel
 
 // --- IR Module ---
+//
+// IrModule maintains a sorted index over function names so that mod_find_func
+// can do an O(log N) binary search instead of an O(N) linear scan. The original
+// linear scan was the dominant cost during codegen — _gen_call calls
+// mod_find_func once per call instruction, and there are ~100K call instructions
+// in the self-host compiler with ~1000 functions defined, giving O(100M) string
+// comparisons. Binary search drops that to O(1M).
 
 struct IrModule {
     funcs: [IrFunc]
@@ -230,43 +237,92 @@ struct IrModule {
     extern_ret_types: [str]
     extern_libs: [str]
     closure_count: i64
+    // Sorted index for fast function lookup. fn_index_keys is sorted lexically;
+    // fn_index_vals[i] is the index into funcs of the function whose name is
+    // fn_index_keys[i]. Both arrays use a sentinel "" entry at index 0.
+    fn_index_keys: [str]
+    fn_index_vals: [i64]
 }
 
 fn new_ir_module() -> IrModule =
     IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""],
              extern_names: [""], extern_param_counts: [0], extern_ret_types: [""], extern_libs: [""],
-             closure_count: 0}
+             closure_count: 0,
+             fn_index_keys: [""], fn_index_vals: [0]}
 
-fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule =
-    IrModule{funcs: m.funcs.append(f), string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
+// Insert (name, val) into the parallel sorted arrays at the correct position.
+// O(N) per call, called once per function added (so total work is O(N²)).
+// Cannot use in-place arr[i] = val because the gen0_c bootstrap doesn't lower
+// it inside helpers; instead we append-rebuild.
+fn _fn_index_insert(keys: [str], vals: [i64], name: str, val: i64) -> IrModule {
+    mut new_keys := [""]
+    mut new_vals := [0]
+    mut inserted := false
+    mut i := 1
+    while i < keys.len() {
+        if inserted == false {
+            if name < keys[i] {
+                new_keys = new_keys.append(name)
+                new_vals = new_vals.append(val)
+                inserted = true
+            }
+        }
+        new_keys = new_keys.append(keys[i])
+        new_vals = new_vals.append(vals[i])
+        i = i + 1
+    }
+    if inserted == false {
+        new_keys = new_keys.append(name)
+        new_vals = new_vals.append(val)
+    }
+    // Caller fills the rest of the IrModule fields; this returns a partial that
+    // only has the index fields set. We pack it into a real IrModule below.
+    IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""],
+             extern_names: [""], extern_param_counts: [0], extern_ret_types: [""], extern_libs: [""],
+             closure_count: 0,
+             fn_index_keys: new_keys, fn_index_vals: new_vals}
+}
+
+fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule {
+    new_funcs := m.funcs.append(f)
+    new_idx := new_funcs.len() - 1
+    idx_only := _fn_index_insert(m.fn_index_keys, m.fn_index_vals, f.name, new_idx)
+    IrModule{funcs: new_funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
-             closure_count: m.closure_count}
+             closure_count: m.closure_count,
+             fn_index_keys: idx_only.fn_index_keys, fn_index_vals: idx_only.fn_index_vals}
+}
 
 fn mod_add_string(m: IrModule, s: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
-             closure_count: m.closure_count}
+             closure_count: m.closure_count,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
 
 fn mod_add_extern(m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names.append(name), extern_param_counts: m.extern_param_counts.append(param_count),
              extern_ret_types: m.extern_ret_types.append(ret_type), extern_libs: m.extern_libs.append(lib),
-             closure_count: m.closure_count}
+             closure_count: m.closure_count,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
 
 fn mod_set_entry(m: IrModule, name: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
-             closure_count: m.closure_count}
+             closure_count: m.closure_count,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
 
 fn mod_add_test(m: IrModule, name: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count + 1, test_names: m.test_names.append(name),
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
-             closure_count: m.closure_count}
+             closure_count: m.closure_count,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
 
 fn mod_next_closure(m: IrModule) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
-             closure_count: m.closure_count + 1}
+             closure_count: m.closure_count + 1,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
 
 fn mod_find_string(m: IrModule, s: str) -> i64 {
     mut i := 1
@@ -279,11 +335,22 @@ fn mod_find_string(m: IrModule, s: str) -> i64 {
 
 fn mod_func_count(m: IrModule) -> i64 = m.funcs.len() - 1
 
+// O(log N) binary search over fn_index_keys (sorted lexically). The sentinel
+// "" at index 0 is skipped. Returns _sentinel_func() if name is not present.
 fn mod_find_func(m: IrModule, name: str) -> IrFunc {
-    mut i := 1
-    while i < m.funcs.len() {
-        if m.funcs[i].name == name { return m.funcs[i] }
-        i = i + 1
+    mut lo := 1
+    mut hi := m.fn_index_keys.len() - 1
+    while lo <= hi {
+        mid := (lo + hi) / 2
+        cmp_name := m.fn_index_keys[mid]
+        if cmp_name == name {
+            return m.funcs[m.fn_index_vals[mid]]
+        }
+        if cmp_name < name {
+            lo = mid + 1
+        } else {
+            hi = mid - 1
+        }
     }
     return _sentinel_func()
 }
