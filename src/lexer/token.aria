@@ -115,6 +115,11 @@ type TokenKind =
     // Assignment/Binding
     | TkEq
     | TkColonEq
+    | TkPlusEq
+    | TkMinusEq
+    | TkStarEq
+    | TkSlashEq
+    | TkPercentEq
     // Special
     | TkNewline
     | TkEof
@@ -234,6 +239,11 @@ fn token_name(kind: TokenKind) -> str = match kind {
     TkAt => "@"
     TkEq => "="
     TkColonEq => ":="
+    TkPlusEq => "+="
+    TkMinusEq => "-="
+    TkStarEq => "*="
+    TkSlashEq => "/="
+    TkPercentEq => "%="
     TkNewline => "NEWLINE"
     TkEof => "EOF"
     TkIllegal => "ILLEGAL"

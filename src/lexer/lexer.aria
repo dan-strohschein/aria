@@ -636,25 +636,48 @@ fn tokenize(source: str, file: str) -> Lexer {
         } else if c == "'" {
             lex = _scan_char(lex)
         } else if c == "+" {
-            lex = _add_token(lex, TkPlus, "+", lex.line, lex.col, lex.pos)
-            lex = _advance(lex)
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkPlusEq, "+=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkPlus, "+", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
         } else if c == "-" {
             if _peek_next(lex) == ">" {
                 lex = _add_token(lex, TkArrow, "->", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkMinusEq, "-=", lex.line, lex.col, lex.pos)
                 lex = _advance(_advance(lex))
             } else {
                 lex = _add_token(lex, TkMinus, "-", lex.line, lex.col, lex.pos)
                 lex = _advance(lex)
             }
         } else if c == "*" {
-            lex = _add_token(lex, TkStar, "*", lex.line, lex.col, lex.pos)
-            lex = _advance(lex)
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkStarEq, "*=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkStar, "*", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
         } else if c == "/" {
-            lex = _add_token(lex, TkSlash, "/", lex.line, lex.col, lex.pos)
-            lex = _advance(lex)
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkSlashEq, "/=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkSlash, "/", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
         } else if c == "%" {
-            lex = _add_token(lex, TkPercent, "%", lex.line, lex.col, lex.pos)
-            lex = _advance(lex)
+            if _peek_next(lex) == "=" {
+                lex = _add_token(lex, TkPercentEq, "%=", lex.line, lex.col, lex.pos)
+                lex = _advance(_advance(lex))
+            } else {
+                lex = _add_token(lex, TkPercent, "%", lex.line, lex.col, lex.pos)
+                lex = _advance(lex)
+            }
         } else if c == "=" {
             if _peek_next(lex) == "=" {
                 lex = _add_token(lex, TkEqEq, "==", lex.line, lex.col, lex.pos)

@@ -1148,10 +1148,33 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     if nk == "StringLit" {
         val := node.s1
         // Empty s1 with a span may indicate interpolated string — fall back to tokens
-        if val.len() == 0 && node.span.offset > 0 {
-            tp := _find_tok_pos(ll, node.span.offset)
-            if tp < ll.tokens.len() && token_name(ll.tokens[tp].kind) == "STRING_START" {
-                ll = _lset_pos(ll, tp)
+        if val.len() == 0 {
+            // Search ALL tokens for STRING_START with no offset constraint.
+            // Use l.pos as a hint to find the closest STRING_START.
+            mut sp := 0
+            mut found_pos := 0 - 1
+            // First try forward from l.pos
+            sp = ll.pos
+            while sp < ll.tokens.len() {
+                if token_name(ll.tokens[sp].kind) == "STRING_START" {
+                    found_pos = sp
+                    sp = ll.tokens.len()
+                }
+                sp = sp + 1
+            }
+            // Fallback: search from 0
+            if found_pos < 0 {
+                sp = 0
+                while sp < ll.tokens.len() {
+                    if token_name(ll.tokens[sp].kind) == "STRING_START" {
+                        found_pos = sp
+                        sp = ll.tokens.len()
+                    }
+                    sp = sp + 1
+                }
+            }
+            if found_pos >= 0 {
+                ll = _lset_pos(ll, found_pos)
                 return _lower_interpolated_string(ll)
             }
         }
@@ -1288,6 +1311,73 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "Binary" {
         op := node.s1
+
+        // `or default` — unwrap Result, use default on Err
+        if op == "or" {
+            left_lt := _lower_expr_node(ll, node.c0)
+            ll = left_lt.l
+            default_lt := _lower_expr_node(ll, node.c1)
+            ll = default_lt.l
+            // Extract tag (slot 0)
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left_lt.temp, 0, "_tag", 0))
+            const_one := _lnew_temp(ll)
+            ll = const_one.l
+            ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
+            is_err := _lnew_temp(ll)
+            ll = is_err.l
+            ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+            or_err_lbl := _lnew_label(ll)
+            ll = or_err_lbl.l
+            or_end_lbl := _lnew_label(ll)
+            ll = or_end_lbl.l
+            final_nt := _lnew_temp(ll)
+            ll = final_nt.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, or_err_lbl.temp, "", 0))
+            // Ok path: unwrap value from slot 1
+            ok_val := _lnew_temp(ll)
+            ll = ok_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left_lt.temp, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, ok_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, or_end_lbl.temp, 0, "", 0))
+            // Err path: use default
+            ll = _lemit(ll, new_inst(OpLabel, 0, or_err_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, default_lt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, or_end_lbl.temp, 0, "", 0))
+            return LT{l: ll, temp: final_nt.temp}
+        }
+
+        // `must "msg"` — unwrap or panic with message
+        if op == "must" {
+            left_lt := _lower_expr_node(ll, node.c0)
+            ll = left_lt.l
+            msg_lt := _lower_expr_node(ll, node.c1)
+            ll = msg_lt.l
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left_lt.temp, 0, "_tag", 0))
+            const_one := _lnew_temp(ll)
+            ll = const_one.l
+            ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
+            is_err := _lnew_temp(ll)
+            ll = is_err.l
+            ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+            panic_lbl := _lnew_label(ll)
+            ll = panic_lbl.l
+            ok_lbl := _lnew_label(ll)
+            ll = ok_lbl.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, panic_lbl.temp, "", 0))
+            ok_val := _lnew_temp(ll)
+            ll = ok_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left_lt.temp, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, panic_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpCall, 0, msg_lt.temp, 2, "_aria_panic", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
+            return LT{l: ll, temp: ok_val.temp}
+        }
+
 
         // Binding: x := expr
         if op == ":=" {
@@ -3802,6 +3892,31 @@ fn _lower_expr_result(l: Lowerer) -> LT {
                 }
                 return LT{l: ll, temp: result.temp}
             }
+            if next_k == "+=" || next_k == "-=" || next_k == "*=" || next_k == "/=" || next_k == "%=" {
+                op_k := next_k.substring(0, 1)
+                mut ll := _ladv(l)   // skip name
+                ll = _ladv(ll)       // skip op
+                slot := _lenv_lookup(ll, name)
+                if slot >= 0 {
+                    cur_nt := _lnew_temp(ll)
+                    ll = cur_nt.l
+                    ll = _lemit(ll, new_inst(OpLoad, cur_nt.temp, slot, 0, "", 0))
+                    rhs := _lower_expr(ll)
+                    ll = rhs.l
+                    res_nt := _lnew_temp(ll)
+                    ll = res_nt.l
+                    cur_type := _lget_type(ll, slot)
+                    if _is_float_type(cur_type) || _is_float_type(_lget_type(ll, rhs.temp)) {
+                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "f64", 0))
+                        ll = _lset_type(ll, res_nt.temp, 9)
+                    } else {
+                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
+                    }
+                    ll = _lemit(ll, new_inst(OpStore, slot, res_nt.temp, 0, "", 0))
+                    return LT{l: ll, temp: res_nt.temp}
+                }
+                return LT{l: ll, temp: -1}
+            }
         }
     }
     // Plain expression
@@ -4111,39 +4226,31 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
                 return ll
             }
             // Compound assignment: += -= *= /= %=
-            if (next_k == "+" || next_k == "-" || next_k == "*" || next_k == "/" || next_k == "%") {
-                // Check if followed by =
-                eq_pos := l.pos + 2
-                if eq_pos < l.tokens.len() && token_name(l.tokens[eq_pos].kind) == "=" {
-                    op_k := next_k
-                    mut ll := _ladv(l)   // skip name
-                    ll = _ladv(ll)       // skip op
-                    ll = _ladv(ll)       // skip =
-                    // Desugar: x += expr → x = x + expr
-                    slot := _lenv_lookup(ll, name)
-                    if slot >= 0 {
-                        // Load current value
-                        cur_nt := _lnew_temp(ll)
-                        ll = cur_nt.l
-                        ll = _lemit(ll, new_inst(OpLoad, cur_nt.temp, slot, 0, "", 0))
-                        // Evaluate RHS
-                        rhs := _lower_expr(ll)
-                        ll = rhs.l
-                        // Apply operation (float-aware)
-                        res_nt := _lnew_temp(ll)
-                        ll = res_nt.l
-                        cur_type := _lget_type(ll, slot)
-                        if _is_float_type(cur_type) || _is_float_type(_lget_type(ll, rhs.temp)) {
-                            ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "f64", 0))
-                            ll = _lset_type(ll, res_nt.temp, 9)
-                        } else {
-                            ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
-                        }
-                        // Store back
-                        ll = _lemit(ll, new_inst(OpStore, slot, res_nt.temp, 0, "", 0))
+            if next_k == "+=" || next_k == "-=" || next_k == "*=" || next_k == "/=" || next_k == "%=" {
+                // Single compound assign token (lexer emits +=/-=/etc. as one token)
+                op_k := next_k.substring(0, 1)  // "+" from "+="
+                mut ll := _ladv(l)   // skip name
+                ll = _ladv(ll)       // skip op (+= etc.)
+                // Desugar: x += expr → x = x + expr
+                slot := _lenv_lookup(ll, name)
+                if slot >= 0 {
+                    cur_nt := _lnew_temp(ll)
+                    ll = cur_nt.l
+                    ll = _lemit(ll, new_inst(OpLoad, cur_nt.temp, slot, 0, "", 0))
+                    rhs := _lower_expr(ll)
+                    ll = rhs.l
+                    res_nt := _lnew_temp(ll)
+                    ll = res_nt.l
+                    cur_type := _lget_type(ll, slot)
+                    if _is_float_type(cur_type) || _is_float_type(_lget_type(ll, rhs.temp)) {
+                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "f64", 0))
+                        ll = _lset_type(ll, res_nt.temp, 9)
+                    } else {
+                        ll = _lemit(ll, new_inst(_arith_op(op_k), res_nt.temp, cur_nt.temp, rhs.temp, "", 0))
                     }
-                    return ll
+                    ll = _lemit(ll, new_inst(OpStore, slot, res_nt.temp, 0, "", 0))
                 }
+                return ll
             }
             if next_k == "=" {
                 // Assignment: name = expr

@@ -1481,6 +1481,26 @@ fn _parse_stmt(p: Parser) -> PR {
         return PR{p: pp, e: Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,
                                   c0: lhs_idx, c1: rhs_idx, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
     }
+    // Compound assignment: x += rhs → Assign(x, Binary("+", x, rhs))
+    if _ck(pp) == "+=" || _ck(pp) == "-=" || _ck(pp) == "*=" || _ck(pp) == "/=" || _ck(pp) == "%=" {
+        op_text := _cur(pp).text
+        // Extract arithmetic op (drop trailing '=')
+        arith_op := op_text.substring(0, 1)
+        // Add LHS to pool — used as both Assign LHS and Binary's left operand
+        lhs_idx := _pidx(pp)
+        pp = _padd(pp, result.e)
+        pp = _adv(pp)
+        val := _parse_expr(pp, 0)
+        rhs_idx := _pidx(val.p)
+        pp = _padd(val.p, val.e)
+        // Build Binary(op, lhs, rhs) — reuses lhs_idx
+        binary_idx := _pidx(pp)
+        pp = _padd(pp, Expr{kind: EkBinary, s1: arith_op, s2: "", b1: false, b2: false,
+                             c0: lhs_idx, c1: rhs_idx, c2: 0, list_start: 0, list_count: 0, span: result.e.span})
+        pp = _skip_nl(pp)
+        return PR{p: pp, e: Expr{kind: EkAssign, s1: "", s2: "", b1: false, b2: false,
+                                  c0: lhs_idx, c1: binary_idx, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
+    }
 
     pp = _skip_nl(pp)
     PR{p: pp, e: result.e}
@@ -1514,7 +1534,30 @@ fn _parse_expr(p: Parser, min_bp: i64) -> PR {
     while running {
         kind := _cur(pp).kind
         post_bp := postfix_binding_power(kind)
-        if post_bp > 0 && post_bp >= min_bp {
+        // Contextual postfix keywords stored as IDENT: `or`, `must`
+        // Treat them as postfix operators with binding power 150 (same as `?`)
+        is_or_must := false
+        if _ck(pp) == "IDENT" {
+            txt := _cur(pp).text
+            if txt == "or" || txt == "must" {
+                is_or_must = true
+            }
+        }
+        if is_or_must && 150 >= min_bp {
+            op_text := _cur(pp).text
+            span := _pspan(pp)
+            left_idx := _pidx(pp)
+            pp = _padd(pp, left)
+            pp = _adv(pp)  // skip or/must
+            // Parse the operand expression
+            rhs := _parse_expr(pp, 151)
+            pp = rhs.p
+            rhs_idx := _pidx(pp)
+            pp = _padd(pp, rhs.e)
+            // Store as Binary with op="or" or "must"
+            left = Expr{kind: EkBinary, s1: op_text, s2: "", b1: false, b2: false,
+                        c0: left_idx, c1: rhs_idx, c2: 0, list_start: 0, list_count: 0, span: span}
+        } else if post_bp > 0 && post_bp >= min_bp {
             post := _parse_postfix(pp, left)
             pp = post.p
             left = post.e
