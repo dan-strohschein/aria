@@ -494,19 +494,35 @@ fn _struct_name_for_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> str {
 // Type IDs: 0=unknown, 1-20=builtins, 21-99=store types, TY_STRUCT_BASE+=registry struct types
 
 fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
-    // Bounds check: temp should never exceed a few thousand in any function
     if temp < 0 { return l }
     if temp > 50000 { return l }
-    // Grow temp_types if needed
-    mut types := l.temp_types
-    while types.len() <= temp + 1 {
-        types = types.append(0)
+    target := temp + 1
+    cur_len := l.temp_types.len()
+    // Fast path: setting the type for a freshly created temp (target == old length).
+    // This is the common case — temps are created sequentially, so this fires ~99% of
+    // calls. A single amortized-O(1) append replaces the original O(N) array rebuild.
+    if target == cur_len {
+        new_types := l.temp_types.append(type_id)
+        return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+                table: l.table, file: l.file, module: l.module,
+                current_func: l.current_func,
+                temp_counter: l.temp_counter, label_counter: l.label_counter,
+                env_names: l.env_names, env_slots: l.env_slots,
+                loop_start: l.loop_start, loop_end: l.loop_end,
+                const_names: l.const_names, const_vals: l.const_vals,
+                const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+                temp_types: new_types,
+                fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
     }
-    // Rebuild array with updated value
+    // Grow-then-rebuild path for out-of-order writes (rare). We have to rebuild because
+    // the current bootstrap (gen0_c) does not lower `arr[i] = val` inside helpers, so
+    // we cannot mutate in place. Keep the original O(N) rebuild for correctness; this
+    // branch is taken only when an earlier temp's type is being updated retroactively.
+    mut types := l.temp_types
+    while types.len() <= target { types = types.append(0) }
     mut new_types := [0]
     mut idx := 1
     while idx < types.len() {
-        target := temp + 1
         if idx == target {
             new_types = new_types.append(type_id)
         } else {
