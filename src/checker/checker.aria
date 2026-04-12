@@ -315,23 +315,23 @@ fn _parse_type_ann(c: Checker) -> CE {
             if _ck2(cc) == "]" { cc = _cadv(cc) }
             // Construct specialized types for known generics
             if name == "Result" && argc >= 2 {
-                new_store := store_add(cc.store, mk_result_type(arg1, arg2))
-                cc = _cset_store(cc, new_store)
-                return CE{c: cc, type_id: store_last_id(cc.store)}
+                sar := store_add_canonical(cc.store, mk_result_type(arg1, arg2))
+                cc = _cset_store(cc, sar.store)
+                return CE{c: cc, type_id: sar.id}
             }
             if name == "Optional" && argc >= 1 {
-                new_store := store_add(cc.store, mk_optional_type(arg1))
-                cc = _cset_store(cc, new_store)
-                return CE{c: cc, type_id: store_last_id(cc.store)}
+                sar := store_add_canonical(cc.store, mk_optional_type(arg1))
+                cc = _cset_store(cc, sar.store)
+                return CE{c: cc, type_id: sar.id}
             }
             // Check if base name is an HKT TypeVar — create TyApplied
             tid := resolve_type_name(cc.store, name)
             if tid != TY_UNKNOWN {
                 tinfo := store_get(cc.store, tid)
                 if type_kind_name(tinfo.kind) == "TypeVar" && tinfo.param_count > 0 && argc >= 1 {
-                    new_store := store_add(cc.store, mk_applied_type(tid, arg1))
-                    cc = _cset_store(cc, new_store)
-                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                    sar := store_add_canonical(cc.store, mk_applied_type(tid, arg1))
+                    cc = _cset_store(cc, sar.store)
+                    return CE{c: cc, type_id: sar.id}
                 }
             }
             return CE{c: cc, type_id: tid}
@@ -340,9 +340,9 @@ fn _parse_type_ann(c: Checker) -> CE {
         if _ck2(cc) == "?" {
             cc = _cadv(cc)
             inner := resolve_type_name(cc.store, name)
-            new_store := store_add(cc.store, mk_optional_type(inner))
-            cc = _cset_store(cc, new_store)
-            return CE{c: cc, type_id: store_last_id(cc.store)}
+            sar := store_add_canonical(cc.store, mk_optional_type(inner))
+            cc = _cset_store(cc, sar.store)
+            return CE{c: cc, type_id: sar.id}
         }
         // Check for result T ! E
         if _ck2(cc) == "!" {
@@ -350,9 +350,9 @@ fn _parse_type_ann(c: Checker) -> CE {
             ok_type := resolve_type_name(cc.store, name)
             err_result := _parse_type_ann(cc)
             cc = err_result.c
-            new_store := store_add(cc.store, mk_result_type(ok_type, err_result.type_id))
-            cc = _cset_store(cc, new_store)
-            return CE{c: cc, type_id: store_last_id(cc.store)}
+            sar := store_add_canonical(cc.store, mk_result_type(ok_type, err_result.type_id))
+            cc = _cset_store(cc, sar.store)
+            return CE{c: cc, type_id: sar.id}
         }
         tid := resolve_type_name(cc.store, name)
         return CE{c: cc, type_id: tid}
@@ -363,9 +363,9 @@ fn _parse_type_ann(c: Checker) -> CE {
         elem := _parse_type_ann(cc)
         cc = elem.c
         if _ck2(cc) == "]" { cc = _cadv(cc) }
-        new_store := store_add(cc.store, mk_array_type(elem.type_id))
-        cc = _cset_store(cc, new_store)
-        return CE{c: cc, type_id: store_last_id(cc.store)}
+        sar := store_add_canonical(cc.store, mk_array_type(elem.type_id))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
     }
     if k == "fn" {
         // Function type fn(A, B) -> R — construct a TyFunction with return type preserved
@@ -415,9 +415,9 @@ fn _parse_type_ann(c: Checker) -> CE {
             }
             return CE{c: cc, type_id: TY_UNKNOWN}
         }
-        new_store := store_add(cc.store, mk_tuple_type(elem_ids, arity))
-        cc = _cset_store(cc, new_store)
-        return CE{c: cc, type_id: store_last_id(cc.store)}
+        sar := store_add_canonical(cc.store, mk_tuple_type(elem_ids, arity))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
     }
     return CE{c: c, type_id: TY_UNKNOWN}
 }
@@ -2907,9 +2907,9 @@ fn _check_expr_full(c: Checker) -> CE {
                     if _ck2(cc) == ")" { cc = _cadv(cc) }
                     if field == "to" {
                         // Checked conversion returns Result[T, ConversionError]
-                        new_st := store_add(cc.store, mk_result_type(conv_type, TY_STR))
-                        cc = _cset_store(cc, new_st)
-                        left_type = store_last_id(cc.store)
+                        sar := store_add_canonical(cc.store, mk_result_type(conv_type, TY_STR))
+                        cc = _cset_store(cc, sar.store)
+                        left_type = sar.id
                     } else {
                         // Truncating conversion returns T directly
                         left_type = conv_type
@@ -3251,9 +3251,9 @@ fn _check_primary(c: Checker) -> CE {
         if _ck2(cc) == "(" && name == "Some" {
             cr := _check_call_args(cc, TY_UNKNOWN)
             cc = cr.c
-            new_st := store_add(cc.store, mk_optional_type(cr.type_id))
-            cc = _cset_store(cc, new_st)
-            return CE{c: cc, type_id: store_last_id(cc.store)}
+            sar := store_add_canonical(cc.store, mk_optional_type(cr.type_id))
+            cc = _cset_store(cc, sar.store)
+            return CE{c: cc, type_id: sar.id}
         }
 
         // Ok(value) and Err(value) — Result constructors
@@ -3263,17 +3263,17 @@ fn _check_primary(c: Checker) -> CE {
             // Construct Result type from function context
             if name == "Ok" {
                 if cc.fn_error_type > 0 {
-                    new_st := store_add(cc.store, mk_result_type(cr.type_id, cc.fn_error_type))
-                    cc = _cset_store(cc, new_st)
-                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                    sar := store_add_canonical(cc.store, mk_result_type(cr.type_id, cc.fn_error_type))
+                    cc = _cset_store(cc, sar.store)
+                    return CE{c: cc, type_id: sar.id}
                 }
                 return CE{c: cc, type_id: cr.type_id}
             }
             if name == "Err" {
                 if cc.fn_return_type > 0 {
-                    new_st := store_add(cc.store, mk_result_type(cc.fn_return_type, cr.type_id))
-                    cc = _cset_store(cc, new_st)
-                    return CE{c: cc, type_id: store_last_id(cc.store)}
+                    sar := store_add_canonical(cc.store, mk_result_type(cc.fn_return_type, cr.type_id))
+                    cc = _cset_store(cc, sar.store)
+                    return CE{c: cc, type_id: sar.id}
                 }
                 return CE{c: cc, type_id: cr.type_id}
             }
@@ -3400,9 +3400,9 @@ fn _check_primary(c: Checker) -> CE {
                 ui = ui + 1
             }
             if has_user_none == false {
-                new_st := store_add(cc.store, mk_optional_type(TY_UNKNOWN))
-                cc = _cset_store(cc, new_st)
-                return CE{c: cc, type_id: store_last_id(cc.store)}
+                sar := store_add_canonical(cc.store, mk_optional_type(TY_UNKNOWN))
+                cc = _cset_store(cc, sar.store)
+                return CE{c: cc, type_id: sar.id}
             }
         }
 
@@ -3448,9 +3448,9 @@ fn _check_primary(c: Checker) -> CE {
                 cc = _cskip_nl(cc)
             }
             if _ck2(cc) == ")" { cc = _cadv(cc) }
-            new_store := store_add(cc.store, mk_tuple_type(elem_ids, arity))
-            cc = _cset_store(cc, new_store)
-            return CE{c: cc, type_id: store_last_id(cc.store)}
+            sar := store_add_canonical(cc.store, mk_tuple_type(elem_ids, arity))
+            cc = _cset_store(cc, sar.store)
+            return CE{c: cc, type_id: sar.id}
         }
         // Single grouped expression
         while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
@@ -3482,9 +3482,9 @@ fn _check_primary(c: Checker) -> CE {
             if _ck2(cc) == "," { cc = _cadv(cc) }
         }
         if _ck2(cc) == "]" { cc = _cadv(cc) }
-        new_st := store_add(cc.store, mk_array_type(elem_type))
-        cc = _cset_store(cc, new_st)
-        return CE{c: cc, type_id: store_last_id(cc.store)}
+        sar := store_add_canonical(cc.store, mk_array_type(elem_type))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
     }
 
     if k == "fn" {
@@ -3797,8 +3797,8 @@ fn _resolve_hkt_applied(store: TypeStore, tid: i64, tv0: i64, c0: i64, tv1: i64,
     if ctor > 0 && ctor < store.types.len() {
         ctor_info := store_get(store, ctor)
         if ctor_info.name == "_Array" && arg > 0 {
-            new_st := store_add(store, mk_array_type(arg))
-            return ResolvedApplied{resolved: store_last_id(new_st), store: new_st}
+            sar := store_add_canonical(store, mk_array_type(arg))
+            return ResolvedApplied{resolved: sar.id, store: sar.store}
         }
     }
     ResolvedApplied{resolved: 0, store: store}
@@ -4066,9 +4066,9 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
 
     // split returns [str]
     if method == "split" {
-        new_st := store_add(cc.store, mk_array_type(TY_STR))
-        cc = _cset_store(cc, new_st)
-        return CE{c: cc, type_id: store_last_id(cc.store)}
+        sar := store_add_canonical(cc.store, mk_array_type(TY_STR))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
     }
 
     // append returns same array type

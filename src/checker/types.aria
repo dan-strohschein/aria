@@ -220,11 +220,30 @@ fn store_find_type(store: TypeStore, info: TypeInfo) -> i64 {
             if kn == "Result" && existing.type_id == info.type_id && existing.type_id2 == info.type_id2 { return i }
             if kn == "Named" && existing.name == info.name { return i }
             if kn == "TypeVar" && existing.name == info.name { return i }
+            if kn == "Applied" && existing.type_id == info.type_id && existing.type_id2 == info.type_id2 { return i }
             if kn == "Tuple" && existing.name == info.name && existing.param_count == info.param_count { return i }
         }
         i = i + 1
     }
     return 0 - 1
+}
+
+// Add type to store with deduplication for container types (Array, Optional, Result, Tuple).
+// Returns the (possibly unchanged) store and the type ID.
+struct StoreAddResult {
+    store: TypeStore
+    id: i64
+}
+
+fn store_add_canonical(store: TypeStore, info: TypeInfo) -> StoreAddResult {
+    kn := type_kind_name(info.kind)
+    // Only canonicalize container types — Named/TypeVar are unique by definition
+    if kn == "Array" || kn == "Optional" || kn == "Result" || kn == "Tuple" || kn == "Applied" {
+        existing := store_find_type(store, info)
+        if existing >= 0 { return StoreAddResult{store: store, id: existing} }
+    }
+    new_store := store_add(store, info)
+    StoreAddResult{store: new_store, id: store_last_id(new_store)}
 }
 
 fn store_size(store: TypeStore) -> i64 = store.types.len()

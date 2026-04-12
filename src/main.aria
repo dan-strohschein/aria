@@ -36,6 +36,7 @@ struct Options {
     parallel: bool
     output_path: str
     help_requested: bool
+    has_error: bool
 }
 
 fn default_options() -> Options =
@@ -47,26 +48,29 @@ fn default_options() -> Options =
         runtime_path: "runtime/runtime.c",
         parallel: false,
         output_path: "",
-        help_requested: false
+        help_requested: false,
+        has_error: false
     }
 
-// DRY: Options setter helpers (avoid duplicating 8-field struct literal)
+// DRY: Options setter helpers (avoid duplicating 9-field struct literal)
 fn _opts_set_cmd(o: Options, c: Command) -> Options =
-    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_format(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_target(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_runtime(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_parallel(o: Options) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_output(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_files(o: Options, f: [str]) -> Options =
-    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested}
+    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
 fn _opts_set_help(o: Options) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true, has_error: o.has_error}
+fn _opts_set_error(o: Options) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: true}
 
 // --- Argument parsing ---
 
@@ -136,6 +140,7 @@ fn parse_args(args: [str]) -> Options with [Io] {
                     opts = _opts_set_format(opts, fv)
                 } else {
                     println("error: invalid format '" + fv + "' (expected 'text' or 'json')")
+                    opts = _opts_set_error(opts)
                 }
             } else if arg.startsWith("--target=") {
                 opts = _opts_set_target(opts, _parse_flag_value(arg))
@@ -157,6 +162,7 @@ fn parse_args(args: [str]) -> Options with [Io] {
                 opts = _opts_set_cmd(opts, CmdVersion)
             } else {
                 println("error: unknown flag '" + arg + "'")
+                opts = _opts_set_error(opts)
             }
         } else if cmd_set == false {
             opts = _opts_set_cmd(opts, parse_command(arg))
@@ -931,9 +937,15 @@ entry {
         print_help()
     } else {
         opts := parse_args(args)
+        if opts.has_error {
+            println("Run 'aria --help' for usage information.")
+        }
         cmd := command_to_str(opts.command)
         // Per-command help: aria <command> --help
-        if opts.help_requested {
+        if opts.has_error {
+            // Stop — errors already printed
+            mut _skip := 0
+        } else if opts.help_requested {
             if cmd == "build" {
                 _print_build_help()
             } else if cmd == "run" {

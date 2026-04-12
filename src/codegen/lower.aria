@@ -259,6 +259,19 @@ fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     return -1
 }
 
+// Emit a warning for unresolved lookups during lowering (DRY: single warning format)
+// Suppresses false positives for diagnostic codes (E0100, W0009)
+fn _warn_unresolved(l: Lowerer, kind: str, name: str) {
+    mut suppress := false
+    if name.len() > 0 {
+        ch := name.charAt(0)
+        if ch == "E" || ch == "W" { suppress = true }
+    }
+    if suppress == false {
+        println(l.file + ":" + i2s(_lcur(l).line) + ": warning: unresolved " + kind + " '" + name + "'")
+    }
+}
+
 // --- Additional DRY helpers (SRP: each changes exactly one field group) ---
 
 fn _lset_error_type(l: Lowerer, et: i64) -> Lowerer =
@@ -1561,6 +1574,10 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     return LT{l: ll, temp: nt_temp}
                 }
             }
+            // Pipe target not found
+            if expr_kind_name(right_node.kind) == "Ident" {
+                _warn_unresolved(ll, "pipe target", right_node.s1)
+            }
             return LT{l: ll, temp: left.temp}
         }
         // Bitwise operators
@@ -1867,6 +1884,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if has_field.name == "" && sname != "" {
             qualified := sname + "_" + field
             msig := reg_find_fn(ll.registry, qualified)
+            if msig.name == "" {
+                _warn_unresolved(ll, "field", sname + "." + field)
+            }
             if msig.name != "" {
                 // Register for bound-trampoline generation
                 ll = _lset_reg(ll, reg_add_bound_fn_value_ref(ll.registry, qualified))
@@ -2010,6 +2030,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     if nk == "Struct" {
         sname := node.s1
         sdef := reg_find_struct(ll.registry, sname)
+        if sdef.name == "" { _warn_unresolved(ll, "struct", sname) }
         alloc_sz := _struct_field_count(ll.registry, sname)
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -7380,6 +7401,7 @@ fn _lower_primary(l: Lowerer) -> LT {
             return LT{l: ll, temp: clos.temp}
         }
         // Unknown identifier — return 0
+        _warn_unresolved(ll, "identifier", name)
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
@@ -8849,6 +8871,7 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
     }
 
     // Fallback: return obj (method not recognized)
+    _warn_unresolved(ll, "method", method)
     return LT{l: ll, temp: obj}
 }
 
@@ -10227,28 +10250,60 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     closure_name := "_closure_" + i2s(ll.module.closure_count)
     ll = _lset_mod(ll, mod_next_closure(ll.module))
 
-    // Parse parameter names from s1 (comma-separated)
+    // Parse parameter names from s1, resolve types from token stream
     mut param_names := [""]
     mut param_types := [0]
-    if node.s1.len() > 0 {
+
+    // Scan closure tokens to extract param names and type annotations
+    tp := _find_tok_pos(ll, node.span.offset)
+    mut scan := tp
+    // Skip "fn" and optional "once"
+    if scan < ll.tokens.len() && ll.tokens[scan].name == "fn" { scan = scan + 1 }
+    if scan < ll.tokens.len() && ll.tokens[scan].text == "once" { scan = scan + 1 }
+    // Skip "("
+    if scan < ll.tokens.len() && ll.tokens[scan].name == "(" { scan = scan + 1 }
+    // Scan params: name [: type] , ...
+    while scan < ll.tokens.len() && ll.tokens[scan].name != ")" && ll.tokens[scan].name != "EOF" {
+        if ll.tokens[scan].name == "IDENT" {
+            param_names = param_names.append(ll.tokens[scan].text)
+            scan = scan + 1
+            mut pt := 1  // default i64
+            if scan < ll.tokens.len() && ll.tokens[scan].name == ":" {
+                scan = scan + 1
+                // Read type annotation
+                if scan < ll.tokens.len() && ll.tokens[scan].name == "IDENT" {
+                    tname := ll.tokens[scan].text
+                    resolved := resolve_type_name(ll.store, tname)
+                    if resolved != TY_UNKNOWN { pt = resolved }
+                    if resolved == TY_UNKNOWN {
+                        st_id := _struct_type_id(ll.registry, tname)
+                        if st_id > 0 { pt = st_id }
+                    }
+                    scan = scan + 1
+                } else if scan < ll.tokens.len() && ll.tokens[scan].name == "[" {
+                    // Array type [T] — skip for now, complex to resolve in lowerer
+                    while scan < ll.tokens.len() && ll.tokens[scan].name != "]" { scan = scan + 1 }
+                    if scan < ll.tokens.len() { scan = scan + 1 }
+                }
+            }
+            param_types = param_types.append(pt)
+        } else {
+            scan = scan + 1
+        }
+        if scan < ll.tokens.len() && ll.tokens[scan].name == "," { scan = scan + 1 }
+    }
+
+    // Fallback: if token scan found no params but s1 has names, parse from s1
+    if param_names.len() <= 1 && node.s1.len() > 0 {
         parts := node.s1.split(",")
         mut pi := 1
         while pi < parts.len() {
             if parts[pi].len() > 0 {
                 param_names = param_names.append(parts[pi])
-                param_types = param_types.append(1)  // default i64
+                param_types = param_types.append(1)
             }
             pi = pi + 1
         }
-    }
-
-    // Resolve param types from checker if available
-    // Check if the closure was registered with a temp name
-    mut pi := 1
-    while pi < param_names.len() {
-        // Look up type from the function's type info if the checker annotated it
-        // For now, keep defaults — most closure params are i64
-        pi = pi + 1
     }
 
     // Determine return type (default i64)
@@ -10295,7 +10350,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     ll = _lenv_add(ll, "_env", env_param.temp)
 
     // Register closure parameters
-    pi = 1
+    mut pi := 1
     while pi < param_names.len() {
         pt := param_types[pi]
         pn := param_names[pi]
