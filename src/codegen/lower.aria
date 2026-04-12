@@ -1681,10 +1681,13 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- For ---
 
     if nk == "For" {
-        // s1=var_name (or first in tuple), s2=second name, b1=is_tuple, c0=iterator, c1=body
+        // s1=var_name (or first in tuple), s2=second name OR label, b1=is_tuple, b2=is_labeled
+        // c0=iterator, c1=body
         var_name := node.s1
-        var_name2 := node.s2
+        mut var_name2 := node.s2
         is_tuple_for := node.b1
+        mut loop_label := ""
+        if node.b2 && is_tuple_for == false { loop_label = node.s2; var_name2 = "" }
         iter_node := pool_get(ll.pool, node.c0)
         // Check if iterator is a Range node
         if expr_kind_name(iter_node.kind) == "Range" {
@@ -1749,6 +1752,11 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         prev_start := ll.loop_start
         prev_end := ll.loop_end
         ll = _lset_loop(ll, inc_lbl.temp, end_lbl.temp)
+        // Register labeled loop endpoints for `break label` / `continue label`
+        if loop_label.len() > 0 {
+            ll = _lenv_add(ll, "_label_" + loop_label, end_lbl.temp)
+            ll = _lenv_add(ll, "_label_" + loop_label + "_start", inc_lbl.temp)
+        }
         body := _lower_expr_node(ll, node.c1)
         ll = body.l
         ll = _lset_loop(ll, prev_start, prev_end)
@@ -1768,13 +1776,27 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Break / Continue ---
 
     if nk == "Break" {
-        if ll.loop_end >= 0 {
+        // Check for labeled break: break label → jump to _label_NAME's stored end label
+        if node.s1.len() > 0 {
+            label_key := "_label_" + node.s1
+            label_end := _lenv_lookup(ll, label_key)
+            if label_end >= 0 {
+                ll = _lemit(ll, new_inst(OpJump, 0, label_end, 0, "", 0))
+            }
+        } else if ll.loop_end >= 0 {
             ll = _lemit(ll, new_inst(OpJump, 0, ll.loop_end, 0, "", 0))
         }
         return LT{l: ll, temp: -1}
     }
     if nk == "Continue" {
-        if ll.loop_start >= 0 {
+        // Check for labeled continue: continue label → jump to _label_NAME_start
+        if node.s1.len() > 0 {
+            label_key := "_label_" + node.s1 + "_start"
+            label_start := _lenv_lookup(ll, label_key)
+            if label_start >= 0 {
+                ll = _lemit(ll, new_inst(OpJump, 0, label_start, 0, "", 0))
+            }
+        } else if ll.loop_start >= 0 {
             ll = _lemit(ll, new_inst(OpJump, 0, ll.loop_start, 0, "", 0))
         }
         return LT{l: ll, temp: -1}
@@ -4100,7 +4122,15 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
     if k == "return" { return _lower_return(l) }
     if k == "break" {
         mut ll := _ladv(l)
-        if l.loop_end >= 0 {
+        // Check for labeled break: break outer
+        if _lk(ll) == "IDENT" {
+            bname := _lcur(ll).text
+            ll = _ladv(ll)
+            label_end := _lenv_lookup(ll, "_label_" + bname)
+            if label_end >= 0 {
+                ll = _lemit(ll, new_inst(OpJump, 0, label_end, 0, "", 0))
+            }
+        } else if l.loop_end >= 0 {
             ll = _lemit(ll, new_inst(OpJump, 0, l.loop_end, 0, "", 0))
         }
         return ll
@@ -4121,6 +4151,22 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
     if k == "for" { return _lower_for(l) }
     if k == "while" { return _lower_while(l) }
     if k == "loop" { return _lower_loop(l) }
+    // Labeled loop: IDENT : for/while/loop — skip label and colon
+    if k == "IDENT" && l.pos + 1 < l.tokens.len() && l.tokens[l.pos + 1].name == ":" {
+        lp2 := l.pos + 2
+        if lp2 < l.tokens.len() {
+            lk := l.tokens[lp2].name
+            if lk == "for" || lk == "while" || lk == "loop" {
+                // Skip label and colon, dispatch to loop handler
+                // The loop handler reads loop_label from the token stream
+                // For now, just skip and dispatch — label is registered by AST path
+                mut ll := _ladv(_ladv(_ladv(l)))  // skip IDENT : keyword
+                if lk == "for" { return _lower_for(_lset_pos(l, lp2)) }
+                if lk == "while" { return _lower_while(_lset_pos(l, lp2)) }
+                return _lower_loop(_lset_pos(l, lp2))
+            }
+        }
+    }
     if k == "if" {
         result := _lower_if(l)
         return result.l

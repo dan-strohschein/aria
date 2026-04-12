@@ -1439,8 +1439,22 @@ fn _parse_stmt(p: Parser) -> PR {
     k := _ck(p)
     if k == "mut" { return _parse_mut(p) }
     if k == "return" { return _parse_return(p) }
-    if k == "break" { return PR{p: _adv(p), e: mk_break(_pspan(p))} }
-    if k == "continue" { return PR{p: _adv(p), e: mk_continue(_pspan(p))} }
+    if k == "break" {
+        span := _pspan(p)
+        mut pp := _adv(p)
+        mut label := ""
+        if _ck(pp) == "IDENT" { label = _cur(pp).text; pp = _adv(pp) }
+        return PR{p: pp, e: Expr{kind: EkBreak, s1: label, s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
+    if k == "continue" {
+        span := _pspan(p)
+        mut pp := _adv(p)
+        mut label := ""
+        if _ck(pp) == "IDENT" { label = _cur(pp).text; pp = _adv(pp) }
+        return PR{p: pp, e: Expr{kind: EkContinue, s1: label, s2: "", b1: false, b2: false,
+                                  c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
     if k == "yield" {
         span := _pspan(p)
         mut pp := _adv(p)
@@ -1453,6 +1467,30 @@ fn _parse_stmt(p: Parser) -> PR {
     if k == "for" { return _parse_for(p) }
     if k == "while" { return _parse_while(p) }
     if k == "loop" { return _parse_loop(p) }
+    // Labeled loop: label: for/while/loop — skip label and colon, parse loop
+    if k == "IDENT" {
+        lp1 := p.pos + 1
+        if lp1 < p.tokens.len() && p.tokens[lp1].name == ":" {
+            lp2 := lp1 + 1
+            if lp2 < p.tokens.len() {
+                lk := p.tokens[lp2].name
+                if lk == "for" || lk == "while" || lk == "loop" {
+                    label := _cur(p).text
+                    mut pp := _adv(_adv(_adv(p)))  // skip label, :, keyword
+                    if lk == "for" {
+                        fr := _parse_for_body(pp, label)
+                        return fr
+                    }
+                    if lk == "while" {
+                        wr := _parse_while_body(pp, label)
+                        return wr
+                    }
+                    lr := _parse_loop_body(pp, label)
+                    return lr
+                }
+            }
+        }
+    }
     if k == "defer" {
         span := _pspan(p)
         mut pp := _adv(p)
@@ -2570,6 +2608,61 @@ fn _parse_loop(p: Parser) -> PR {
     body_idx := _pidx(body.p)
     pp = _padd(body.p, body.e)
     PR{p: pp, e: Expr{kind: EkLoop, s1: "", s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
+// Labeled loop body parsers — called with parser positioned AFTER the loop keyword
+fn _parse_for_body(p: Parser, label: str) -> PR {
+    span := _pspan(p)
+    mut pp := p
+    mut pat := ""
+    mut pat2 := ""
+    mut is_tuple := false
+    if _ck(pp) == "(" {
+        pp = _adv(pp)
+        if _ck(pp) == "IDENT" { pat = _cur(pp).text; pp = _adv(pp) }
+        if _ck(pp) == "," { pp = _adv(pp) }
+        if _ck(pp) == "IDENT" { pat2 = _cur(pp).text; pp = _adv(pp); is_tuple = true }
+        if _ck(pp) == ")" { pp = _adv(pp) }
+    } else {
+        pat = _cur(pp).text
+        pp = _adv(pp)
+    }
+    pp = _expect(pp, "in")
+    iter := _parse_expr(pp, 0)
+    iter_idx := _pidx(iter.p)
+    pp = _padd(iter.p, iter.e)
+    body := _parse_block(pp)
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    // b2=true indicates labeled loop; label stored differently depending on is_tuple:
+    // non-tuple: s2=label. tuple: s2=second var name, label lost (limitation)
+    mut lbl := label
+    if is_tuple { lbl = "" }
+    PR{p: pp, e: Expr{kind: EkFor, s1: pat, s2: lbl, b1: is_tuple, b2: true,
+                       c0: iter_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
+fn _parse_while_body(p: Parser, label: str) -> PR {
+    span := _pspan(p)
+    mut pp := p
+    cond := _parse_expr(pp, 0)
+    cond_idx := _pidx(cond.p)
+    pp = _padd(cond.p, cond.e)
+    body := _parse_block(pp)
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkWhile, s1: label, s2: "", b1: false, b2: true,
+                       c0: cond_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
+fn _parse_loop_body(p: Parser, label: str) -> PR {
+    span := _pspan(p)
+    mut pp := p
+    body := _parse_block(pp)
+    body_idx := _pidx(body.p)
+    pp = _padd(body.p, body.e)
+    PR{p: pp, e: Expr{kind: EkLoop, s1: label, s2: "", b1: false, b2: true,
                        c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
