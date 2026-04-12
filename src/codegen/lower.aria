@@ -5044,8 +5044,13 @@ fn _lower_expr(l: Lowerer) -> LT {
                         // Try TypeName_method qualified name
                         left_name := _struct_name_for_type(ll.store, ll.registry, left_type)
                         if left_name == "" {
-                            // left might be an unresolved ident — use the token text
-                            if ll.pos > 2 { left_name = ll.tokens[ll.pos - 2].text }
+                            // left might be an unresolved ident — scan back to find Type in Type.method(
+                            // pos is at (, pos-1 is method name, pos-2 is ., pos-3 is Type
+                            if ll.pos > 3 && ll.tokens[ll.pos - 2].name == "." {
+                                left_name = ll.tokens[ll.pos - 3].text
+                            } else if ll.pos > 2 {
+                                left_name = ll.tokens[ll.pos - 2].text
+                            }
                         }
                         if left_name.len() > 0 {
                             qualified_name := left_name + "_" + field
