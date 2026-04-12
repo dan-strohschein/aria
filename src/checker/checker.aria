@@ -4561,6 +4561,15 @@ fn _check_match(c: Checker) -> CE {
                 cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + missing + "' not covered")
             }
         }
+        // Tuple exhaustiveness — tuples have no finite variant set, require wildcard
+        if kind_name == "Tuple" {
+            cc = _cerror_note(cc, E0400, "non-exhaustive match on tuple: missing wildcard arm", "add a `_` or binding arm to cover all tuple values")
+        }
+
+        // Array exhaustiveness — arrays have infinite domain, require wildcard
+        if kind_name == "Array" {
+            cc = _cerror_note(cc, E0400, "non-exhaustive match on array: missing wildcard arm", "add a `_` or binding arm to cover all array values")
+        }
     }
 
     CE{c: cc, type_id: arm_type}
