@@ -144,11 +144,13 @@ fn _gc_root_count_for_func(f: IrFunc) -> i64 {
     return count
 }
 
-// After storing a value to a temp, update its GC frame slot if it's a root
+// After storing a value to a temp, update its GC frame slot if it's a root.
+// Now uses the per-function cached tables on `g` instead of recomputing per call.
+// The `f` parameter is preserved for API compatibility but no longer scanned.
 fn _gc_frame_update(g: LlvmGen, f: IrFunc, temp: i64, val: str, idx: i64) -> LlvmGen {
-    if _is_gc_root(f, temp) == false { return g }
-    gc_frame_slots := _gc_root_count_for_func(f) + 2
-    slot := _gc_slot_for_temp(f, temp)
+    if _lg_is_root(g, temp) == false { return g }
+    gc_frame_slots := g.gc_root_count + 2
+    slot := _lg_slot_for(g, temp)
     if slot < 0 || gc_frame_slots <= 2 { return g }
     mut gg := g
     gep := "%gc_u_" + i2s(idx) + "_" + i2s(temp)
@@ -172,32 +174,165 @@ fn _gc_slot_for_temp(f: IrFunc, temp: i64) -> i64 {
 }
 
 // --- LLVM IR text builder (array-based) ---
+//
+// LlvmGen carries cached GC root tables alongside the IR text. The tables are
+// computed ONCE per function (in _gen_function) instead of being recomputed by
+// every _is_gc_root / _gc_slot_for_temp / _gc_root_count_for_func call. Profile
+// of the previous version showed _is_gc_root taking 95% of CPU time during
+// codegen because each call did a full O(insts) scan to find a temp's defining
+// instruction. Caching turns those into O(1) lookups.
+//
+// Tables are indexed by temp number (0-based, no sentinel offset) using
+// gc_is_root[temp] and gc_slot[temp]. They are sized to f.local_count + 1 so
+// they cover every temp the function can reference.
 
 struct LlvmGen {
     parts: [str]
     label_counter: i64
     last_was_term: bool
+    gc_is_root: [i64]
+    gc_slot: [i64]
+    gc_root_count: i64
 }
 
-fn _lg_new() -> LlvmGen = LlvmGen{parts: [""], label_counter: 0, last_was_term: false}
+fn _lg_new() -> LlvmGen =
+    LlvmGen{parts: [""], label_counter: 0, last_was_term: false,
+            gc_is_root: [0], gc_slot: [0], gc_root_count: 0}
 
 fn _lg_emit(g: LlvmGen, line: str) -> LlvmGen =
-    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: false}
+    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: false,
+            gc_is_root: g.gc_is_root, gc_slot: g.gc_slot, gc_root_count: g.gc_root_count}
 
 fn _lg_emit_term(g: LlvmGen, line: str) -> LlvmGen =
-    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: true}
+    LlvmGen{parts: g.parts.append("  " + line + "\n"), label_counter: g.label_counter, last_was_term: true,
+            gc_is_root: g.gc_is_root, gc_slot: g.gc_slot, gc_root_count: g.gc_root_count}
 
 fn _lg_emit_label(g: LlvmGen, label: str) -> LlvmGen =
-    LlvmGen{parts: g.parts.append(label + ":\n"), label_counter: g.label_counter, last_was_term: false}
+    LlvmGen{parts: g.parts.append(label + ":\n"), label_counter: g.label_counter, last_was_term: false,
+            gc_is_root: g.gc_is_root, gc_slot: g.gc_slot, gc_root_count: g.gc_root_count}
 
 fn _lg_fresh_label(g: LlvmGen) -> LT_label {
     id := g.label_counter + 1
-    LT_label{g: LlvmGen{parts: g.parts, label_counter: id, last_was_term: g.last_was_term}, id: id}
+    LT_label{g: LlvmGen{parts: g.parts, label_counter: id, last_was_term: g.last_was_term,
+                         gc_is_root: g.gc_is_root, gc_slot: g.gc_slot, gc_root_count: g.gc_root_count}, id: id}
+}
+
+// Install pre-computed GC tables on the LlvmGen. Called once at the start of
+// _gen_function, before any instruction is generated.
+fn _lg_install_gc(g: LlvmGen, is_root: [i64], slot: [i64], count: i64) -> LlvmGen =
+    LlvmGen{parts: g.parts, label_counter: g.label_counter, last_was_term: g.last_was_term,
+            gc_is_root: is_root, gc_slot: slot, gc_root_count: count}
+
+// O(1) cached lookup — replaces the O(insts) _is_gc_root(f, temp) call.
+// Cached arrays are shifted-by-1: temp t is at index t + 1.
+fn _lg_is_root(g: LlvmGen, temp: i64) -> bool {
+    idx := temp + 1
+    if idx < 1 { return false }
+    if idx >= g.gc_is_root.len() { return false }
+    g.gc_is_root[idx] != 0
+}
+
+// O(1) cached lookup — replaces the O(temps × insts) _gc_slot_for_temp(f, temp).
+fn _lg_slot_for(g: LlvmGen, temp: i64) -> i64 {
+    idx := temp + 1
+    if idx < 1 { return 0 - 1 }
+    if idx >= g.gc_slot.len() { return 0 - 1 }
+    g.gc_slot[idx]
 }
 
 struct LT_label {
     g: LlvmGen
     id: i64
+}
+
+// Build the per-function GC tables in O(insts + temps) time. Single pass over
+// instructions populates def_found and could_be_ptr (in place via arr[i]=val);
+// second pass over temps computes is_root; third pass assigns slot indices.
+//
+// All cached arrays are SHIFTED-BY-1: index 0 is a sentinel, index `temp + 1`
+// holds the value for temp t. This matches Aria's convention of [0]-prefixed
+// arrays so .len() and append() work cleanly. _lg_is_root / _lg_slot_for use
+// the same offset.
+//
+// Replaces the original O(temps × insts) recomputation that ran for EVERY
+// _is_gc_root / _gc_slot_for_temp / _gc_root_count_for_func call. The profile
+// before this fix showed _is_gc_root taking 95% of CPU time during codegen.
+fn _build_gc_tables(f: IrFunc) -> LlvmGen {
+    // First scan: compute max temp index referenced by any instruction. The
+    // table needs to cover every temp that _gen_inst might pass to _gc_frame_update.
+    mut max_temp := f.param_count
+    if max_temp < f.local_count { max_temp = f.local_count }
+    mut si := 1
+    while si < f.insts.len() {
+        if f.insts[si].dest > max_temp { max_temp = f.insts[si].dest }
+        si = si + 1
+    }
+    n := max_temp + 2
+    // Scratch arrays def_found / could_be_ptr, indexed temp[t] = arr[t + 1].
+    // Initialize via append so size = n + 2 (sentinel + n + 1 entries).
+    mut def_found := [0]
+    mut could_be_ptr := [0]
+    mut k := 0
+    while k <= n {
+        def_found = def_found.append(0)
+        could_be_ptr = could_be_ptr.append(0)
+        k = k + 1
+    }
+    // Single pass over instructions: mark def_found and could_be_ptr per dest.
+    // Uses in-place arr[i]=val (lowered to _aria_array_set). This pattern is
+    // verified to work when compiled by gen2_speed and later generations.
+    mut ii := 1
+    while ii < f.insts.len() {
+        inst := f.insts[ii]
+        d := inst.dest
+        di := d + 1
+        if di >= 1 && di < def_found.len() {
+            def_found[di] = 1
+            op := ir_op_name(inst.op)
+            if _is_definitely_scalar_op(op) == false && op != "ConstStr" {
+                could_be_ptr[di] = 1
+            }
+        }
+        ii = ii + 1
+    }
+    // Second pass: compute is_root[t + 1] for every temp t in 0..n.
+    mut is_root := [0]
+    mut t := 0
+    while t <= n {
+        ti := t + 1
+        mut val := 0
+        tt := _get_temp_type(f, t)
+        if tt == 1 {
+            val = 0
+        } else if tt == 12 {
+            val = 1
+        } else if tt >= 100 {
+            val = 1
+        } else if def_found[ti] == 1 {
+            if could_be_ptr[ti] == 1 { val = 1 }
+        } else if t < f.param_count {
+            val = 1
+        }
+        is_root = is_root.append(val)
+        t = t + 1
+    }
+    // Third pass: assign slot indices and count roots, mirrored against is_root.
+    // For temps 0..local_count - 1 only (matches original _gc_slot_for_temp loop).
+    mut slot := [0]
+    mut rc := 0
+    mut t2 := 0
+    while t2 <= n {
+        ti := t2 + 1
+        if t2 < f.local_count && ti < is_root.len() && is_root[ti] == 1 {
+            slot = slot.append(rc)
+            rc = rc + 1
+        } else {
+            slot = slot.append(0 - 1)
+        }
+        t2 = t2 + 1
+    }
+    LlvmGen{parts: [""], label_counter: 0, last_was_term: false,
+            gc_is_root: is_root, gc_slot: slot, gc_root_count: rc}
 }
 
 fn _t(n: i64) -> str {
@@ -929,11 +1064,14 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         pi = pi + 1
     }
 
-    // GC frame: count pointer-typed temps and reserve shadow stack slots
-    // Only for functions that have OpAlloc instructions (functions that allocate)
+    // GC frame: count pointer-typed temps and reserve shadow stack slots.
+    // Build the GC tables ONCE per function via _build_gc_tables (replaces the
+    // old O(N²) per-call recomputation in _is_gc_root). The tables are then
+    // cached on the LlvmGen and consulted via _lg_is_root / _lg_slot_for in
+    // O(1) per lookup.
+    gc_proto := _build_gc_tables(f)
+    gc_root_count := gc_proto.gc_root_count
     mut has_alloc := false
-    mut gc_root_count := _gc_root_count_for_func(f)
-    // Check if this function has any OpAlloc
     mut aci := 1
     while aci < f.insts.len() {
         if ir_op_name(f.insts[aci].op) == "Alloc" { has_alloc = true }
@@ -954,11 +1092,13 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
             zi = zi + 1
         }
         p = p.append("  call void @_aria_gc_frame_push(i64 %gc_frame_ptr, i64 " + i2s(gc_root_count) + ")" + nl)
-        // Store parameter values into GC frame (params might hold struct pointers)
+        // Store parameter values into GC frame (params might hold struct pointers).
+        // Use the cached tables instead of per-temp _is_gc_root scans.
         mut pi2 := 0
         while pi2 < f.param_count {
-            if _is_gc_root(f, pi2) {
-                slot := _gc_slot_for_temp(f, pi2)
+            pi2_idx := pi2 + 1
+            if pi2_idx < gc_proto.gc_is_root.len() && gc_proto.gc_is_root[pi2_idx] != 0 {
+                slot := gc_proto.gc_slot[pi2_idx]
                 if slot >= 0 {
                     pv := "%gc_param_" + i2s(pi2)
                     pg := "%gc_paramg_" + i2s(pi2)
@@ -971,8 +1111,10 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         }
     }
 
-    // Generate instructions
+    // Generate instructions — install the cached GC tables on the LlvmGen so
+    // _gc_frame_update / _lg_is_root / _lg_slot_for see them.
     mut g := _lg_new()
+    g = _lg_install_gc(g, gc_proto.gc_is_root, gc_proto.gc_slot, gc_root_count)
     mut idx := 1
     while idx < f.insts.len() {
         inst := f.insts[idx]
@@ -1178,9 +1320,8 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Ret" {
         mut gg := g
-        // Pop GC frame before return
-        gc_rc := _gc_root_count_for_func(f)
-        if gc_rc > 0 {
+        // Pop GC frame before return — use cached root count from LlvmGen.
+        if g.gc_root_count > 0 {
             gg = _lg_emit(gg, "call void @_aria_gc_frame_pop()")
         }
         si64 := _struct_i64_i64()
@@ -1204,8 +1345,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "RetVoid" {
         mut gg := g
-        gc_rcv := _gc_root_count_for_func(f)
-        if gc_rcv > 0 {
+        if g.gc_root_count > 0 {
             gg = _lg_emit(gg, "call void @_aria_gc_frame_pop()")
         }
         return _lg_emit_term(gg, "ret void")
@@ -1218,10 +1358,10 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%store_v_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
-        // Update GC frame if dest is a potential pointer temp
-        if _is_gc_root(f, inst.dest) {
-            gc_frame_slots := _gc_root_count_for_func(f) + 2
-            slot := _gc_slot_for_temp(f, inst.dest)
+        // Update GC frame if dest is a potential pointer temp — use cached tables.
+        if _lg_is_root(g, inst.dest) {
+            gc_frame_slots := g.gc_root_count + 2
+            slot := _lg_slot_for(g, inst.dest)
             if slot >= 0 && gc_frame_slots > 2 {
                 gep := "%gc_ss_" + i2s(idx)
                 gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
@@ -1321,12 +1461,10 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
 
-        // Store this allocation's result into the GC frame.
-        // The frame is kept up-to-date incrementally: each OpAlloc stores
-        // only its own result. Previous allocs already stored theirs.
-        if _is_gc_root(f, inst.dest) {
-            gc_frame_slots := _gc_root_count_for_func(f) + 2
-            slot := _gc_slot_for_temp(f, inst.dest)
+        // Store this allocation's result into the GC frame — cached tables.
+        if _lg_is_root(g, inst.dest) {
+            gc_frame_slots := g.gc_root_count + 2
+            slot := _lg_slot_for(g, inst.dest)
             if slot >= 0 {
                 gep := "%gc_store_" + i2s(idx)
                 gg = _lg_emit(gg, gep + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(slot + 2))
