@@ -1660,7 +1660,7 @@ fn _resolve_ident(r: Resolver) -> Resolver {
         first_ch := name.charAt(0)
         is_lower := first_ch >= "a" && first_ch <= "z" || first_ch == "_"
         if is_lower {
-            rr := _rwarning(r, E0701, msg)
+            rr := _rerror(r, E0701, msg)
             return _radv(rr)
         }
         rr := _rerror(r, E0701, msg)
