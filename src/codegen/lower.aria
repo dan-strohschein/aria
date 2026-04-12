@@ -8223,6 +8223,72 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: new_arr.temp}
     }
 
+    // collect() — no-op, arrays are already eager
+    if method == "collect" {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        return LT{l: ll, temp: obj}
+    }
+
+    // count() — return array length
+    if method == "count" {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        len_nt := _lnew_temp(ll)
+        ll = len_nt.l
+        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
+        ll = _lset_type(ll, len_nt.temp, 1)
+        return LT{l: ll, temp: len_nt.temp}
+    }
+
+    // reverse() — new array with elements in reverse order
+    // Uses forward loop i=0..len computing rev_idx = len-1-i
+    if method == "reverse" {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        obj_type := _lget_type(ll, obj)
+        new_arr := _lnew_temp(ll)
+        ll = new_arr.l
+        cap_nt := _lnew_temp(ll)
+        ll = cap_nt.l
+        ll = _lemit(ll, new_inst(OpConst, cap_nt.temp, 8, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpArrayNew, new_arr.temp, cap_nt.temp, 0, "", 0))
+        len_nt := _lnew_temp(ll)
+        ll = len_nt.l
+        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
+        idx_nt := _lnew_temp(ll)
+        ll = idx_nt.l
+        ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
+        loop_lbl := _lnew_label(ll)
+        ll = loop_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+        cmp_nt := _lnew_temp(ll)
+        ll = cmp_nt.l
+        ll = _lemit(ll, new_inst(OpLt, cmp_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, end_lbl.temp, "", 0))
+        // rev_idx = len - 1 - i
+        one_nt := _lnew_temp(ll)
+        ll = one_nt.l
+        ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+        rev_idx := _lnew_temp(ll)
+        ll = rev_idx.l
+        ll = _lemit(ll, new_inst(OpSub, rev_idx.temp, len_nt.temp, one_nt.temp, "", 0))
+        rev_idx2 := _lnew_temp(ll)
+        ll = rev_idx2.l
+        ll = _lemit(ll, new_inst(OpSub, rev_idx2.temp, rev_idx.temp, idx_nt.temp, "", 0))
+        elem_nt := _lnew_temp(ll)
+        ll = elem_nt.l
+        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, obj, rev_idx2.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, elem_nt.temp, "", 0))
+        inc_nt := _lnew_temp(ll)
+        ll = inc_nt.l
+        ll = _lemit(ll, new_inst(OpConst, inc_nt.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpAdd, idx_nt.temp, idx_nt.temp, inc_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        if obj_type > 0 { ll = _lset_type(ll, new_arr.temp, obj_type) }
+        return LT{l: ll, temp: new_arr.temp}
+    }
+
     if method == "append" {
         elem := _lower_expr(ll)
         ll = elem.l

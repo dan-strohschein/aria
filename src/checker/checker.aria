@@ -4179,10 +4179,24 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
         return CE{c: cc, type_id: sar.id}
     }
 
-    // map/filter return same array type (element type may differ for map but we use TY_UNKNOWN)
-    if method == "map" || method == "filter" {
+    // map/filter/reverse/collect/take/skip return same array type
+    if method == "map" || method == "filter" || method == "reverse" || method == "collect" || method == "take" || method == "skip" || method == "flat_map" || method == "unique" {
         return CE{c: cc, type_id: obj_type}
     }
+    // count returns i64
+    if method == "count" { return CE{c: cc, type_id: TY_I64} }
+    // any/all return bool
+    if method == "any" || method == "all" { return CE{c: cc, type_id: TY_BOOL} }
+    // first/last return element type (approximated as TY_UNKNOWN)
+    if method == "first" || method == "last" { return CE{c: cc, type_id: TY_UNKNOWN} }
+    // join returns str
+    if method == "join" { return CE{c: cc, type_id: TY_STR} }
+    // fold returns TY_UNKNOWN (depends on accumulator type)
+    if method == "fold" { return CE{c: cc, type_id: TY_UNKNOWN} }
+    // sort/sort_by return same array type
+    if method == "sort" || method == "sort_by" { return CE{c: cc, type_id: obj_type} }
+    // zip returns TY_UNKNOWN (array of tuples)
+    if method == "zip" { return CE{c: cc, type_id: TY_UNKNOWN} }
 
     // append returns same array type
     if method == "append" {
