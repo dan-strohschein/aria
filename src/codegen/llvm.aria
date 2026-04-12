@@ -296,6 +296,17 @@ fn _build_gc_tables(f: IrFunc) -> LlvmGen {
         ii = ii + 1
     }
     // Second pass: compute is_root[t + 1] for every temp t in 0..n.
+    //
+    // Priority order matters: we check the defining instruction BEFORE the
+    // declared type. This is critical for functions like token_name whose
+    // match arms return ConstStr literals — those produce static (.str.NNN)
+    // pointers, not heap allocations, and don't need GC tracking even though
+    // their declared type is 12 (str). The previous order (type first) marked
+    // 113 such temps as roots in token_name, ballooning the GC frame.
+    //
+    // Safety: a temp with multiple defs has could_be_ptr set to 1 if ANY
+    // def is non-scalar and non-ConstStr — so a temp that's reassigned from
+    // a literal to a heap string is still tracked correctly.
     mut is_root := [0]
     mut t := 0
     while t <= n {
@@ -304,12 +315,12 @@ fn _build_gc_tables(f: IrFunc) -> LlvmGen {
         tt := _get_temp_type(f, t)
         if tt == 1 {
             val = 0
+        } else if def_found[ti] == 1 {
+            if could_be_ptr[ti] == 1 { val = 1 }
         } else if tt == 12 {
             val = 1
         } else if tt >= 100 {
             val = 1
-        } else if def_found[ti] == 1 {
-            if could_be_ptr[ti] == 1 { val = 1 }
         } else if t < f.param_count {
             val = 1
         }
