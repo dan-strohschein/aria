@@ -2419,7 +2419,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Catch ---
 
     if nk == "Catch" {
-        // c0=expr, c1=handler, s1=error binding
+        // c0=expr, s1=error binding name
+        // b1=true: multi-arm catch (list has arm pairs)
+        // b1=false: single-body catch (c1=handler)
         expr := _lower_expr_node(ll, node.c0)
         ll = expr.l
         tag_nt := _lnew_temp(ll)
@@ -2438,17 +2440,32 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         end_lbl := _lnew_label(ll)
         ll = end_lbl.l
         ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_err.temp, ok_lbl.temp, "", 0))
-        // Error path: bind error and lower handler
-        if node.s1.len() > 0 {
-            err_val := _lnew_temp(ll)
-            ll = err_val.l
-            ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
-            ll = _lenv_add(ll, node.s1, err_val.temp)
-        }
-        handler := _lower_expr_node(ll, node.c1)
-        ll = handler.l
-        if handler.temp >= 0 {
-            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, handler.temp, 0, "", 0))
+        // Error path
+        err_val := _lnew_temp(ll)
+        ll = err_val.l
+        ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
+        if node.b1 {
+            // Multi-arm catch: bind error as "e" and lower the last arm (catch-all)
+            // TODO: proper match-like dispatch on error variants
+            ll = _lenv_add(ll, "e", err_val.temp)
+            if node.list_count > 0 {
+                last_arm := pool_get(ll.pool, node.list_start + node.list_count - 1)
+                handler := _lower_expr_node(ll, last_arm.c1)
+                ll = handler.l
+                if handler.temp >= 0 {
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, handler.temp, 0, "", 0))
+                }
+            }
+        } else {
+            // Single-body catch: bind s1 as error and lower c1
+            if node.s1.len() > 0 {
+                ll = _lenv_add(ll, node.s1, err_val.temp)
+            }
+            handler := _lower_expr_node(ll, node.c1)
+            ll = handler.l
+            if handler.temp >= 0 {
+                ll = _lemit(ll, new_inst(OpStore, result_nt.temp, handler.temp, 0, "", 0))
+            }
         }
         ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         // Ok path: extract value
