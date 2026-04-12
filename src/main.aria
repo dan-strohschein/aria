@@ -714,6 +714,15 @@ fn _print_diagnostics(diags: DiagnosticBag, format: str) with [Io] {
         while di < diags.diagnostics.len() {
             d := diags.diagnostics[di]
             println(format_span(d.span) + ": " + severity_to_str(d.severity) + "[" + d.code + "]: " + d.message)
+            // Render notes
+            mut ni := 1
+            while ni < d.notes.len() {
+                note := d.notes[ni]
+                if note.len() > 0 {
+                    println("  = note: " + note)
+                }
+                ni = ni + 1
+            }
             di = di + 1
         }
         println(format_summary(diags))

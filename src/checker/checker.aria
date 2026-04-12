@@ -191,6 +191,11 @@ fn _cerror(c: Checker, code: str, msg: str) -> Checker {
     _cset_diag(c, bag_add_error(c.diagnostics, code, msg, span))
 }
 
+fn _cerror_note(c: Checker, code: str, msg: str, note: str) -> Checker {
+    span := _cspan(c)
+    _cset_diag(c, bag_add_error_with_note(c.diagnostics, code, msg, span, note))
+}
+
 fn _cwarning(c: Checker, code: str, msg: str) -> Checker {
     span := _cspan(c)
     _cset_diag(c, bag_add_warning(c.diagnostics, code, msg, span))
@@ -3349,19 +3354,19 @@ fn _check_primary(c: Checker) -> CE {
                     caller_sig := reg_find_fn(cc.registry, cc.fn_current_name)
                     if caller_sig.name != "" {
                         if sig.has_io && fn_has_effect_t(caller_sig, "Io", cc.treg) == false {
-                            cc = _cerror(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]")
+                            cc = _cerror_note(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]", "add `with [Io]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         if sig.has_fs && fn_has_effect_t(caller_sig, "Fs", cc.treg) == false {
-                            cc = _cerror(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
+                            cc = _cerror_note(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]", "add `with [Fs]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         if sig.has_net && fn_has_effect_t(caller_sig, "Net", cc.treg) == false {
-                            cc = _cerror(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]")
+                            cc = _cerror_note(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]", "add `with [Net]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         if sig.has_ffi && fn_has_effect_t(caller_sig, "Ffi", cc.treg) == false {
-                            cc = _cerror(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]")
+                            cc = _cerror_note(cc, "E0303", "function '" + name + "' requires effect [Ffi] but '" + cc.fn_current_name + "' does not declare [Ffi]", "add `with [Ffi]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         if sig.has_async && fn_has_effect(caller_sig, "Async") == false {
-                            cc = _cerror(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]")
+                            cc = _cerror_note(cc, "E0304", "function '" + name + "' requires effect [Async] but '" + cc.fn_current_name + "' does not declare [Async]", "add `with [Async]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         // Check user-defined effects (with transitive hierarchy)
                         mut uei := 1
@@ -4461,7 +4466,8 @@ fn _check_match(c: Checker) -> CE {
             if def.is_sum {
                 if def.variant_names.len() > 1 {
                     mut vi := 1
-                    mut first_missing := ""
+                    mut missing_list := ""
+                    mut missing_count := 0
                     while vi < def.variant_names.len() {
                         vname := def.variant_names[vi]
                         mut found := false
@@ -4471,14 +4477,13 @@ fn _check_match(c: Checker) -> CE {
                             ci = ci + 1
                         }
                         if found == false {
-                            if first_missing == "" {
-                                first_missing = vname
-                            }
+                            if missing_list == "" { missing_list = vname } else { missing_list = missing_list + ", " + vname }
+                            missing_count = missing_count + 1
                         }
                         vi = vi + 1
                     }
-                    if first_missing != "" {
-                        cc = _cerror(cc, E0400, "non-exhaustive match: variant '" + first_missing + "' not covered")
+                    if missing_list != "" {
+                        cc = _cerror_note(cc, E0400, "non-exhaustive match: missing variant(s)", "add arms for: " + missing_list + "; or add a wildcard `_` arm")
                     }
                 }
             }
@@ -4521,7 +4526,7 @@ fn _check_match(c: Checker) -> CE {
             if (has_true == false || has_false == false) {
                 mut missing := "true"
                 if has_true { missing = "false" }
-                cc = _cerror(cc, E0400, "non-exhaustive match: case '" + missing + "' not covered")
+                cc = _cerror_note(cc, E0400, "non-exhaustive match: case '" + missing + "' not covered", "add a `" + missing + "` arm or use a wildcard `_` arm")
             }
         }
 
