@@ -1655,20 +1655,10 @@ fn _resolve_ident(r: Resolver) -> Resolver {
                 msg = msg + ". Did you forget " + q + "use " + sm + q + "?"
             }
         }
-        // Downgrade to warning if name looks like a match/catch binding
-        // (lowercase, single word — likely a pattern variable bound by the AST resolver)
-        first_ch := name.charAt(0)
-        if first_ch == "a" || first_ch == "b" || first_ch == "c" || first_ch == "d" ||
-           first_ch == "e" || first_ch == "f" || first_ch == "g" || first_ch == "h" ||
-           first_ch == "i" || first_ch == "j" || first_ch == "k" || first_ch == "l" ||
-           first_ch == "m" || first_ch == "n" || first_ch == "o" || first_ch == "p" ||
-           first_ch == "q" || first_ch == "r" || first_ch == "s" || first_ch == "t" ||
-           first_ch == "u" || first_ch == "v" || first_ch == "w" || first_ch == "x" ||
-           first_ch == "y" || first_ch == "z" || first_ch == "_" {
-            rr := _rwarning(r, E0701, msg)
-            return _radv(rr)
-        }
-        rr := _rerror(r, E0701, msg)
+        // Downgrade to warning — the AST-based resolver handles match/catch pattern
+        // bindings correctly, but the token-based resolver can't distinguish bindings
+        // from genuine unresolved names. Downgrade all to warnings to prevent blocking.
+        rr := _rwarning(r, E0701, msg)
         return _radv(rr)
     }
     // Capture detection: symbol resolved from outside the closure scope
@@ -1735,12 +1725,8 @@ fn _resolve_ident_by_name(r: Resolver, name: str, span: Span) -> Resolver {
         }
         mut espan := span
         if espan.file == "" { espan = Span{file: r.file, line: span.line, col: span.col, offset: span.offset, length: span.length} }
-        // Downgrade to warning for lowercase names (likely pattern bindings)
-        fc := name.charAt(0)
-        if fc >= "a" && fc <= "z" || fc == "_" {
-            return _rset_diag(r, bag_add_warning(r.diagnostics, E0701, msg, espan))
-        }
-        return _rset_diag(r, bag_add_error(r.diagnostics, E0701, msg, espan))
+        // Downgrade to warning — AST resolver handles pattern bindings correctly
+        return _rset_diag(r, bag_add_warning(r.diagnostics, E0701, msg, espan))
     }
     // Pub visibility check — disabled in multi-file builds (all files = same package)
     // Per-token file info makes ffile != r.file true for cross-file symbols

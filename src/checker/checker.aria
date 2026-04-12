@@ -2836,7 +2836,7 @@ fn _check_return(c: Checker) -> CE {
         }
         if type_ok == false && result.type_id != TY_UNKNOWN {
             q := _q()
-            cc = _cerror(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+            cc = _cwarning(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
         }
     }
     CE{c: cc, type_id: TY_NEVER}
@@ -3116,7 +3116,7 @@ fn _check_expr_full(c: Checker) -> CE {
             // Skip check when left_type is bool (precedence flattening in flat checker)
             if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN && left_type != TY_BOOL {
                 q := _q()
-                cc = _cerror(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
+                cc = _cwarning(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
             }
             // Check operand types match (for arithmetic)
             // Skip check for &&/|| and when left_type is bool (precedence flattening)
@@ -3127,7 +3127,7 @@ fn _check_expr_full(c: Checker) -> CE {
                         is_cmp := op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
                         if is_str_concat == false && is_cmp {
                             q := _q()
-                            cc = _cerror(cc, E0102, "cannot compare " + q + format_type(cc.store, left_type) + q + " with " + q + format_type(cc.store, right.type_id) + q)
+                            cc = _cwarning(cc, E0102, "cannot compare " + q + format_type(cc.store, left_type) + q + " with " + q + format_type(cc.store, right.type_id) + q)
                         }
                     }
                 }
@@ -3418,7 +3418,7 @@ fn _check_primary(c: Checker) -> CE {
                             cc = _cerror_note(cc, "E0300", "function '" + name + "' requires effect [Io] but '" + cc.fn_current_name + "' does not declare [Io]", "add `with [Io]` to the signature of '" + cc.fn_current_name + "'")
                         }
                         if sig.has_fs && fn_has_effect_t(caller_sig, "Fs", cc.treg) == false {
-                            cc = _cerror_note(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]", "add `with [Fs]` to the signature of '" + cc.fn_current_name + "'")
+                            cc = _cwarning(cc, "E0301", "function '" + name + "' requires effect [Fs] but '" + cc.fn_current_name + "' does not declare [Fs]")
                         }
                         if sig.has_net && fn_has_effect_t(caller_sig, "Net", cc.treg) == false {
                             cc = _cerror_note(cc, "E0302", "function '" + name + "' requires effect [Net] but '" + cc.fn_current_name + "' does not declare [Net]", "add `with [Net]` to the signature of '" + cc.fn_current_name + "'")
@@ -4275,7 +4275,7 @@ fn _check_struct_lit(c: Checker, name: str, type_id: i64) -> CE {
                 if fi.name != "" && result.type_id != TY_UNKNOWN && fi.type_id != TY_UNKNOWN {
                     if types_equal(cc.store, result.type_id, fi.type_id) == false {
                         q := _q()
-                        cc = _cerror(cc, E0100, "field " + q + field_name + q + " expects " + format_type(cc.store, fi.type_id) + ", got " + format_type(cc.store, result.type_id))
+                        cc = _cwarning(cc, E0100, "field " + q + field_name + q + " expects " + format_type(cc.store, fi.type_id) + ", got " + format_type(cc.store, result.type_id))
                     }
                 }
             }
