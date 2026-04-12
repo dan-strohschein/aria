@@ -7986,6 +7986,27 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     mut ll := _ladv(l)  // skip (
     ll = _lskip_nl(ll)
 
+    // sqrt() — math square root (f64 → f64)
+    if method == "sqrt" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_sqrt", 0))
+        ll = _lset_type(ll, nt.temp, 9)  // f64
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // abs() — absolute value
+    if method == "abs" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_abs", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+
     if method == "len" {
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -8780,6 +8801,13 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
         ll = _lset_type(ll, result_nt.temp, 12)
         return LT{l: ll, temp: result_nt.temp}
+    }
+
+    // sort_by(fn, ...) / sort() — consume args and return array unchanged (stub)
+    if method == "sort_by" || method == "sort" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        return LT{l: ll, temp: obj}
     }
 
     if method == "append" {

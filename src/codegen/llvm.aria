@@ -455,6 +455,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
 
     // Runtime declarations
     p = p.append("; Runtime declarations" + nl)
+    p = p.append("declare double @_aria_sqrt(double)" + nl)
+    p = p.append("declare double @_aria_abs(double)" + nl)
     p = p.append("declare void @_aria_exit(i64)" + nl)
     p = p.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     p = p.append("declare void @_aria_println_str(i8*, i64)" + nl)
@@ -745,6 +747,8 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
 
     // Runtime declarations (same as non-streaming version)
     h = h.append("; Runtime declarations" + nl)
+    h = h.append("declare double @_aria_sqrt(double)" + nl)
+    h = h.append("declare double @_aria_abs(double)" + nl)
     h = h.append("declare void @_aria_exit(i64)" + nl)
     h = h.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     h = h.append("declare void @_aria_println_str(i8*, i64)" + nl)

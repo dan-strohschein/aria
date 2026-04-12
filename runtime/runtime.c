@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <setjmp.h>
+#include <math.h>
 
 // On Windows, 'long' is 32-bit even on 64-bit systems.
 // Aria uses i64 (mapped to LLVM i64) for all values including pointers.
@@ -2807,6 +2808,11 @@ static void *_aria_main_thread(void *arg) {
     return NULL;
 }
 #endif
+
+// --- Math functions ---
+
+double _aria_sqrt(double x) { return sqrt(x); }
+double _aria_abs(double x) { return fabs(x); }
 
 int main(int argc, char **argv) {
 #ifndef _WIN32
