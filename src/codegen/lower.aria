@@ -3603,7 +3603,15 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             ll = _ladv(ll)
         }
     }
-    // For blanket impls, use empty prefix so methods are registered as _methodName
+    // For blanket impls, use empty prefix — BUT only if impl_type is a type parameter
+    // (single letter or not a known struct), not a concrete type like Pair or Stack
+    if is_blanket && impl_type.len() > 0 {
+        sdef := reg_find_struct(ll.registry, impl_type)
+        if sdef.name != "" {
+            // It's a known concrete type — NOT a blanket impl
+            is_blanket = false
+        }
+    }
     if is_blanket { impl_type = "" }
 
     // AST path: walk method children from EkImplDecl
@@ -5029,9 +5037,24 @@ fn _lower_expr(l: Lowerer) -> LT {
                     // Check if this is a module-qualified function call (e.g., log.info())
                     // If the function exists as a top-level name, call it directly
                     left_type := _lget_type(ll, left)
+                    // Try module-qualified call: log.info() → info()
+                    // Also try type-qualified call: Pair.new() → Pair_new()
                     mod_fn_sig := reg_find_fn(ll.registry, field)
-                    if left_type == 0 && mod_fn_sig.name != "" {
-                        // Module-qualified call: log.info("msg") → info("msg")
+                    if mod_fn_sig.name == "" {
+                        // Try TypeName_method qualified name
+                        left_name := _struct_name_for_type(ll.store, ll.registry, left_type)
+                        if left_name == "" {
+                            // left might be an unresolved ident — use the token text
+                            if ll.pos > 2 { left_name = ll.tokens[ll.pos - 2].text }
+                        }
+                        if left_name.len() > 0 {
+                            qualified_name := left_name + "_" + field
+                            mod_fn_sig = reg_find_fn(ll.registry, qualified_name)
+                            if mod_fn_sig.name != "" { field = qualified_name }
+                        }
+                    }
+                    if (left_type == 0 || mod_fn_sig.name != "") && mod_fn_sig.name != "" {
+                        // Module-qualified or type-qualified call
                         ll = _ladv(ll)  // skip (
                         ll = _lskip_nl(ll)
                         mut arg_count := 0
