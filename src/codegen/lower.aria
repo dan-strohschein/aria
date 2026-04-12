@@ -5402,13 +5402,47 @@ fn _lower_expr(l: Lowerer) -> LT {
                         pat := _lcur(ll).text
                         pat_kind := _lk(ll)
                         ll = _ladv(ll)
-                        // Skip destructuring if present
+                        // Handle destructuring: Variant(x, y) or Variant.Sub(x)
+                        // Skip qualified names: Type.Variant
+                        while _lk(ll) == "." {
+                            ll = _ladv(ll)
+                            if _lk(ll) == "IDENT" {
+                                pat = _lcur(ll).text  // update pattern to sub-variant
+                                ll = _ladv(ll)
+                            }
+                        }
+                        // Bind destructured variables inside ( )
                         if _lk(ll) == "(" {
-                            while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                            ll = _ladv(ll)  // skip (
+                            ll = _lskip_nl(ll)
+                            // Extract data fields from error value
+                            mut destr_slot := 1
+                            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                                if _lk(ll) == "IDENT" {
+                                    dname := _lcur(ll).text
+                                    if dname != "_" {
+                                        dnt := _lnew_temp(ll)
+                                        ll = dnt.l
+                                        ll = _lemit(ll, new_inst(OpFieldGet, dnt.temp, err_val.temp, destr_slot, dname, 0))
+                                        ll = _lenv_add(ll, dname, dnt.temp)
+                                    }
+                                    destr_slot = destr_slot + 1
+                                }
+                                ll = _ladv(ll)
+                                if _lk(ll) == "," { ll = _ladv(ll) }
+                                ll = _lskip_nl(ll)
+                            }
                             if _lk(ll) == ")" { ll = _ladv(ll) }
                         }
                         if _lk(ll) == "\{" {
-                            while _lk(ll) != "\}" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                            // Struct pattern: skip for now
+                            mut sd := 1
+                            ll = _ladv(ll)
+                            while sd > 0 && _lk(ll) != "EOF" {
+                                if _lk(ll) == "\{" { sd = sd + 1 }
+                                if _lk(ll) == "\}" { sd = sd - 1 }
+                                if sd > 0 { ll = _ladv(ll) }
+                            }
                             if _lk(ll) == "\}" { ll = _ladv(ll) }
                         }
                         if _lk(ll) == "=>" { ll = _ladv(ll) }
