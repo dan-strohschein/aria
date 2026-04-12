@@ -2535,7 +2535,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
 
     // --- Special constructors ---
 
-    if name == "Ok" || name == "Err" {
+    if name == "Ok" || name == "Err" || name == "err" {
         if node.list_count > 0 {
             val := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
             ll = val.l
@@ -5750,7 +5750,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         // Function call or variant construction with data
         if _lk(ll) == "(" {
             // Ok(value) and Err(value) — Result construction
-            if name == "Ok" || name == "Err" {
+            if name == "Ok" || name == "Err" || name == "err" {
                 ll = _ladv(ll)  // skip (
                 ll = _lskip_nl(ll)
                 val := _lower_expr(ll)
@@ -5768,7 +5768,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 tag_nt := _lnew_temp(ll)
                 ll = tag_nt.l
                 mut tag_val := 0
-                if name == "Err" { tag_val = 1 }
+                if name == "Err" || name == "err" { tag_val = 1 }
                 ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, tag_val, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
                 // Set value at slot 1 (and slot 2 for string len)
@@ -10110,10 +10110,10 @@ fn _lower_closure(l: Lowerer) -> LT {
             rtid := resolve_type_name(ll.store, _lcur(ll).text)
             if rtid != TY_UNKNOWN { ret_type = rtid }
         }
-        while _lk(ll) != "=>" && _lk(ll) != lb2 && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        while _lk(ll) != "=>" && _lk(ll) != "=" && _lk(ll) != lb2 && _lk(ll) != "EOF" { ll = _ladv(ll) }
     }
-    // Skip =>
-    if _lk(ll) == "=>" { ll = _ladv(ll) }
+    // Skip => or =
+    if _lk(ll) == "=>" || _lk(ll) == "=" { ll = _ladv(ll) }
     ll = _lskip_nl(ll)
 
     // Save body position — we'll lower it inside the closure function

@@ -825,6 +825,13 @@ fn tokenize(source: str, file: str) -> Lexer {
                 }
                 lex = _advance(lex)
             }
+        } else if c == ";" {
+            // Semicolons act as statement terminators (equivalent to newline)
+            last := _last_token_kind(lex)
+            if terminates_statement(last) {
+                lex = _add_token(lex, TkNewline, ";", lex.line, lex.col, lex.pos)
+            }
+            lex = _advance(lex)
         } else {
             lex = _add_error(lex, E0001, "unexpected character")
             lex = _add_token(lex, TkIllegal, c, lex.line, lex.col, lex.pos)

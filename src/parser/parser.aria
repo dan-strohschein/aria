@@ -2240,7 +2240,7 @@ fn _parse_closure_expr(p: Parser) -> PR {
     }
     lb := "\{"
     mut body := _no_expr()
-    if _ck(pp) == "=>" {
+    if _ck(pp) == "=>" || _ck(pp) == "=" {
         pp = _adv(pp)
         result := _parse_expr(pp, 0)
         pp = result.p

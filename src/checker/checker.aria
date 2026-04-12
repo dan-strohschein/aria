@@ -3353,7 +3353,7 @@ fn _check_primary(c: Checker) -> CE {
         }
 
         // Ok(value) and Err(value) — Result constructors
-        if _ck2(cc) == "(" && (name == "Ok" || name == "Err") {
+        if _ck2(cc) == "(" && (name == "Ok" || name == "Err" || name == "err") {
             cr := _check_call_args(cc, TY_UNKNOWN)
             cc = cr.c
             // Construct Result type from function context
@@ -3365,7 +3365,7 @@ fn _check_primary(c: Checker) -> CE {
                 }
                 return CE{c: cc, type_id: cr.type_id}
             }
-            if name == "Err" {
+            if name == "Err" || name == "err" {
                 if cc.fn_return_type > 0 {
                     sar := store_add_canonical(cc.store, mk_result_type(cc.fn_return_type, cr.type_id))
                     cc = _cset_store(cc, sar.store)
