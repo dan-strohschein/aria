@@ -1466,6 +1466,22 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             }
             if _rk(rr) == "|" { rr = _radv(rr) }
             consumed_value = false
+        } else if k == "catch" && consumed_value == false {
+            // PREFIX catch: catch expr { arms }
+            rr = _radv(rr)  // skip catch
+            // Resolve the caught expression until {
+            lbc := "\{"
+            while _rk(rr) != lbc && _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
+                if _rk(rr) == "IDENT" {
+                    if after_dot { rr = _radv(rr) } else { rr = _resolve_ident(rr) }
+                    after_dot = false
+                } else {
+                    if _rk(rr) == "." { after_dot = true } else { after_dot = false }
+                    rr = _radv(rr)
+                }
+            }
+            // Now handle { arms } — same as postfix multi-arm catch
+            consumed_value = true
         } else if k == "catch" {
             rr = _radv(rr)  // skip catch
             // Parse |e| binding and resolve block body
@@ -2115,6 +2131,33 @@ fn _resolve_pattern_bindings(r: Resolver, idx: i64) -> Resolver {
     if nk == "Call" {
         // Destructure pattern: Variant(x, y) — s1 is variant name, list children are sub-patterns
         // Don't bind the variant name, but bind the sub-pattern identifiers
+        mut rr := r
+        mut pi := 0
+        while pi < node.list_count {
+            rr = _resolve_pattern_bindings(rr, node.list_start + pi)
+            pi = pi + 1
+        }
+        // Also check c0 if it's a FieldAccess(Type, method) + call pattern
+        // e.g. ParseError.InvalidFormat(s) — c0 is the callee, list has args
+        if node.c0 > 0 {
+            callee := pool_get(r.pool, node.c0)
+            if expr_kind_name(callee.kind) == "Call" {
+                // Nested call — resolve its sub-patterns too
+                mut ci := 0
+                while ci < callee.list_count {
+                    rr = _resolve_pattern_bindings(rr, callee.list_start + ci)
+                    ci = ci + 1
+                }
+            }
+        }
+        return rr
+    }
+
+    // FieldAccess in pattern context — don't bind the field name
+    if nk == "FieldAccess" { return r }
+
+    // MethodCall in pattern context: Type.Variant(x, y) — bind sub-pattern args
+    if nk == "MethodCall" {
         mut rr := r
         mut pi := 0
         while pi < node.list_count {
