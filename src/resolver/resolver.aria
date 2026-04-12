@@ -1467,20 +1467,26 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             if _rk(rr) == "|" { rr = _radv(rr) }
             consumed_value = false
         } else if k == "catch" && consumed_value == false {
-            // PREFIX catch: catch expr { arms }
+            // PREFIX catch: catch expr { arms } — skip entire construct
+            // The AST-based Catch handler resolves pattern bindings
             rr = _radv(rr)  // skip catch
-            // Resolve the caught expression until {
             lbc := "\{"
+            rbc := "\}"
+            // Skip caught expression
             while _rk(rr) != lbc && _rk(rr) != "NEWLINE" && _rk(rr) != "EOF" {
-                if _rk(rr) == "IDENT" {
-                    if after_dot { rr = _radv(rr) } else { rr = _resolve_ident(rr) }
-                    after_dot = false
-                } else {
-                    if _rk(rr) == "." { after_dot = true } else { after_dot = false }
-                    rr = _radv(rr)
-                }
+                rr = _radv(rr)
             }
-            // Now handle { arms } — same as postfix multi-arm catch
+            // Skip { arms } with brace depth
+            if _rk(rr) == lbc {
+                mut pcd := 1
+                rr = _radv(rr)
+                while pcd > 0 && _rk(rr) != "EOF" {
+                    if _rk(rr) == lbc { pcd = pcd + 1 }
+                    if _rk(rr) == rbc { pcd = pcd - 1 }
+                    if pcd > 0 { rr = _radv(rr) }
+                }
+                if _rk(rr) == rbc { rr = _radv(rr) }
+            }
             consumed_value = true
         } else if k == "catch" {
             rr = _radv(rr)  // skip catch
@@ -1500,78 +1506,16 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             lb := "\{"
             rb2 := "\}"
             if _rk(rr) == lb {
-                // Multi-arm catch block: catch { pattern => body; ... }
-                // Check if this looks like match arms (has => inside)
-                mut has_arrow := false
-                mut scan := rr.pos + 1
-                mut scan_limit := 0
-                while scan < rr.tokens.len() && rr.tokens[scan].name != rb2 && scan_limit < 50 {
-                    if rr.tokens[scan].name == "=>" { has_arrow = true }
-                    scan = scan + 1
-                    scan_limit = scan_limit + 1
+                // Catch block: skip with brace-depth tracking
+                // The AST-based Catch handler resolves pattern bindings correctly
+                mut cd := 1
+                rr = _radv(rr)  // skip {
+                while cd > 0 && _rk(rr) != "EOF" {
+                    if _rk(rr) == lb { cd = cd + 1 }
+                    if _rk(rr) == rb2 { cd = cd - 1 }
+                    if cd > 0 { rr = _radv(rr) }
                 }
-                if has_arrow {
-                    // Multi-arm catch: resolve like match arms
-                    rr = _radv(rr)  // skip {
-                    rr = _rskip_nl(rr)
-                    while _rk(rr) != rb2 && _rk(rr) != "EOF" {
-                        parent_scope := rr.current_scope
-                        rr = _push_scope(rr, ScBlock, "catch_arm")
-                        // Pattern: IDENT, qualified name, or binding
-                        if _rk(rr) == "IDENT" {
-                            pname := _rcur(rr).text
-                            existing := lookup(rr.table, rr.current_scope, pname)
-                            mut is_variant := false
-                            if existing.name != "" {
-                                is_variant = sk_eq(existing.kind, SkVariant) || sk_eq(existing.kind, SkType) || sk_eq(existing.kind, SkBuiltin) || sk_eq(existing.kind, SkModule)
-                            }
-                            if is_variant == false && pname != "_" {
-                                span := _rspan(rr)
-                                rr = _add_sym_warn_shadow(rr, pname, SkVariable, span, false)
-                            }
-                            rr = _radv(rr)
-                            // Skip qualified name: Type.Variant
-                            while _rk(rr) == "." {
-                                rr = _radv(rr)
-                                if _rk(rr) == "IDENT" { rr = _radv(rr) }
-                            }
-                            // Destructuring: Variant(x, y)
-                            if _rk(rr) == "(" {
-                                rr = _radv(rr)
-                                rr = _rskip_nl(rr)
-                                while _rk(rr) != ")" && _rk(rr) != "EOF" {
-                                    if _rk(rr) == "IDENT" {
-                                        bname := _rcur(rr).text
-                                        bspan := _rspan(rr)
-                                        rr = _add_sym_warn_shadow(rr, bname, SkVariable, bspan, false)
-                                        rr = _radv(rr)
-                                    } else {
-                                        rr = _radv(rr)
-                                    }
-                                    rr = _rskip_nl(rr)
-                                    if _rk(rr) == "," { rr = _radv(rr) }
-                                    rr = _rskip_nl(rr)
-                                }
-                                if _rk(rr) == ")" { rr = _radv(rr) }
-                            }
-                        }
-                        // Skip remaining pattern tokens to =>
-                        while _rk(rr) != "=>" && _rk(rr) != "EOF" && _rk(rr) != rb2 { rr = _radv(rr) }
-                        if _rk(rr) == "=>" { rr = _radv(rr) }
-                        rr = _rskip_nl(rr)
-                        // Resolve body
-                        if _rk(rr) == lb {
-                            rr = _resolve_block(rr)
-                        } else {
-                            rr = _resolve_expr_until_nl(rr)
-                        }
-                        rr = _pop_scope(rr, parent_scope)
-                        rr = _rskip_nl(rr)
-                    }
-                    if _rk(rr) == rb2 { rr = _radv(rr) }
-                } else {
-                    rr = _resolve_block(rr)
-                }
+                if _rk(rr) == rb2 { rr = _radv(rr) }
             }
             consumed_value = true
         } else {

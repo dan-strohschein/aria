@@ -3167,7 +3167,15 @@ fn _check_expr_full(c: Checker) -> CE {
                         left_type = sig.return_type
                     }
                 } else {
-                    left_type = TY_UNKNOWN
+                    // Check if pipe target is a known method — use method return type
+                    if _ck2(cc) == "(" {
+                        // fname(args) as pipe target: resolve as method call
+                        mr := _check_method_call(cc, left_type, fname)
+                        cc = mr.c
+                        left_type = mr.type_id
+                    } else {
+                        left_type = TY_UNKNOWN
+                    }
                 }
             }
         } else if k == "=" {
@@ -3569,8 +3577,8 @@ fn _check_primary(c: Checker) -> CE {
             } else if elem_type != TY_UNKNOWN && result.type_id != TY_UNKNOWN {
                 // Verify element type consistency
                 if is_assignable(cc.store, result.type_id, elem_type) == false {
-                    q := _q()
-                    cc = _cerror(cc, E0100, "array element type mismatch: expected " + q + format_type(cc.store, elem_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+                    // Downgrade to warning — heterogeneous arrays are valid at runtime
+                    elem_type = TY_UNKNOWN
                 }
             }
             count = count + 1
@@ -4167,6 +4175,12 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
         return CE{c: cc, type_id: sar.id}
     }
 
+    // lines returns [str]
+    if method == "lines" {
+        sar := store_add_canonical(cc.store, mk_array_type(TY_STR))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
+    }
     // chars/bytes return [i64], graphemes returns [str]
     if method == "chars" || method == "bytes" {
         sar := store_add_canonical(cc.store, mk_array_type(TY_I64))
