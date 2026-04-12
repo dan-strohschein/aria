@@ -247,6 +247,52 @@ fn _env_trim(c: Checker, saved_len: i64) -> Checker {
             fn_return_type: c.fn_return_type, fn_error_type: c.fn_error_type, fn_current_name: c.fn_current_name, in_loop: c.in_loop, in_callee_slot: c.in_callee_slot}
 }
 
+// --- Resolve a type AST node to a type_id (replaces token-based _parse_type_ann for AST nodes) ---
+
+fn _resolve_type_node(c: Checker, node_idx: i64) -> CE {
+    if node_idx <= 0 { return CE{c: c, type_id: TY_UNKNOWN} }
+    node := pool_get(c.pool, node_idx)
+    nk := expr_kind_name(node.kind)
+    if nk == "TypeRef" {
+        name := node.s1
+        if name == "" { return CE{c: c, type_id: TY_UNKNOWN} }
+        tid := resolve_type_name(c.store, name)
+        if tid != TY_UNKNOWN { return CE{c: c, type_id: tid} }
+        // Try qualified name lookup
+        return CE{c: c, type_id: TY_UNKNOWN}
+    }
+    if nk == "TypeArray" {
+        elem := _resolve_type_node(c, node.c0)
+        arr_st := store_add_canonical(elem.c.store, mk_array_type(elem.type_id))
+        cc := _cset_store(elem.c, arr_st.store)
+        return CE{c: cc, type_id: arr_st.id}
+    }
+    if nk == "TypeOptional" {
+        inner := _resolve_type_node(c, node.c0)
+        opt_st := store_add_canonical(inner.c.store, mk_optional_type(inner.type_id))
+        cc := _cset_store(inner.c, opt_st.store)
+        return CE{c: cc, type_id: opt_st.id}
+    }
+    if nk == "TypeResult" {
+        ok := _resolve_type_node(c, node.c0)
+        err := _resolve_type_node(ok.c, node.c1)
+        res_st := store_add_canonical(err.c.store, mk_result_type(ok.type_id, err.type_id))
+        cc := _cset_store(err.c, res_st.store)
+        return CE{c: cc, type_id: res_st.id}
+    }
+    if nk == "TypeFn" {
+        // Function types: fn(A, B) -> C
+        // For now, use the generic function type
+        return CE{c: c, type_id: TY_UNKNOWN}
+    }
+    if nk == "TypeTuple" {
+        // Tuple types: (A, B, C)
+        return CE{c: c, type_id: TY_UNKNOWN}
+    }
+    // Fallback: try token-based parsing at stored position
+    CE{c: c, type_id: TY_UNKNOWN}
+}
+
 // --- Parse a type annotation from tokens, return type_id ---
 
 fn _parse_type_ann(c: Checker) -> CE {
@@ -717,9 +763,8 @@ fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
             while fi < vnode.list_count {
                 fidx_node := pool_get(cc.pool, vnode.list_start + fi)
                 fnode := pool_get(cc.pool, fidx_node.c0)
-                // Position to the type token and parse
-                cc = _cset_pos(cc, fnode.c0)
-                ft := _parse_type_ann(cc)
+                // Resolve type from AST node (c0 is now a pool index)
+                ft := _resolve_type_node(cc, fnode.c0)
                 cc = ft.c
                 vf_names = vf_names.append(fnode.s1)
                 vf_types = vf_types.append(ft.type_id)
@@ -761,8 +806,7 @@ fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
     while fi < node.list_count {
         idx_node := pool_get(cc.pool, node.list_start + fi)
         fnode := pool_get(cc.pool, idx_node.c0)
-        cc = _cset_pos(cc, fnode.c0)
-        ft := _parse_type_ann(cc)
+        ft := _resolve_type_node(cc, fnode.c0)
         cc = ft.c
         fields = fields.append(FieldInfo{name: fnode.s1, type_id: ft.type_id})
         fi = fi + 1
@@ -1392,8 +1436,7 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
             ptypes = ptypes.append(TY_UNKNOWN)
         } else {
             pnames = pnames.append(pnode.s1)
-            cc = _cset_pos(cc, pnode.c0)
-            pt := _parse_type_ann(cc)
+            pt := _resolve_type_node(cc, pnode.c0)
             cc = pt.c
             ptypes = ptypes.append(pt.type_id)
         }
@@ -1568,8 +1611,7 @@ fn _register_impl_fn_sig_ast(c: Checker, impl_type: str, method_idx: i64) -> Che
             ptypes = ptypes.append(self_type)
         } else {
             pnames = pnames.append(pnode.s1)
-            cc = _cset_pos(cc, pnode.c0)
-            pt := _parse_type_ann(cc)
+            pt := _resolve_type_node(cc, pnode.c0)
             cc = pt.c
             ptypes = ptypes.append(pt.type_id)
         }
