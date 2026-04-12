@@ -179,11 +179,25 @@ fn lookup(table: SymbolTable, scope_id: i64, name: str) -> Symbol {
 struct StrMap {
     keys: [str]
     vals: [i64]
+    buckets: [i64]
+    capacity: i64
     count: i64
 }
 
-fn strmap_new() -> StrMap =
-    StrMap{keys: [""], vals: [0], count: 0}
+fn _strmap_init_buckets(cap: i64) -> [i64] {
+    mut b := [0]
+    mut i := 0
+    while i < cap {
+        b = b.append(0 - 1)
+        i = i + 1
+    }
+    b
+}
+
+fn strmap_new() -> StrMap {
+    cap := 64
+    StrMap{keys: [""], vals: [0], buckets: _strmap_init_buckets(cap), capacity: cap, count: 0}
+}
 
 // Hash a string using DJB2 algorithm
 fn _char_ord(c: str) -> i64 {
@@ -269,19 +283,77 @@ fn _str_hash(s: str) -> i64 {
     h
 }
 
-// Put a key-value pair. Uses append-based approach (no fixed capacity).
-// For lookups, we scan from the hash bucket using linear probing.
-fn strmap_put(m: StrMap, key: str, val: i64) -> StrMap =
-    StrMap{keys: m.keys.append(key), vals: m.vals.append(val), count: m.count + 1}
+// Set a bucket value at a given index (uses AST-lowered indexed assignment)
+fn _bucket_set(mut buckets: [i64], idx: i64, val: i64) {
+    buckets[idx] = val
+}
 
-// Get the value for a key, or -1 if not found.
-// Linear scan for now (keys array is much smaller than the full data arrays
-// since it only contains indexed entries, not all symbols).
-fn strmap_get(m: StrMap, key: str) -> i64 {
+// Rehash: rebuild bucket array at double capacity
+fn _strmap_rehash(m: StrMap) -> StrMap {
+    new_cap := m.capacity * 2
+    mut new_buckets := _strmap_init_buckets(new_cap)
+    // Re-insert all existing entries
     mut i := 1
     while i < m.keys.len() {
-        if m.keys[i] == key { return m.vals[i] }
+        h := _str_hash(m.keys[i]) % new_cap
+        mut probe := h
+        mut placed := false
+        while placed == false {
+            bidx := probe + 1
+            if bidx < new_buckets.len() && new_buckets[bidx] == 0 - 1 {
+                _bucket_set(new_buckets, bidx, i)
+                placed = true
+            } else {
+                probe = (probe + 1) % new_cap
+            }
+        }
         i = i + 1
+    }
+    StrMap{keys: m.keys, vals: m.vals, buckets: new_buckets, capacity: new_cap, count: m.count}
+}
+
+// Put a key-value pair with hash-based bucket insertion.
+fn strmap_put(m: StrMap, key: str, val: i64) -> StrMap {
+    // Rehash at 70% load
+    mut mm := m
+    threshold := mm.capacity * 7 / 10
+    if mm.count >= threshold {
+        mm = _strmap_rehash(mm)
+    }
+    new_idx := mm.keys.len()
+    new_keys := mm.keys.append(key)
+    new_vals := mm.vals.append(val)
+    // Insert into bucket
+    h := _str_hash(key) % mm.capacity
+    mut probe := h
+    mut placed := false
+    while placed == false {
+        bidx := probe + 1
+        if bidx < mm.buckets.len() && mm.buckets[bidx] == 0 - 1 {
+            _bucket_set(mm.buckets, bidx, new_idx)
+            placed = true
+        } else {
+            probe = (probe + 1) % mm.capacity
+        }
+    }
+    StrMap{keys: new_keys, vals: new_vals, buckets: mm.buckets, capacity: mm.capacity, count: mm.count + 1}
+}
+
+// Get the value for a key using hash-based lookup, or -1 if not found.
+fn strmap_get(m: StrMap, key: str) -> i64 {
+    h := _str_hash(key) % m.capacity
+    mut probe := h
+    mut checks := 0
+    while checks < m.capacity {
+        bidx := probe + 1
+        if bidx >= m.buckets.len() { return 0 - 1 }
+        entry_idx := m.buckets[bidx]
+        if entry_idx == 0 - 1 { return 0 - 1 }
+        if entry_idx > 0 && entry_idx < m.keys.len() {
+            if m.keys[entry_idx] == key { return m.vals[entry_idx] }
+        }
+        probe = (probe + 1) % m.capacity
+        checks = checks + 1
     }
     return 0 - 1
 }
