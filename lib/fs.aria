@@ -1,0 +1,39 @@
+mod fs
+
+// ============================================================
+// File System Library for Aria
+//
+// Wraps runtime file I/O functions with error handling.
+// ============================================================
+
+type FsError =
+    | NotFound
+    | PermissionDenied
+    | IoError(str)
+
+fn read(path: str) -> str with [Fs] {
+    _ariaReadFile(path)
+}
+
+fn write(path: str, content: str) with [Fs] {
+    _ariaWriteFile(path, content)
+}
+
+fn append(path: str, content: str) with [Fs] {
+    _ariaAppendFile(path, content)
+}
+
+fn exists(path: str) -> bool with [Fs] {
+    content := _ariaReadFile(path)
+    content.len() > 0
+}
+
+fn is_dir(path: str) -> bool with [Fs] {
+    _ariaIsDir(path)
+}
+
+fn list_dir(path: str) -> [str] with [Fs] {
+    // Placeholder — runtime list_dir returns raw data, needs wrapper
+    result := [""]
+    result
+}

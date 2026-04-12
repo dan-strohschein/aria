@@ -1,0 +1,33 @@
+mod time
+
+// ============================================================
+// Time Library for Aria
+//
+// Provides sleep and duration constants.
+// Note: time.now() requires _aria_get_time_ns() runtime function
+// which is not yet implemented. Using placeholder for now.
+// ============================================================
+
+// Duration constants (milliseconds)
+const ms: i64 = 1
+const s: i64 = 1000
+const m: i64 = 60000
+
+// sleep is a builtin extern — placeholder; requires runtime _aria_sleep
+fn sleep(duration_ms: i64) with [Io] {
+    // TODO: wire to _aria_sleep runtime function
+    mut _unused := duration_ms
+}
+
+// Placeholder for time.now() — returns 0 until runtime support is added
+struct Instant {
+    ns: i64
+}
+
+fn now() -> Instant with [Io] {
+    Instant{ns: 0}
+}
+
+fn elapsed(start: Instant, end: Instant) -> i64 {
+    end.ns - start.ns
+}
