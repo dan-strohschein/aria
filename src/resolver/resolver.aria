@@ -2346,17 +2346,49 @@ fn resolve(tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> Reso
     r = _push_scope(r, ScModule, "module")
 
     // Pre-pass: register use-imported module names via direct token scan
-    // (DeclIndex-based use registration may fail due to bootstrap DkUse encoding issues)
+    // Handles: use json, use std.fs, use std.{fs, time, log}
     mut ui := 1
     while ui < r.tokens.len() {
         if r.tokens[ui].name == "use" {
             next := ui + 1
             if next < r.tokens.len() && r.tokens[next].name == "IDENT" {
                 mod_name := r.tokens[next].text
+                // Register the first name
                 existing := lookup_local(r.table, r.current_scope, mod_name)
                 if existing.name == "" {
                     sym := new_symbol(mod_name, SkModule, _builtin_span(), r.current_scope, false, false)
                     r = _rset_table(r, add_symbol(r.table, sym))
+                }
+                // Check for dotted import: use std.{a, b} or use std.name
+                // The lexer produces TkDotLBrace (".\{") for `.{`, not separate `.` + `{`
+                dot_pos := next + 1
+                dlb := ".\{"
+                if dot_pos < r.tokens.len() && r.tokens[dot_pos].name == dlb {
+                    // Grouped: use std.{time, log} — scan tokens after .{
+                    rb := "\}"
+                    mut gi := dot_pos + 1
+                    while gi < r.tokens.len() && r.tokens[gi].name != rb && r.tokens[gi].name != "NEWLINE" && r.tokens[gi].name != "EOF" {
+                        if r.tokens[gi].name == "IDENT" {
+                            gname := r.tokens[gi].text
+                            gexist := lookup_local(r.table, r.current_scope, gname)
+                            if gexist.name == "" {
+                                gsym := new_symbol(gname, SkModule, _builtin_span(), r.current_scope, false, false)
+                                r = _rset_table(r, add_symbol(r.table, gsym))
+                            }
+                        }
+                        gi = gi + 1
+                    }
+                } else if dot_pos < r.tokens.len() && r.tokens[dot_pos].name == "." {
+                    // Single dotted: use std.fs — register the name after dot
+                    after_dot := dot_pos + 1
+                    if after_dot < r.tokens.len() && r.tokens[after_dot].name == "IDENT" {
+                        dname := r.tokens[after_dot].text
+                        dexist := lookup_local(r.table, r.current_scope, dname)
+                        if dexist.name == "" {
+                            dsym := new_symbol(dname, SkModule, _builtin_span(), r.current_scope, false, false)
+                            r = _rset_table(r, add_symbol(r.table, dsym))
+                        }
+                    }
                 }
             }
         }
