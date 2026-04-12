@@ -79,7 +79,9 @@ struct PR {
 fn _is_upper_start(name: str) -> bool {
     nlen := name.len()
     if nlen == 0 { return false }
-    ch := name.charAt(0)
+    mut ch := name.charAt(0)
+    // Private types: _PascalCase — check second char
+    if ch == "_" && nlen > 1 { ch = name.charAt(1) }
     mut is_upper := ch == "A" || ch == "B" || ch == "C" || ch == "D" || ch == "E" ||
         ch == "F" || ch == "G" || ch == "H" || ch == "I" || ch == "J" ||
         ch == "K" || ch == "L" || ch == "M" || ch == "N" || ch == "O" ||
@@ -87,7 +89,9 @@ fn _is_upper_start(name: str) -> bool {
         ch == "U" || ch == "V" || ch == "W" || ch == "X" || ch == "Y" || ch == "Z"
     if is_upper == false { return false }
     // Reject SCREAMING_SNAKE_CASE: if all chars are uppercase/underscore/digit, not a type
+    // Start after leading _ for private types
     mut i := 1
+    if name.charAt(0) == "_" && nlen > 2 { i = 2 }
     while i < nlen {
         c := name.charAt(i)
         mut is_lower := c == "a" || c == "b" || c == "c" || c == "d" || c == "e" ||
@@ -99,7 +103,9 @@ fn _is_upper_start(name: str) -> bool {
         i = i + 1
     }
     // Check for underscores — SCREAMING_SNAKE_CASE has underscores, short PascalCase (PR, CE, LT) does not
+    // Skip leading _ (private type prefix)
     mut j := 0
+    if name.charAt(0) == "_" { j = 1 }
     while j < nlen {
         if name.charAt(j) == "_" { return false }
         j = j + 1
