@@ -1635,11 +1635,22 @@ fn _register_fn_sig(c: Checker) -> Checker {
         cc = _cadv(cc)  // skip [
         while _ck2(cc) != "]" && _ck2(cc) != "EOF" {
             if _ck2(cc) == "IDENT" {
-                gname := _ccur(cc).text
+                mut gname := _ccur(cc).text
+                cc = _cadv(cc)
+                // HKT: F[_] — consume [_] suffix as part of the generic name
+                if _ck2(cc) == "[" {
+                    cc = _cadv(cc)  // skip [
+                    if _ccur(cc).text == "_" {
+                        cc = _cadv(cc)  // skip _
+                        if _ck2(cc) == "]" {
+                            cc = _cadv(cc)  // skip ]
+                        }
+                        gname = gname + "[_]"
+                    }
+                }
                 if gp_count == 0 { gp_0 = gname }
                 if gp_count == 1 { gp_1 = gname }
                 if gp_count == 2 { gp_2 = gname }
-                cc = _cadv(cc)
                 // Capture optional trait bound ": Trait" or ": Trait + Trait2"
                 if _ck2(cc) == ":" {
                     cc = _cadv(cc)
@@ -3766,6 +3777,38 @@ fn _scan_bound_for_target(c: Checker, bound: str, target_name: str, known_concre
     0
 }
 
+// Resolve a TyApplied type by substituting its constructor and arg TypeVars
+// with concrete types. Returns 0 if the type is not TyApplied or can't be resolved.
+fn _resolve_hkt_applied(store: TypeStore, tid: i64, tv0: i64, c0: i64, tv1: i64, c1: i64, tv2: i64, c2: i64) -> ResolvedApplied {
+    if tid <= 0 || tid >= store.types.len() { return ResolvedApplied{resolved: 0, store: store} }
+    info := store_get(store, tid)
+    if type_kind_name(info.kind) != "Applied" { return ResolvedApplied{resolved: 0, store: store} }
+    // Resolve constructor TypeVar
+    mut ctor := info.type_id
+    if ctor == tv0 && tv0 > 0 { ctor = c0 }
+    if ctor == tv1 && tv1 > 0 { ctor = c1 }
+    if ctor == tv2 && tv2 > 0 { ctor = c2 }
+    // Resolve arg TypeVar
+    mut arg := info.type_id2
+    if arg == tv0 && tv0 > 0 { arg = c0 }
+    if arg == tv1 && tv1 > 0 { arg = c1 }
+    if arg == tv2 && tv2 > 0 { arg = c2 }
+    // If constructor is _Array, create a concrete array type
+    if ctor > 0 && ctor < store.types.len() {
+        ctor_info := store_get(store, ctor)
+        if ctor_info.name == "_Array" && arg > 0 {
+            new_st := store_add(store, mk_array_type(arg))
+            return ResolvedApplied{resolved: store_last_id(new_st), store: new_st}
+        }
+    }
+    ResolvedApplied{resolved: 0, store: store}
+}
+
+struct ResolvedApplied {
+    resolved: i64
+    store: TypeStore
+}
+
 fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
     mut cc := _cadv(c)  // skip (
     cc = _cskip_nl(cc)
@@ -3929,6 +3972,12 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
             if pt == tv_id_0 && tv_id_0 > 0 { pt = concrete_0 }
             if pt == tv_id_1 && tv_id_1 > 0 { pt = concrete_1 }
             if pt == tv_id_2 && tv_id_2 > 0 { pt = concrete_2 }
+            // HKT: resolve TyApplied types (e.g. F[A] -> [i64])
+            ra := _resolve_hkt_applied(cc.store, pt, tv_id_0, concrete_0, tv_id_1, concrete_1, tv_id_2, concrete_2)
+            if ra.resolved > 0 {
+                pt = ra.resolved
+                cc = _cset_store(cc, ra.store)
+            }
             sp_ptypes = sp_ptypes.append(pt)
             pi = pi + 1
         }
@@ -3936,6 +3985,12 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
         if sp_ret == tv_id_0 && tv_id_0 > 0 { sp_ret = concrete_0 }
         if sp_ret == tv_id_1 && tv_id_1 > 0 { sp_ret = concrete_1 }
         if sp_ret == tv_id_2 && tv_id_2 > 0 { sp_ret = concrete_2 }
+        // HKT: resolve TyApplied return type
+        ra_ret := _resolve_hkt_applied(cc.store, sp_ret, tv_id_0, concrete_0, tv_id_1, concrete_1, tv_id_2, concrete_2)
+        if ra_ret.resolved > 0 {
+            sp_ret = ra_ret.resolved
+            cc = _cset_store(cc, ra_ret.store)
+        }
 
         sp_sig := new_fn_sig(spec_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
         cc = _cset_reg(cc, reg_add_fn(cc.registry, sp_sig))
@@ -3964,6 +4019,12 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
     if ret_type == tv_id_0 && tv_id_0 > 0 { ret_type = concrete_0 }
     if ret_type == tv_id_1 && tv_id_1 > 0 { ret_type = concrete_1 }
     if ret_type == tv_id_2 && tv_id_2 > 0 { ret_type = concrete_2 }
+    // HKT: resolve TyApplied return type
+    ra_r := _resolve_hkt_applied(cc.store, ret_type, tv_id_0, concrete_0, tv_id_1, concrete_1, tv_id_2, concrete_2)
+    if ra_r.resolved > 0 {
+        ret_type = ra_r.resolved
+        cc = _cset_store(cc, ra_r.store)
+    }
     if ret_type == 0 { ret_type = TY_UNKNOWN }
 
     CE{c: cc, type_id: ret_type}

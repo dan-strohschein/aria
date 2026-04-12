@@ -1,4 +1,4 @@
-// test-files: ../lib/json.aria json_test.aria
+// test-files: ../../lib/json.aria json_test.aria
 // test-requires: json
 use json
 // Test JSON library

@@ -1,4 +1,4 @@
-// test-files: ../lib/http.aria http_test.aria
+// test-files: ../../lib/http.aria http_test.aria
 // test-requires: http
 use http
 // Required handler for http_serve (not called in this test)

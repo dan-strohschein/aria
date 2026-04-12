@@ -269,6 +269,17 @@ fn _ends_with_aria(s: str) -> bool {
 
 // --- Path helpers ---
 
+fn _basename(path: str) -> str {
+    mut last_slash := 0 - 1
+    mut i := 0
+    while i < path.len() {
+        if path.charAt(i) == "/" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return path }
+    path.substring(last_slash + 1, path.len())
+}
+
 fn _dir_of(path: str) -> str {
     mut last_slash := 0 - 1
     mut i := 0
@@ -278,6 +289,44 @@ fn _dir_of(path: str) -> str {
     }
     if last_slash < 0 { return "" }
     path.substring(0, last_slash + 1)
+}
+
+// Normalize a path by collapsing "foo/../" segments.
+// e.g. "testdata/programs/../lib/json.aria" → "testdata/lib/json.aria"
+fn _normalize_path(path: str) -> str {
+    mut result := path
+    // Repeatedly collapse "segment/../" until none remain
+    mut changed := true
+    while changed {
+        changed = false
+        // Find "/../" in result
+        mut i := 0
+        while i + 3 < result.len() {
+            if result.charAt(i) == "/" && result.charAt(i + 1) == "." && result.charAt(i + 2) == "." && result.charAt(i + 3) == "/" {
+                // Found /../ at position i — find the preceding segment start
+                mut j := i - 1
+                while j >= 0 && result.charAt(j) != "/" {
+                    j = j - 1
+                }
+                if j >= 0 {
+                    // Remove from j to i+3 (inclusive)
+                    result = result.substring(0, j) + result.substring(i + 3, result.len())
+                    changed = true
+                    i = 0
+                } else if i > 0 {
+                    // No preceding slash — remove from start to i+4
+                    result = result.substring(i + 4, result.len())
+                    changed = true
+                    i = 0
+                } else {
+                    i = i + 1
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    result
 }
 
 // --- test-files directive ---
@@ -304,7 +353,7 @@ fn _parse_test_files_directive(file_path: str) -> [str] with [Fs] {
                 mut pi := 1
                 while pi < parts.len() {
                     if parts[pi].len() > 0 {
-                        result = result.append(dir + parts[pi])
+                        result = result.append(_normalize_path(dir + parts[pi]))
                     }
                     pi = pi + 1
                 }
@@ -420,7 +469,17 @@ fn _merge_file_lists(a: [str], b: [str]) -> [str] {
     mut result := a
     mut i := 1
     while i < b.len() {
-        result = result.append(b[i])
+        // Deduplicate: skip if file already in result (compare by basename)
+        mut dup := false
+        bname := _basename(b[i])
+        mut j := 1
+        while j < result.len() {
+            if _basename(result[j]) == bname { dup = true }
+            j = j + 1
+        }
+        if dup == false {
+            result = result.append(b[i])
+        }
         i = i + 1
     }
     result

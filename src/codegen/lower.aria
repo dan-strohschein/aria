@@ -2827,7 +2827,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
     if sig.name != "" && fn_is_generic(sig) {
         call_name = _resolve_generic_call_name(ll.store, ll.registry, name, sig, arg_types)
         sp_sig := reg_find_fn(ll.registry, call_name)
-        if sp_sig.name != "" {
+        if sp_sig.name != "" && call_name != name {
             call_sig = sp_sig
         } else if arg_types.len() > 1 {
             // Fallback: HKT or derived-from-bound generics.

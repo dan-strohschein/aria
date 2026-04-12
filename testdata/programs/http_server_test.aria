@@ -1,4 +1,4 @@
-// test-files: ../lib/http.aria ../lib/json.aria http_server_test.aria
+// test-files: ../../lib/http.aria ../../lib/json.aria http_server_test.aria
 // test-requires: http
 use http
 use json
