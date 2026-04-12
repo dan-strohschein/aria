@@ -4167,6 +4167,23 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
         return CE{c: cc, type_id: sar.id}
     }
 
+    // chars/bytes return [i64], graphemes returns [str]
+    if method == "chars" || method == "bytes" {
+        sar := store_add_canonical(cc.store, mk_array_type(TY_I64))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
+    }
+    if method == "graphemes" {
+        sar := store_add_canonical(cc.store, mk_array_type(TY_STR))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
+    }
+
+    // map/filter return same array type (element type may differ for map but we use TY_UNKNOWN)
+    if method == "map" || method == "filter" {
+        return CE{c: cc, type_id: obj_type}
+    }
+
     // append returns same array type
     if method == "append" {
         return CE{c: cc, type_id: obj_type}
