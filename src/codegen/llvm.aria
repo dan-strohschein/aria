@@ -22,27 +22,35 @@ fn _nl() -> str = "\n"
 // Uses chunked approach: join groups of 64, then join the chunks.
 // This is O(L * N/64 + L * 64) ≈ O(L * N/64) instead of O(L * N).
 fn _join(parts: [str]) -> str {
-    // First pass: join chunks of 64 parts
-    mut chunks := [""]
-    mut i := 1
-    while i < parts.len() {
-        mut chunk := ""
-        mut j := 0
-        while j < 64 && (i + j) < parts.len() {
-            chunk = chunk + parts[i + j]
-            j = j + 1
+    // Tree-merge join: O(N log N) total bytes of memcpy instead of the
+    // previous O(L²) chained `result = result + chunks[ci]`. For ~50MB of
+    // LLVM IR text in ~1M parts, the chained version copied hundreds of GB.
+    // The tree merge halves the part count at each level, so total bytes
+    // copied is roughly 50MB * log2(1M) ≈ 1 GB — order of magnitude faster.
+    n := parts.len() - 1
+    if n <= 0 { return "" }
+    if n == 1 { return parts[1] }
+    // Build initial level: copy parts[1..n] into a flat array (skip sentinel).
+    mut current := [""]
+    mut k := 1
+    while k <= n {
+        current = current.append(parts[k])
+        k = k + 1
+    }
+    // Repeatedly merge adjacent pairs until one element remains.
+    while current.len() > 2 {
+        mut next := [""]
+        mut i := 1
+        while i + 1 < current.len() {
+            next = next.append(current[i] + current[i + 1])
+            i = i + 2
         }
-        chunks = chunks.append(chunk)
-        i = i + 64
+        if i < current.len() {
+            next = next.append(current[i])
+        }
+        current = next
     }
-    // Second pass: join the chunks
-    mut result := ""
-    mut ci := 1
-    while ci < chunks.len() {
-        result = result + chunks[ci]
-        ci = ci + 1
-    }
-    return result
+    current[1]
 }
 
 // --- String constant escaping ---
