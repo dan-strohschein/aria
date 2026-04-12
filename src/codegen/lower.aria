@@ -5037,6 +5037,69 @@ fn _lower_expr(l: Lowerer) -> LT {
                     // Check if this is a module-qualified function call (e.g., log.info())
                     // If the function exists as a top-level name, call it directly
                     left_type := _lget_type(ll, left)
+                    // Check if this is a variant construction: Type.Variant(args)
+                    vtag := _variant_tag(ll.registry, field)
+                    if vtag > 0 {
+                        // Variant construction: Shape.Circle(5.0) → construct Circle variant
+                        vparent := _variant_parent(ll.registry, field)
+                        vdc := variant_data_count(vparent, vtag)
+                        if vdc > 0 {
+                            ll = _ladv(ll)  // skip (
+                            ll = _lskip_nl(ll)
+                            alloc_sz := sum_alloc_size(vparent)
+                            vnt := _lnew_temp(ll)
+                            ll = vnt.l
+                            ll = _lemit(ll, new_inst(OpAlloc, vnt.temp, alloc_sz, 0, vparent.name, 0))
+                            st_id := _struct_type_id(ll.registry, vparent.name)
+                            if st_id > 0 { ll = _lset_type(ll, vnt.temp, st_id) }
+                            vtag_nt := _lnew_temp(ll)
+                            ll = vtag_nt.l
+                            ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, vtag_nt.temp, 0, "_tag", 0))
+                            mut vfi := 0
+                            mut vslot := 1
+                            while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                                ll = _lskip_nl(ll)
+                                val := _lower_expr(ll)
+                                ll = val.l
+                                vft := variant_field_type(vparent, vtag, vfi)
+                                if vft == 12 {
+                                    ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp, vslot, "", 0))
+                                    ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp + 1, vslot + 1, "", 0))
+                                    vslot = vslot + 2
+                                } else {
+                                    ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp, vslot, "", 0))
+                                    vslot = vslot + 1
+                                }
+                                vfi = vfi + 1
+                                ll = _lskip_nl(ll)
+                                if _lk(ll) == "," { ll = _ladv(ll) }
+                            }
+                            if _lk(ll) == ")" { ll = _ladv(ll) }
+                            left = vnt.temp
+                        } else {
+                            // Tag-only variant: Shape.Point
+                            if _lk(ll) == "(" {
+                                ll = _ladv(ll)
+                                if _lk(ll) == ")" { ll = _ladv(ll) }
+                            }
+                            vnt := _lnew_temp(ll)
+                            ll = vnt.l
+                            if sum_has_data(vparent) {
+                                alloc_sz := sum_alloc_size(vparent)
+                                ll = _lemit(ll, new_inst(OpAlloc, vnt.temp, alloc_sz, 0, vparent.name, 0))
+                                st_id := _struct_type_id(ll.registry, vparent.name)
+                                if st_id > 0 { ll = _lset_type(ll, vnt.temp, st_id) }
+                                vtag_nt := _lnew_temp(ll)
+                                ll = vtag_nt.l
+                                ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                                ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, vtag_nt.temp, 0, "_tag", 0))
+                            } else {
+                                ll = _lemit(ll, new_inst(OpConst, vnt.temp, vtag, 0, "", 0))
+                            }
+                            left = vnt.temp
+                        }
+                    } else {
                     // Try module-qualified call: log.info() → info()
                     // Also try type-qualified call: Pair.new() → Pair_new()
                     mod_fn_sig := reg_find_fn(ll.registry, field)
@@ -5100,6 +5163,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                         ll = mr.l
                         left = mr.temp
                     }
+                    } // close variant else block
                 } else if _lk(ll) == "[" && (field == "to" || field == "trunc") {
                     // Conversion with type arg: .to[Type]() or .trunc[Type]()
                     ll = _ladv(ll)  // skip [
