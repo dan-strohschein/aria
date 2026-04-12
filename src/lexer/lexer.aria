@@ -832,6 +832,19 @@ fn tokenize(source: str, file: str) -> Lexer {
                 lex = _add_token(lex, TkNewline, ";", lex.line, lex.col, lex.pos)
             }
             lex = _advance(lex)
+        } else if c == "`" {
+            // Backtick raw string: `text`
+            start_line := lex.line
+            start_col := lex.col
+            start_pos := lex.pos
+            lex = _advance(lex)  // skip opening `
+            mut text := ""
+            while _at_end(lex) == false && _peek(lex) != "`" {
+                text = text + _peek(lex)
+                lex = _advance(lex)
+            }
+            if _at_end(lex) == false { lex = _advance(lex) }  // skip closing `
+            lex = _add_token(lex, TkStringLit, text, start_line, start_col, start_pos)
         } else {
             lex = _add_error(lex, E0001, "unexpected character")
             lex = _add_token(lex, TkIllegal, c, lex.line, lex.col, lex.pos)

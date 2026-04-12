@@ -1532,7 +1532,8 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
             consumed_value = true
         } else {
             // Operators, opening delimiters, etc.
-            if k == "." { after_dot = true } else { after_dot = false }
+            dlb2 := ".\{"
+            if k == "." || k == dlb2 || k == ":" { after_dot = true } else { after_dot = false }
             rr = _radv(rr)
             if k == "(" || k == "[" || k == "," || k == "." ||
                k == "+" || k == "-" || k == "*" || k == "/" || k == "%" ||
@@ -2202,6 +2203,38 @@ fn _resolve_match(r: Resolver) -> Resolver {
                 rr = _rskip_nl(rr)
             }
             if _rk(rr) == ")" { rr = _radv(rr) }
+        }
+
+        // Struct pattern destructuring: Variant { field, field: binding }
+        if _rk(rr) == lb {
+            rr = _radv(rr)  // skip {
+            rr = _rskip_nl(rr)
+            while _rk(rr) != rb && _rk(rr) != "EOF" {
+                if _rk(rr) == "IDENT" {
+                    fname := _rcur(rr).text
+                    rr = _radv(rr)
+                    if _rk(rr) == ":" {
+                        // field: binding — bind the alias name
+                        rr = _radv(rr)
+                        if _rk(rr) == "IDENT" {
+                            bname := _rcur(rr).text
+                            span := _rspan(rr)
+                            rr = _add_sym_warn_shadow(rr, bname, SkVariable, span, false)
+                            rr = _radv(rr)
+                        }
+                    } else {
+                        // Shorthand: field name is also the binding
+                        span := _rspan(rr)
+                        rr = _add_sym_warn_shadow(rr, fname, SkVariable, span, false)
+                    }
+                } else {
+                    rr = _radv(rr)
+                }
+                rr = _rskip_nl(rr)
+                if _rk(rr) == "," { rr = _radv(rr) }
+                rr = _rskip_nl(rr)
+            }
+            if _rk(rr) == rb { rr = _radv(rr) }
         }
 
         // Guard clause: `if <expr>` — resolve identifiers in the guard expression

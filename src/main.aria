@@ -377,7 +377,7 @@ fn _parse_test_files_directive(file_path: str) -> [str] with [Fs] {
 // Known standard library modules and their file names
 fn _is_stdlib_module(name: str) -> bool =
     name == "json" || name == "http" || name == "db" ||
-    name == "fs" || name == "time" || name == "log" || name == "test" ||
+    name == "fs" || name == "time" || name == "log" ||
     name == "property" || name == "crypto" || name == "net" || name == "os" || name == "flag"
 
 fn _find_aria_home() -> str with [Fs] {
