@@ -22,6 +22,7 @@ struct Resolver {
     is_public: bool
     pool: NodePool
     index: DeclIndex
+    closure_scope: i64
 }
 
 fn _new_resolver(tokens: [Token], pool: NodePool, index: DeclIndex, file: str) -> Resolver =
@@ -34,7 +35,8 @@ fn _new_resolver(tokens: [Token], pool: NodePool, index: DeclIndex, file: str) -
         file: file,
         is_public: false,
         pool: pool,
-        index: index
+        index: index,
+        closure_scope: 0
     }
 
 // --- ResolveResult ---
@@ -64,7 +66,8 @@ fn _rk2(r: Resolver, pos: i64) -> str {
 fn _radv(r: Resolver) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos + 1, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
 
 // Skip pub modifier, including optional (pkg) scope qualifier
 fn _rskip_pub(r: Resolver) -> Resolver {
@@ -83,27 +86,38 @@ fn _rskip_pub(r: Resolver) -> Resolver {
 fn _rset_pos(r: Resolver, pos: i64) -> Resolver =
     Resolver{tokens: r.tokens, pos: pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
 
 fn _rset_table(r: Resolver, table: SymbolTable) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
 
 fn _rset_diag(r: Resolver, diag: DiagnosticBag) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: diag, current_scope: r.current_scope,
-             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
 
 fn _rset_scope(r: Resolver, scope_id: i64) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: scope_id,
-             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
 
 fn _rset_public(r: Resolver, is_public: bool) -> Resolver =
     Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
              diagnostics: r.diagnostics, current_scope: r.current_scope,
-             file: r.file, is_public: is_public, pool: r.pool, index: r.index}
+             file: r.file, is_public: is_public, pool: r.pool, index: r.index,
+             closure_scope: r.closure_scope}
+
+fn _rset_closure_scope(r: Resolver, cs: i64) -> Resolver =
+    Resolver{tokens: r.tokens, pos: r.pos, table: r.table,
+             diagnostics: r.diagnostics, current_scope: r.current_scope,
+             file: r.file, is_public: r.is_public, pool: r.pool, index: r.index,
+             closure_scope: cs}
 
 fn _rspan(r: Resolver) -> Span {
     tok := _rcur(r)
@@ -1460,6 +1474,23 @@ fn _stdlib_module_for_name(name: str) -> str {
     ""
 }
 
+// Check if child_scope is the target_scope or a descendant of it
+fn _is_scope_inside(table: SymbolTable, child_scope: i64, target_scope: i64) -> bool {
+    if child_scope == target_scope { return true }
+    mut cur := child_scope
+    mut limit := 0
+    while cur > 0 && limit < 100 {
+        if cur == target_scope { return true }
+        if cur < table.scopes.len() {
+            cur = table.scopes[cur].parent
+        } else {
+            return false
+        }
+        limit = limit + 1
+    }
+    false
+}
+
 fn _resolve_ident(r: Resolver) -> Resolver {
     name := _rcur(r).text
     found := lookup(r.table, r.current_scope, name)
@@ -1478,6 +1509,14 @@ fn _resolve_ident(r: Resolver) -> Resolver {
         }
         rr := _rerror(r, E0701, msg)
         return _radv(rr)
+    }
+    // Capture detection: symbol resolved from outside the closure scope
+    // Detects that a closure captures a variable from its enclosing scope.
+    // Currently detection-only; codegen handles capture mechanics via GC-boxed closures.
+    if r.closure_scope > 0 && found.scope_id > 0 {
+        if _is_scope_inside(r.table, found.scope_id, r.closure_scope) == false {
+            mut _is_capture := true
+        }
     }
     // Pub visibility check
     if found.is_public == false {
@@ -2126,10 +2165,13 @@ fn _resolve_with(r: Resolver) -> Resolver {
 
 fn _resolve_closure(r: Resolver) -> Resolver {
     parent_scope := r.current_scope
+    prev_closure := r.closure_scope
     mut rr := _radv(r)  // skip "fn"
     // Optional `once` keyword
     if _rk(rr) == "IDENT" && _rcur(rr).text == "once" { rr = _radv(rr) }
     rr = _push_scope(rr, ScFunction, "closure")
+    // Set closure_scope for capture detection
+    rr = _rset_closure_scope(rr, rr.current_scope)
 
     if _rk(rr) == "(" {
         rr = _radv(rr)  // skip (
@@ -2160,7 +2202,9 @@ fn _resolve_closure(r: Resolver) -> Resolver {
         rr = _resolve_expr_until_nl(rr)
     }
 
-    _pop_scope(rr, parent_scope)
+    rr = _pop_scope(rr, parent_scope)
+    // Restore previous closure scope
+    _rset_closure_scope(rr, prev_closure)
 }
 
 // --- Skip type tokens (doesn't resolve, types checked later) ---
