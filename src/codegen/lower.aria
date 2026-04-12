@@ -1681,8 +1681,10 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- For ---
 
     if nk == "For" {
-        // s1=var_name, c0=iterator, c1=body
+        // s1=var_name (or first in tuple), s2=second name, b1=is_tuple, c0=iterator, c1=body
         var_name := node.s1
+        var_name2 := node.s2
+        is_tuple_for := node.b1
         iter_node := pool_get(ll.pool, node.c0)
         // Check if iterator is a Range node
         if expr_kind_name(iter_node.kind) == "Range" {
@@ -1710,7 +1712,26 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
         ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
         if var_name != "" {
-            if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+            if is_tuple_for {
+                // Tuple destructuring: (i, x) — first name = index, second = element
+                ll = _lenv_add(ll, var_name, idx_nt.temp)
+                if var_name2.len() > 0 {
+                    if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+                        elem_nt := _lnew_str_temp(ll)
+                        ll = elem_nt.l
+                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
+                        ll = _lset_type(ll, elem_nt.temp, 12)
+                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                    } else {
+                        elem_nt := _lnew_temp(ll)
+                        ll = elem_nt.l
+                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+                        elem_type := _array_elem_type(ll.store, iter_type)
+                        if elem_type > 0 { ll = _lset_type(ll, elem_nt.temp, elem_type) }
+                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                    }
+                }
+            } else if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
                 elem_nt := _lnew_str_temp(ll)
                 ll = elem_nt.l
                 ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
@@ -9716,9 +9737,18 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip for
     lb := "\{"
 
-    // Get loop variable name
+    // Get loop variable name(s)
     mut var_name := ""
-    if _lk(ll) == "IDENT" {
+    mut var_name2 := ""
+    mut is_tuple_for := false
+    if _lk(ll) == "(" {
+        // Tuple destructuring: for (i, x) in arr
+        ll = _ladv(ll)  // skip (
+        if _lk(ll) == "IDENT" { var_name = _lcur(ll).text; ll = _ladv(ll) }
+        if _lk(ll) == "," { ll = _ladv(ll) }
+        if _lk(ll) == "IDENT" { var_name2 = _lcur(ll).text; ll = _ladv(ll); is_tuple_for = true }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+    } else if _lk(ll) == "IDENT" {
         var_name = _lcur(ll).text
         ll = _ladv(ll)
     }
@@ -9791,9 +9821,26 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
     ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
 
-    // Load arr[idx] into loop variable
+    // Load arr[idx] into loop variable(s)
     if var_name != "" {
-        if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+        if is_tuple_for {
+            // Tuple: first name = index, second name = element
+            ll = _lenv_add(ll, var_name, idx_nt.temp)
+            if var_name2.len() > 0 {
+                if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+                    elem_nt := _lnew_str_temp(ll)
+                    ll = elem_nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
+                    ll = _lset_type(ll, elem_nt.temp, 12)
+                    ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                } else {
+                    elem_nt := _lnew_temp(ll)
+                    ll = elem_nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+                    ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                }
+            }
+        } else if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
             elem_nt := _lnew_str_temp(ll)
             ll = elem_nt.l
             ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))

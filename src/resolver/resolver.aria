@@ -1749,10 +1749,14 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     }
 
     if nk == "For" {
-        // s1=pattern name, c0=iter expr, c1=body
+        // s1=pattern name (or first in tuple), s2=second name, b1=is_tuple, c0=iter, c1=body
         parent_scope := r.current_scope
         mut rr := _push_scope(r, ScBlock, "for")
         rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, false)
+        // Tuple destructuring: for (i, x) in arr — register second variable too
+        if node.b1 && node.s2.len() > 0 {
+            rr = _add_sym_warn_shadow(rr, node.s2, SkVariable, node.span, false)
+        }
         rr = _resolve_expr_node(rr, node.c0)
         rr = _resolve_expr_node(rr, node.c1)
         return _pop_scope(rr, parent_scope)

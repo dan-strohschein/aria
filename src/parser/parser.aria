@@ -2501,8 +2501,27 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
 fn _parse_for(p: Parser) -> PR {
     span := _pspan(p)
     mut pp := _adv(p)
-    pat := _cur(pp).text
-    pp = _adv(pp)
+    // Check for tuple destructuring: for (i, x) in ...
+    mut pat := ""
+    mut pat2 := ""
+    mut is_tuple := false
+    if _ck(pp) == "(" {
+        pp = _adv(pp)  // skip (
+        if _ck(pp) == "IDENT" {
+            pat = _cur(pp).text
+            pp = _adv(pp)
+        }
+        if _ck(pp) == "," { pp = _adv(pp) }
+        if _ck(pp) == "IDENT" {
+            pat2 = _cur(pp).text
+            pp = _adv(pp)
+            is_tuple = true
+        }
+        if _ck(pp) == ")" { pp = _adv(pp) }
+    } else {
+        pat = _cur(pp).text
+        pp = _adv(pp)
+    }
     pp = _expect(pp, "in")
     iter := _parse_expr(pp, 0)
     iter_idx := _pidx(iter.p)
@@ -2510,7 +2529,8 @@ fn _parse_for(p: Parser) -> PR {
     body := _parse_block(pp)
     body_idx := _pidx(body.p)
     pp = _padd(body.p, body.e)
-    PR{p: pp, e: Expr{kind: EkFor, s1: pat, s2: "", b1: false, b2: false,
+    // Store tuple destructuring: s1=first name, s2=second name, b1=is_tuple
+    PR{p: pp, e: Expr{kind: EkFor, s1: pat, s2: pat2, b1: is_tuple, b2: false,
                        c0: iter_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
