@@ -1501,7 +1501,7 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
                     while _rk(rr) != rb2 && _rk(rr) != "EOF" {
                         parent_scope := rr.current_scope
                         rr = _push_scope(rr, ScBlock, "catch_arm")
-                        // Pattern: IDENT or qualified name — bind if it's a catch-all binding
+                        // Pattern: IDENT, qualified name, or binding
                         if _rk(rr) == "IDENT" {
                             pname := _rcur(rr).text
                             existing := lookup(rr.table, rr.current_scope, pname)
@@ -1513,9 +1513,34 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
                                 span := _rspan(rr)
                                 rr = _add_sym_warn_shadow(rr, pname, SkVariable, span, false)
                             }
+                            rr = _radv(rr)
+                            // Skip qualified name: Type.Variant
+                            while _rk(rr) == "." {
+                                rr = _radv(rr)
+                                if _rk(rr) == "IDENT" { rr = _radv(rr) }
+                            }
+                            // Destructuring: Variant(x, y)
+                            if _rk(rr) == "(" {
+                                rr = _radv(rr)
+                                rr = _rskip_nl(rr)
+                                while _rk(rr) != ")" && _rk(rr) != "EOF" {
+                                    if _rk(rr) == "IDENT" {
+                                        bname := _rcur(rr).text
+                                        bspan := _rspan(rr)
+                                        rr = _add_sym_warn_shadow(rr, bname, SkVariable, bspan, false)
+                                        rr = _radv(rr)
+                                    } else {
+                                        rr = _radv(rr)
+                                    }
+                                    rr = _rskip_nl(rr)
+                                    if _rk(rr) == "," { rr = _radv(rr) }
+                                    rr = _rskip_nl(rr)
+                                }
+                                if _rk(rr) == ")" { rr = _radv(rr) }
+                            }
                         }
-                        // Skip to =>
-                        while _rk(rr) != "=>" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                        // Skip remaining pattern tokens to =>
+                        while _rk(rr) != "=>" && _rk(rr) != "EOF" && _rk(rr) != rb2 { rr = _radv(rr) }
                         if _rk(rr) == "=>" { rr = _radv(rr) }
                         rr = _rskip_nl(rr)
                         // Resolve body
@@ -2067,6 +2092,11 @@ fn _resolve_pattern_bindings(r: Resolver, idx: i64) -> Resolver {
     if idx <= 0 { return r }
     node := pool_get(r.pool, idx)
     nk := expr_kind_name(node.kind)
+
+    // Follow indirection nodes (EkNone wrappers with c0 pointing to actual node)
+    if nk == "None" && node.c0 > 0 {
+        return _resolve_pattern_bindings(r, node.c0)
+    }
 
     if nk == "Ident" {
         name := node.s1

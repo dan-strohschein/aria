@@ -1712,6 +1712,74 @@ fn _parse_prefix(p: Parser) -> PR {
     if k == "[" { return _parse_array(p) }
     lb := "\{"
     if k == lb { return _parse_brace_expr(p) }
+    // Prefix catch: catch <expr> { arms }
+    if k == "catch" {
+        span := _pspan(p)
+        mut pp := _adv(p)
+        // Parse the expression being caught
+        inner := _parse_expr(pp, 0)
+        inner_idx := _pidx(inner.p)
+        pp = _padd(inner.p, inner.e)
+        pp = _skip_nl(pp)
+        lb2 := "\{"
+        rb2 := "\}"
+        // Check if followed by { => (multi-arm catch)
+        mut has_arms := false
+        if _ck(pp) == lb2 {
+            mut sc := pp.pos + 1
+            mut sl := 0
+            while sc < pp.tokens.len() && pp.tokens[sc].name != rb2 && sl < 80 {
+                if pp.tokens[sc].name == "=>" { has_arms = true }
+                sc = sc + 1; sl = sl + 1
+            }
+        }
+        if has_arms {
+            // Multi-arm prefix catch — parse like postfix multi-arm catch
+            pp = _adv(pp)  // skip {
+            pp = _skip_nl(pp)
+            mut arm_indices := [0]
+            mut arm_count := 0
+            while _ck(pp) != rb2 && _ck(pp) != "EOF" {
+                pp = _skip_nl(pp)
+                pat := _parse_expr(pp, 0)
+                pat_idx := _pidx(pat.p)
+                pp = _padd(pat.p, pat.e)
+                while _ck(pp) != "=>" && _ck(pp) != rb2 && _ck(pp) != "EOF" { pp = _adv(pp) }
+                if _ck(pp) == "=>" { pp = _adv(pp) }
+                pp = _skip_nl(pp)
+                mut body_e := _no_expr()
+                if _ck(pp) == lb2 {
+                    br := _parse_block(pp)
+                    pp = br.p; body_e = br.e
+                } else {
+                    br := _parse_expr(pp, 0)
+                    pp = br.p; body_e = br.e
+                }
+                body_idx := _pidx(pp)
+                pp = _padd(pp, body_e)
+                arm_indices = arm_indices.append(pat_idx)
+                arm_indices = arm_indices.append(body_idx)
+                arm_count = arm_count + 1
+                pp = _skip_nl(pp)
+            }
+            if _ck(pp) == rb2 { pp = _adv(pp) }
+            list_start := _pidx(pp)
+            mut ai := 0
+            while ai < arm_count {
+                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                     c0: arm_indices[ai * 2 + 1], c1: arm_indices[ai * 2 + 2], c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                ai = ai + 1
+            }
+            return PR{p: pp, e: Expr{kind: EkCatch, s1: "", s2: "", b1: true, b2: false,
+                                      c0: inner_idx, c1: 0, c2: 0, list_start: list_start, list_count: arm_count, span: span}}
+        }
+        // Single-body prefix catch
+        body := _parse_block(pp)
+        body_idx := _pidx(body.p)
+        pp = _padd(body.p, body.e)
+        return PR{p: pp, e: Expr{kind: EkCatch, s1: "", s2: "", b1: false, b2: false,
+                                  c0: inner_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
+    }
     if k == "IDENT" || k == "Self" || k == "self" {
         name := _cur(p).text
         span := _pspan(p)
