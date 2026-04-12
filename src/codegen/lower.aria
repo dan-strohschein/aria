@@ -75,7 +75,7 @@ fn _new_lowerer(tokens: [Token], pool: NodePool, store: TypeStore, reg: TypeRegi
 
 fn _lcur(l: Lowerer) -> Token {
     if l.pos >= l.tokens.len() {
-        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}
     }
     return l.tokens[l.pos]
 }

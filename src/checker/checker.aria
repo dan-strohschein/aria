@@ -177,7 +177,10 @@ fn _cset_callee_slot(c: Checker, in_callee: bool) -> Checker =
 
 fn _cspan(c: Checker) -> Span {
     tok := _ccur(c)
-    new_span(c.file, tok.line, tok.col, tok.offset, tok.text.len())
+    // Use per-token file if available, fall back to checker's file
+    mut f := c.file
+    if tok.file.len() > 0 { f = tok.file }
+    new_span(f, tok.line, tok.col, tok.offset, tok.text.len())
 }
 
 fn _cskip_nl(c: Checker) -> Checker {

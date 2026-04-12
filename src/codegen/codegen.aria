@@ -110,7 +110,7 @@ fn _check_duplicate_decls(index: DeclIndex) -> DiagnosticBag {
 
 fn _merge_file_tokens(base: [Token], new_toks: [Token]) -> [Token] {
     // Copy base tokens except EOF (last token)
-    mut result := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}]
+    mut result := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}]
     mut i := 1
     while i < base.len() {
         tk := base[i]
@@ -144,7 +144,7 @@ fn _merge_file_tokens(base: [Token], new_toks: [Token]) -> [Token] {
         }
     }
     // Append EOF
-    result = result.append(Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"})
+    result = result.append(Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""})
     return result
 }
 
@@ -160,7 +160,7 @@ fn _merge_remaining(result: [Token], new_toks: [Token], start: i64) -> [Token] {
 
 fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // Read and lex each file, merge tokens
-    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}]
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}]
     mut first := true
     mut fi := 1
     while fi < files.len() {
@@ -208,7 +208,7 @@ fn generate_from_sources(files: [str], output_path: str, runtime_path: str) -> D
 
 fn check_sources(files: [str]) -> DiagnosticBag with [Fs] {
     // Lex, resolve, and type-check without codegen
-    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}]
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}]
     mut first := true
     mut fi := 1
     while fi < files.len() {
@@ -237,7 +237,7 @@ fn check_sources(files: [str]) -> DiagnosticBag with [Fs] {
 
 fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str, parallel: bool) -> DiagnosticBag with [Io, Fs] {
     // Same pipeline as generate_from_sources but uses lower_for_tests
-    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}]
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}]
     mut first := true
     mut fi := 1
     while fi < files.len() {
@@ -271,7 +271,7 @@ fn generate_tests_from_sources(files: [str], output_path: str, runtime_path: str
 
 fn generate_bench_from_sources(files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs] {
     // Same pipeline as test but for bench blocks
-    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}]
+    mut merged := [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}]
     mut first := true
     mut fi := 1
     while fi < files.len() {

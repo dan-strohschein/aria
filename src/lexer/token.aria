@@ -137,10 +137,15 @@ struct Token {
     // directly instead of calling token_name on every check, replacing ~80M
     // 120-arm match dispatches with ~800K (one per token at creation time).
     name: str
+    // Source file path — enables correct multi-file diagnostics
+    file: str
 }
 
 fn new_token(kind: TokenKind, text: str, line: i64, col: i64, offset: i64) -> Token =
-    Token{kind: kind, text: text, line: line, col: col, offset: offset, name: token_name(kind)}
+    Token{kind: kind, text: text, line: line, col: col, offset: offset, name: token_name(kind), file: ""}
+
+fn new_token_file(kind: TokenKind, text: str, line: i64, col: i64, offset: i64, file: str) -> Token =
+    Token{kind: kind, text: text, line: line, col: col, offset: offset, name: token_name(kind), file: file}
 
 // --- Token name for display ---
 

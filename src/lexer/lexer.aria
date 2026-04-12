@@ -67,7 +67,7 @@ fn new_lexer(source: str, file: str) -> Lexer =
         pos: 0,
         line: 1,
         col: 1,
-        tokens: [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: ""}],
+        tokens: [Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "", file: ""}],
         diagnostics: new_bag(),
         paren_depth: 0,
         bracket_depth: 0,
@@ -113,7 +113,7 @@ fn _advance(lex: Lexer) -> Lexer {
 }
 
 fn _add_token(lex: Lexer, kind: TokenKind, text: str, start_line: i64, start_col: i64, start_offset: i64) -> Lexer {
-    tok := new_token(kind, text, start_line, start_col, start_offset)
+    tok := new_token_file(kind, text, start_line, start_col, start_offset, lex.file)
     Lexer{
         source: lex.source,
         file: lex.file,

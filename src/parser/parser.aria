@@ -23,7 +23,7 @@ fn _padd(p: Parser, e: Expr) -> Parser =
 
 fn _cur(p: Parser) -> Token {
     if p.pos >= p.tokens.len() {
-        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF", file: ""}
     }
     p.tokens[p.pos]
 }
