@@ -2836,7 +2836,7 @@ fn _check_return(c: Checker) -> CE {
         }
         if type_ok == false && result.type_id != TY_UNKNOWN {
             q := _q()
-            cc = _cwarning(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+            cc = _cerror(cc, E0106, "return type mismatch: expected " + q + format_type(cc.store, cc.fn_return_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
         }
     }
     CE{c: cc, type_id: TY_NEVER}
@@ -3116,7 +3116,7 @@ fn _check_expr_full(c: Checker) -> CE {
             // Skip check when left_type is bool (precedence flattening in flat checker)
             if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN && left_type != TY_BOOL {
                 q := _q()
-                cc = _cwarning(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
+                cc = _cerror(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
             }
             // Check operand types match (for arithmetic)
             // Skip check for &&/|| and when left_type is bool (precedence flattening)
@@ -3127,7 +3127,7 @@ fn _check_expr_full(c: Checker) -> CE {
                         is_cmp := op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
                         if is_str_concat == false && is_cmp {
                             q := _q()
-                            cc = _cwarning(cc, E0102, "cannot compare " + q + format_type(cc.store, left_type) + q + " with " + q + format_type(cc.store, right.type_id) + q)
+                            cc = _cerror(cc, E0102, "cannot compare " + q + format_type(cc.store, left_type) + q + " with " + q + format_type(cc.store, right.type_id) + q)
                         }
                     }
                 }
