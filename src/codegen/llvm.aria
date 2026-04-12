@@ -444,6 +444,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare i8* @_aria_alloc(i64)" + nl)
     p = p.append("declare void @_aria_gc_frame_push(i64, i64)" + nl)
     p = p.append("declare void @_aria_gc_frame_pop()" + nl)
+    p = p.append("declare void @llvm.memset.p0i8.i64(i8*, i8, i64, i1)" + nl)
     p = p.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
@@ -733,6 +734,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare i8* @_aria_alloc(i64)" + nl)
     h = h.append("declare void @_aria_gc_frame_push(i64, i64)" + nl)
     h = h.append("declare void @_aria_gc_frame_pop()" + nl)
+    h = h.append("declare void @llvm.memset.p0i8.i64(i8*, i8, i64, i1)" + nl)
     h = h.append("declare void @_aria_memcpy(i8*, i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_read_file(i8*, i64)" + nl)
     h = h.append("declare void @_aria_write_file(i8*, i64, i8*, i64)" + nl)
@@ -1084,13 +1086,15 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
     p = p.append("  %gc_frame = alloca [" + i2s(gc_frame_slots) + " x i64], align 8" + nl)
     p = p.append("  %gc_frame_ptr = ptrtoint [" + i2s(gc_frame_slots) + " x i64]* %gc_frame to i64" + nl)
     if gc_root_count > 0 {
-        // Zero the roots portion
-        mut zi := 0
-        while zi < gc_root_count {
-            p = p.append("  %gc_init_" + i2s(zi) + " = getelementptr [" + i2s(gc_frame_slots) + " x i64], [" + i2s(gc_frame_slots) + " x i64]* %gc_frame, i64 0, i64 " + i2s(zi + 2) + nl)
-            p = p.append("  store i64 0, i64* %gc_init_" + i2s(zi) + nl)
-            zi = zi + 1
-        }
+        // Zero the roots portion via a single memset intrinsic. The previous
+        // version emitted 2 LLVM instructions per slot (getelementptr + store)
+        // which dominated startup of high-arity match functions like token_name
+        // (113 root slots × 800K calls = 90M instructions just for GC init).
+        // memset reduces this to one call per function entry.
+        bytes := gc_root_count * 8
+        p = p.append("  %gc_init_p = bitcast [" + i2s(gc_frame_slots) + " x i64]* %gc_frame to i8*" + nl)
+        p = p.append("  %gc_init_d = getelementptr inbounds i8, i8* %gc_init_p, i64 16" + nl)
+        p = p.append("  call void @llvm.memset.p0i8.i64(i8* align 8 %gc_init_d, i8 0, i64 " + i2s(bytes) + ", i1 false)" + nl)
         p = p.append("  call void @_aria_gc_frame_push(i64 %gc_frame_ptr, i64 " + i2s(gc_root_count) + ")" + nl)
         // Store parameter values into GC frame (params might hold struct pointers).
         // Use the cached tables instead of per-temp _is_gc_root scans.
