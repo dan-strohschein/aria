@@ -2943,6 +2943,14 @@ fn _check_expr_full(c: Checker) -> CE {
     // Postfix and binary
     mut running := true
     while running {
+        // Skip newlines if followed by a continuation operator (|>, +, -, etc.)
+        if _ck2(cc) == "NEWLINE" {
+            mut peek := cc.pos + 1
+            while peek < cc.tokens.len() && cc.tokens[peek].name == "NEWLINE" { peek = peek + 1 }
+            if peek < cc.tokens.len() && _is_cont(cc.tokens[peek].name) {
+                cc = _cset_pos(cc, peek)
+            }
+        }
         k := _ck2(cc)
         dlb := ".\{"
         if k == dlb {
