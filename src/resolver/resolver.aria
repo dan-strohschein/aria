@@ -1126,6 +1126,15 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
     }
 
     if k == "mut" { return _resolve_mut_binding(r) }
+    // Non-mut binding: IDENT := expr — handle inline in _resolve_stmt
+    if k == "IDENT" && r.pos + 1 < r.tokens.len() && r.tokens[r.pos + 1].name == ":=" {
+        iname := _rcur(r).text
+        ispan := _rspan(r)
+        mut ir := _radv(_radv(r))  // skip name and :=
+        ir = _resolve_expr_until_nl(ir)
+        ir = _add_sym_warn_shadow(ir, iname, SkVariable, ispan, false)
+        return ir
+    }
     if k == "return" {
         mut rr := _radv(r)
         rb := "\}"
@@ -1182,6 +1191,21 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
     if k == "match" { return _resolve_match(r) }
     if k == "with" { return _resolve_with(r) }
 
+    // Check for simple binding at statement level: IDENT := expr
+    // Handling this here (like mut) ensures the symbol table update propagates correctly
+    if k == "IDENT" {
+        bind_next := r.pos + 1
+        if bind_next < r.tokens.len() && r.tokens[bind_next].name == ":=" {
+            bname := _rcur(r).text
+            bspan := _rspan(r)
+            mut rr := _radv(r)   // skip name
+            rr = _radv(rr)       // skip :=
+            rr = _resolve_expr_until_nl(rr)
+            rr = _add_sym_warn_shadow(rr, bname, SkVariable, bspan, false)
+            return rr
+        }
+    }
+
     // Expression statement — may be a binding
     return _resolve_expr_or_binding(r)
 }
@@ -1192,6 +1216,7 @@ fn _resolve_mut_binding(r: Resolver) -> Resolver {
     mut rr := _radv(r)  // skip "mut"
     if _rk(rr) == "IDENT" {
         name := _rcur(rr).text
+        // Typed binding: mut name : Type = expr
         span := _rspan(rr)
         rr = _radv(rr)  // skip name
         if _rk(rr) == ":" {
@@ -1208,15 +1233,32 @@ fn _resolve_mut_binding(r: Resolver) -> Resolver {
     rr
 }
 
+// --- Resolve immutable binding: name := expr ---
+fn _resolve_immut_binding(r: Resolver) -> Resolver {
+    if _rk(r) == "IDENT" {
+        name := _rcur(r).text
+        span := _rspan(r)
+        mut rr := _radv(r)   // skip name
+        if _rk(rr) == ":=" {
+            rr = _radv(rr)   // skip :=
+            rr = _resolve_expr_until_nl(rr)
+            rr = _add_sym_warn_shadow(rr, name, SkVariable, span, false)
+            return rr
+        }
+    }
+    _resolve_expr_until_nl(r)
+}
+
 // --- Resolve expression or binding (name := expr) ---
 
 fn _resolve_expr_or_binding(r: Resolver) -> Resolver {
     // Check for tuple destructuring: (name1, name2) := expr
     if _rk(r) == "(" {
-        // Scan ahead to check for ) :=
+        // Scan ahead to check for ) := — only valid if contents are IDENT/comma/_
         mut scan := r.pos + 1
         mut is_tuple_destr := false
-        while scan < r.tokens.len() {
+        mut scan_limit := 0
+        while scan < r.tokens.len() && scan_limit < 20 {
             sk := r.tokens[scan].name
             if sk == ")" {
                 next2 := scan + 1
@@ -1229,6 +1271,7 @@ fn _resolve_expr_or_binding(r: Resolver) -> Resolver {
             } else {
                 scan = r.tokens.len()  // break — not a tuple destructuring
             }
+            scan_limit = scan_limit + 1
         }
         if is_tuple_destr {
             mut rr := _radv(r)  // skip (
@@ -1264,12 +1307,12 @@ fn _resolve_expr_or_binding(r: Resolver) -> Resolver {
         if next_pos < r.tokens.len() {
             next_k := r.tokens[next_pos].name
             if next_k == ":=" {
+                // Inline binding handler to avoid return-propagation issues
                 span := _rspan(r)
                 mut rr := _radv(r)   // skip name
                 rr = _radv(rr)       // skip :=
                 rr = _resolve_expr_until_nl(rr)
-                rr = _add_sym_warn_shadow(rr, name, SkVariable, span, false)
-                return rr
+                return _add_sym_warn_shadow(rr, name, SkVariable, span, false)
             }
             if next_k == ":" {
                 // Could be typed binding: name : Type = expr
