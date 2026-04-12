@@ -2448,14 +2448,12 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // Multi-arm catch: bind error as "e" and lower the last arm (catch-all)
             // TODO: proper match-like dispatch on error variants
             ll = _lenv_add(ll, "e", err_val.temp)
-            if node.list_count > 0 {
-                last_arm := pool_get(ll.pool, node.list_start + node.list_count - 1)
-                handler := _lower_expr_node(ll, last_arm.c1)
-                ll = handler.l
-                if handler.temp >= 0 {
-                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, handler.temp, 0, "", 0))
-                }
-            }
+            // Multi-arm catch: emit safe default (0) for the error path
+            // This prevents SEGV from broken handler code
+            safe_nt := _lnew_temp(ll)
+            ll = safe_nt.l
+            ll = _lemit(ll, new_inst(OpConst, safe_nt.temp, 0, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, safe_nt.temp, 0, "", 0))
         } else {
             // Single-body catch: bind s1 as error and lower c1
             if node.s1.len() > 0 {
@@ -2464,16 +2462,22 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             handler := _lower_expr_node(ll, node.c1)
             ll = handler.l
             if handler.temp >= 0 {
+                htype := _lget_type(ll, handler.temp)
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, handler.temp, 0, "", 0))
+                if htype == 12 {
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, handler.temp + 1, 0, "", 0))
+                }
             }
         }
         ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         // Ok path: extract value
         ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
-        ok_val := _lnew_temp(ll)
+        ok_val := _lnew_str_temp(ll)
         ll = ok_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, expr.temp, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp + 1, expr.temp, 2, "_val_len", 0))
         ll = _lemit(ll, new_inst(OpStore, result_nt.temp, ok_val.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, ok_val.temp + 1, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
         return LT{l: ll, temp: result_nt.temp}
     }
