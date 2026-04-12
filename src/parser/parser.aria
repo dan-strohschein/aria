@@ -2311,7 +2311,23 @@ fn _parse_brace_expr(p: Parser) -> PR {
         return PR{p: pp, e: Expr{kind: EkMapLit, s1: "", s2: "", b1: false, b2: false,
                                   c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
-    // Parse first expression to disambiguate
+    // Check if this is a statement block: { IDENT := ... } or { mut ... } or { return ... }
+    // If so, delegate to _parse_block which handles multi-statement blocks correctly
+    bk := _ck(pp)
+    if bk == "mut" || bk == "return" || bk == "break" || bk == "continue" ||
+       bk == "for" || bk == "while" || bk == "loop" || bk == "defer" || bk == "assert" {
+        // Definitely a statement block — reparse from the { token
+        return _parse_block(p)
+    }
+    // Check for binding: IDENT := ... (peek ahead)
+    if bk == "IDENT" {
+        peek_pos := pp.pos + 1
+        if peek_pos < pp.tokens.len() && pp.tokens[peek_pos].name == ":=" {
+            // Statement block with binding — delegate to _parse_block
+            return _parse_block(p)
+        }
+    }
+    // Parse first expression to disambiguate map/set/block
     first := _parse_expr(pp, 0)
     first_idx := _pidx(first.p)
     pp = _padd(first.p, first.e)
