@@ -1476,8 +1476,55 @@ fn _resolve_expr_until_nl(r: Resolver) -> Resolver {
                 if _rk(rr) == "|" { rr = _radv(rr) }
             }
             lb := "\{"
+            rb2 := "\}"
             if _rk(rr) == lb {
-                rr = _resolve_block(rr)
+                // Multi-arm catch block: catch { pattern => body; ... }
+                // Check if this looks like match arms (has => inside)
+                mut has_arrow := false
+                mut scan := rr.pos + 1
+                mut scan_limit := 0
+                while scan < rr.tokens.len() && rr.tokens[scan].name != rb2 && scan_limit < 50 {
+                    if rr.tokens[scan].name == "=>" { has_arrow = true }
+                    scan = scan + 1
+                    scan_limit = scan_limit + 1
+                }
+                if has_arrow {
+                    // Multi-arm catch: resolve like match arms
+                    rr = _radv(rr)  // skip {
+                    rr = _rskip_nl(rr)
+                    while _rk(rr) != rb2 && _rk(rr) != "EOF" {
+                        parent_scope := rr.current_scope
+                        rr = _push_scope(rr, ScBlock, "catch_arm")
+                        // Pattern: IDENT or qualified name — bind if it's a catch-all binding
+                        if _rk(rr) == "IDENT" {
+                            pname := _rcur(rr).text
+                            existing := lookup(rr.table, rr.current_scope, pname)
+                            mut is_variant := false
+                            if existing.name != "" {
+                                is_variant = sk_eq(existing.kind, SkVariant) || sk_eq(existing.kind, SkType) || sk_eq(existing.kind, SkBuiltin) || sk_eq(existing.kind, SkModule)
+                            }
+                            if is_variant == false && pname != "_" {
+                                span := _rspan(rr)
+                                rr = _add_sym_warn_shadow(rr, pname, SkVariable, span, false)
+                            }
+                        }
+                        // Skip to =>
+                        while _rk(rr) != "=>" && _rk(rr) != "EOF" { rr = _radv(rr) }
+                        if _rk(rr) == "=>" { rr = _radv(rr) }
+                        rr = _rskip_nl(rr)
+                        // Resolve body
+                        if _rk(rr) == lb {
+                            rr = _resolve_block(rr)
+                        } else {
+                            rr = _resolve_expr_until_nl(rr)
+                        }
+                        rr = _pop_scope(rr, parent_scope)
+                        rr = _rskip_nl(rr)
+                    }
+                    if _rk(rr) == rb2 { rr = _radv(rr) }
+                } else {
+                    rr = _resolve_block(rr)
+                }
             }
             consumed_value = true
         } else {
@@ -1907,16 +1954,34 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     }
 
     if nk == "Catch" {
-        // c0=expr, c1=handler body, s1=error binding name
+        // c0=expr, s1=error binding name
+        // b1=true → multi-arm catch (list stores arm pairs), b1=false → single-body (c1=body)
         mut rr := _resolve_expr_node(r, node.c0)
-        parent_scope := rr.current_scope
-        rr = _push_scope(rr, ScBlock, "catch")
-        slen := node.s1.len()
-        if slen > 0 {
-            rr = _add_sym_warn_shadow(rr, node.s1, SkParameter, node.span, false)
+        if node.b1 {
+            // Multi-arm catch: list stores (pattern_idx, body_idx) pairs
+            mut ai := 0
+            while ai < node.list_count {
+                arm_node := pool_get(rr.pool, node.list_start + ai)
+                parent_scope := rr.current_scope
+                rr = _push_scope(rr, ScBlock, "catch_arm")
+                // Resolve pattern — bind if it's a catch-all binding
+                rr = _resolve_pattern_bindings(rr, arm_node.c0)
+                // Resolve body
+                rr = _resolve_expr_node(rr, arm_node.c1)
+                rr = _pop_scope(rr, parent_scope)
+                ai = ai + 1
+            }
+        } else {
+            parent_scope := rr.current_scope
+            rr = _push_scope(rr, ScBlock, "catch")
+            slen := node.s1.len()
+            if slen > 0 {
+                rr = _add_sym_warn_shadow(rr, node.s1, SkParameter, node.span, false)
+            }
+            rr = _resolve_expr_node(rr, node.c1)
+            rr = _pop_scope(rr, parent_scope)
         }
-        rr = _resolve_expr_node(rr, node.c1)
-        return _pop_scope(rr, parent_scope)
+        return rr
     }
 
     if nk == "ListComp" {

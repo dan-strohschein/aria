@@ -7,9 +7,9 @@ mod fs
 // ============================================================
 
 type FsError =
-    | NotFound
-    | PermissionDenied
-    | IoError(str)
+    | FsNotFound
+    | FsPermissionDenied
+    | FsIoError(str)
 
 fn read(path: str) -> str with [Fs] {
     _ariaReadFile(path)

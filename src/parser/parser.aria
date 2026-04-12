@@ -1919,16 +1919,78 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         inner_idx := _pidx(p)
         mut pp := _padd(p, left)
         pp = _adv(pp)
-        // catch |err| { body } or catch { body }
+        // catch |err| { body }
+        mut err_name := ""
         if _ck(pp) == "|" {
             pp = _adv(pp)
-            if _ck(pp) == "IDENT" { pp = _adv(pp) }
+            if _ck(pp) == "IDENT" { err_name = _cur(pp).text; pp = _adv(pp) }
             if _ck(pp) == "|" { pp = _adv(pp) }
+        }
+        lb := "\{"
+        rb := "\}"
+        // Check if catch block has match-arm syntax (contains =>)
+        mut has_arms := false
+        if _ck(pp) == lb {
+            mut scan := pp.pos + 1
+            mut slimit := 0
+            while scan < pp.tokens.len() && pp.tokens[scan].name != rb && slimit < 80 {
+                if pp.tokens[scan].name == "=>" { has_arms = true }
+                scan = scan + 1
+                slimit = slimit + 1
+            }
+        }
+        if has_arms {
+            // Multi-arm catch: parse like match body
+            // Rewrite as: match <error_expr> { arms }
+            // Use list to store (pattern, body) pairs
+            pp = _adv(pp)  // skip {
+            pp = _skip_nl(pp)
+            mut arm_indices := [0]
+            mut arm_count := 0
+            while _ck(pp) != rb && _ck(pp) != "EOF" {
+                pp = _skip_nl(pp)
+                // Parse pattern (skip to =>)
+                pat := _parse_expr(pp, 0)
+                pat_idx := _pidx(pat.p)
+                pp = _padd(pat.p, pat.e)
+                // Skip to =>
+                while _ck(pp) != "=>" && _ck(pp) != rb && _ck(pp) != "EOF" { pp = _adv(pp) }
+                if _ck(pp) == "=>" { pp = _adv(pp) }
+                pp = _skip_nl(pp)
+                // Parse body
+                mut body_e := _no_expr()
+                if _ck(pp) == lb {
+                    br := _parse_block(pp)
+                    pp = br.p
+                    body_e = br.e
+                } else {
+                    br := _parse_expr(pp, 0)
+                    pp = br.p
+                    body_e = br.e
+                }
+                body_idx := _pidx(pp)
+                pp = _padd(pp, body_e)
+                arm_indices = arm_indices.append(pat_idx)
+                arm_indices = arm_indices.append(body_idx)
+                arm_count = arm_count + 1
+                pp = _skip_nl(pp)
+            }
+            if _ck(pp) == rb { pp = _adv(pp) }
+            // Store arms as list (pairs of pattern, body indices)
+            list_start := _pidx(pp)
+            mut ai := 0
+            while ai < arm_count {
+                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                     c0: arm_indices[ai * 2 + 1], c1: arm_indices[ai * 2 + 2], c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                ai = ai + 1
+            }
+            return PR{p: pp, e: Expr{kind: EkCatch, s1: err_name, s2: "", b1: true, b2: false,
+                                      c0: inner_idx, c1: 0, c2: 0, list_start: list_start, list_count: arm_count, span: span}}
         }
         body := _parse_block(pp)
         body_idx := _pidx(body.p)
         pp = _padd(body.p, body.e)
-        return PR{p: pp, e: Expr{kind: EkCatch, s1: "", s2: "", b1: false, b2: false,
+        return PR{p: pp, e: Expr{kind: EkCatch, s1: err_name, s2: "", b1: false, b2: false,
                                   c0: inner_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     PR{p: p, e: left}
