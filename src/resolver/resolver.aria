@@ -1081,10 +1081,13 @@ fn _resolve_paren_contents(r: Resolver) -> Resolver {
 fn _resolve_bracket_contents(r: Resolver) -> Resolver {
     mut rr := r
     lb := "\{"
+    dlb_bc := ".\{"
     while _rk(rr) != "]" && _rk(rr) != "EOF" {
         k := _rk(rr)
         if k == "IDENT" {
-            if rr.pos > 0 && rr.tokens[rr.pos - 1].name == "." {
+            prev := ""
+            if rr.pos > 0 { prev = rr.tokens[rr.pos - 1].name }
+            if prev == "." || prev == dlb_bc || prev == ":" {
                 rr = _radv(rr)
             } else {
                 rr = _resolve_ident(rr)
