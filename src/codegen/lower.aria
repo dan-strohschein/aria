@@ -2187,7 +2187,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = left.l
         right_node := pool_get(ll.pool, node.c1)
         left_type := _lget_type(ll, left.temp)
-        if expr_kind_name(right_node.kind) == "Ident" {
+        right_kind := expr_kind_name(right_node.kind)
+        if right_kind == "Ident" {
             fname := right_node.s1
             fsig := reg_find_fn(ll.registry, fname)
             if fsig.name != "" {
@@ -2206,6 +2207,20 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, fname, fsig.return_type))
                 if fsig.return_type > 0 { ll = _lset_type(ll, nt_temp, fsig.return_type) }
                 return LT{l: ll, temp: nt_temp}
+            }
+        }
+        // Call node on pipe right: arr |> filter(pred) → delegate to method call
+        // Position to the function name token and use token-based method dispatch
+        if right_kind == "Call" {
+            fname := right_node.s1
+            tp := _find_tok_pos(ll, right_node.span.offset)
+            ll = _lset_pos(ll, tp)
+            // Skip to ( after function name
+            if _lk(ll) == "IDENT" { ll = _ladv(ll) }
+            if _lk(ll) == "(" {
+                mr := _lower_method_call(ll, left.temp, fname)
+                ll = mr.l
+                return LT{l: ll, temp: mr.temp}
             }
         }
         return LT{l: ll, temp: left.temp}
@@ -4836,40 +4851,48 @@ fn _lower_expr(l: Lowerer) -> LT {
             left = nt.temp
         } else if k == "|>" {
             ll = _ladv(ll)
-            // Pipe: a |> f → f(a)
+            // Pipe: a |> f → f(a) or a |> f(args) → a.f(args) (method delegation)
             if _lk(ll) == "IDENT" {
                 fname := _lcur(ll).text
                 ll = _ladv(ll)
-                pipe_sig := reg_find_fn(ll.registry, fname)
-                mut pipe_call_name := fname
-                mut pipe_call_sig := pipe_sig
-                // Handle generic pipe target: infer type from piped value
-                if pipe_sig.name != "" && fn_is_generic(pipe_sig) {
-                    left_type := _lget_type(ll, left)
-                    suffix := _type_name_suffix(ll.store, left_type)
-                    if suffix != "unknown" {
-                        pipe_call_name = fname + "_" + suffix
-                        sp_sig := reg_find_fn(ll.registry, pipe_call_name)
-                        if sp_sig.name != "" { pipe_call_sig = sp_sig }
-                    }
-                }
-                mut nt_temp := 0
-                if pipe_call_sig.name != "" && pipe_call_sig.return_type == 12 {
-                    nt := _lnew_str_temp(ll)
-                    ll = nt.l
-                    nt_temp = nt.temp
+                // If pipe target is followed by (, delegate to method call
+                // This handles: arr |> filter(pred), arr |> map(fn), etc.
+                if _lk(ll) == "(" {
+                    mr := _lower_method_call(ll, left, fname)
+                    ll = mr.l
+                    left = mr.temp
                 } else {
-                    nt := _lnew_temp(ll)
-                    ll = nt.l
-                    nt_temp = nt.temp
+                    // Simple pipe: a |> f → f(a)
+                    pipe_sig := reg_find_fn(ll.registry, fname)
+                    mut pipe_call_name := fname
+                    mut pipe_call_sig := pipe_sig
+                    if pipe_sig.name != "" && fn_is_generic(pipe_sig) {
+                        left_type := _lget_type(ll, left)
+                        suffix := _type_name_suffix(ll.store, left_type)
+                        if suffix != "unknown" {
+                            pipe_call_name = fname + "_" + suffix
+                            sp_sig := reg_find_fn(ll.registry, pipe_call_name)
+                            if sp_sig.name != "" { pipe_call_sig = sp_sig }
+                        }
+                    }
+                    mut nt_temp := 0
+                    if pipe_call_sig.name != "" && pipe_call_sig.return_type == 12 {
+                        nt := _lnew_str_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    } else {
+                        nt := _lnew_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpCall, nt_temp, left, 1, pipe_call_name, 0))
+                    if pipe_call_sig.name != "" && pipe_call_sig.return_type == 12 {
+                        ll = _lset_type(ll, nt_temp, 12)
+                    } else if pipe_call_sig.name != "" && pipe_call_sig.return_type > 0 {
+                        ll = _lset_type(ll, nt_temp, pipe_call_sig.return_type)
+                    }
+                    left = nt_temp
                 }
-                ll = _lemit(ll, new_inst(OpCall, nt_temp, left, 1, pipe_call_name, 0))
-                if pipe_call_sig.name != "" && pipe_call_sig.return_type == 12 {
-                    ll = _lset_type(ll, nt_temp, 12)
-                } else if pipe_call_sig.name != "" && pipe_call_sig.return_type > 0 {
-                    ll = _lset_type(ll, nt_temp, pipe_call_sig.return_type)
-                }
-                left = nt_temp
             }
         } else if k == ".\{" {
             // Record update: base.{field: val, ...}
