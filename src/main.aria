@@ -393,35 +393,59 @@ fn _stdlib_path(aria_home: str, module_name: str) -> str =
 
 fn _scan_file_for_stdlib_imports(file_path: str) -> [str] with [Fs] {
     // Read file and look for `use <module>` lines where module is a stdlib module
+    // Handles: use json, use std.fs, use std.{fs, time, log}
     mut modules := [""]
     source := _ariaReadFile(file_path)
-    // Simple line-by-line scan for "use <ident>" patterns
     mut i := 0
     while i < source.len() {
-        // Look for "use " at start of line (or after newline)
         if i == 0 || (i > 0 && source.charAt(i - 1) == "\n") {
-            // Skip leading whitespace
             mut j := i
-            while j < source.len() && (source.charAt(j) == " " || source.charAt(j) == "\t") {
-                j = j + 1
-            }
-            // Check for "use "
+            while j < source.len() && (source.charAt(j) == " " || source.charAt(j) == "\t") { j = j + 1 }
             if j + 4 <= source.len() && source.substring(j, j + 4) == "use " {
-                // Extract module name (next identifier)
                 mut k := j + 4
-                // Skip whitespace after "use"
-                while k < source.len() && (source.charAt(k) == " " || source.charAt(k) == "\t") {
-                    k = k + 1
-                }
-                // Read identifier
+                while k < source.len() && (source.charAt(k) == " " || source.charAt(k) == "\t") { k = k + 1 }
+                // Read first identifier (may be module name or prefix like "std")
                 mut name_start := k
-                while k < source.len() && source.charAt(k) != " " && source.charAt(k) != "\n" && source.charAt(k) != "\t" {
+                while k < source.len() && source.charAt(k) != " " && source.charAt(k) != "\n" && source.charAt(k) != "\t" && source.charAt(k) != "." {
                     k = k + 1
                 }
                 if k > name_start {
                     name := source.substring(name_start, k)
-                    if _is_stdlib_module(name) {
-                        modules = modules.append(name)
+                    if source.charAt(k) == "." {
+                        // Dotted import: use std.fs or use std.{fs, time}
+                        k = k + 1
+                        lb := "\{"
+                        if k < source.len() && source.charAt(k) == lb {
+                            // Grouped import: use std.{fs, time, log}
+                            k = k + 1
+                            rb := "\}"
+                            while k < source.len() && source.charAt(k) != rb && source.charAt(k) != "\n" {
+                                // Skip whitespace/commas
+                                while k < source.len() && (source.charAt(k) == " " || source.charAt(k) == "," || source.charAt(k) == "\t") { k = k + 1 }
+                                // Read module name
+                                mut ms := k
+                                while k < source.len() && source.charAt(k) != "," && source.charAt(k) != rb && source.charAt(k) != " " && source.charAt(k) != "\n" {
+                                    k = k + 1
+                                }
+                                if k > ms {
+                                    mname := source.substring(ms, k)
+                                    if _is_stdlib_module(mname) { modules = modules.append(mname) }
+                                }
+                            }
+                        } else {
+                            // Single dotted import: use std.fs
+                            mut ms := k
+                            while k < source.len() && source.charAt(k) != " " && source.charAt(k) != "\n" && source.charAt(k) != "\t" {
+                                k = k + 1
+                            }
+                            if k > ms {
+                                mname := source.substring(ms, k)
+                                if _is_stdlib_module(mname) { modules = modules.append(mname) }
+                            }
+                        }
+                    } else {
+                        // Simple import: use json
+                        if _is_stdlib_module(name) { modules = modules.append(name) }
                     }
                 }
             }

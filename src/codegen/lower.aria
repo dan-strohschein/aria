@@ -4963,10 +4963,52 @@ fn _lower_expr(l: Lowerer) -> LT {
                 field := _lcur(ll).text
                 ll = _ladv(ll)
                 if _lk(ll) == "(" {
-                    // Method call
-                    mr := _lower_method_call(ll, left, field)
-                    ll = mr.l
-                    left = mr.temp
+                    // Check if this is a module-qualified function call (e.g., log.info())
+                    // If the function exists as a top-level name, call it directly
+                    left_type := _lget_type(ll, left)
+                    mod_fn_sig := reg_find_fn(ll.registry, field)
+                    if left_type == 0 && mod_fn_sig.name != "" {
+                        // Module-qualified call: log.info("msg") → info("msg")
+                        ll = _ladv(ll)  // skip (
+                        ll = _lskip_nl(ll)
+                        mut arg_count := 0
+                        mut first_arg := -1
+                        mut reg_count := 0
+                        while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                            ll = _lskip_nl(ll)
+                            arg := _lower_expr(ll)
+                            ll = arg.l
+                            if arg_count == 0 { first_arg = arg.temp }
+                            atid := _lget_type(ll, arg.temp)
+                            if atid == 12 { reg_count = reg_count + 2 } else { reg_count = reg_count + 1 }
+                            arg_count = arg_count + 1
+                            ll = _lskip_nl(ll)
+                            if _lk(ll) == "," { ll = _ladv(ll) }
+                        }
+                        if _lk(ll) == ")" { ll = _ladv(ll) }
+                        mut nt_temp := 0
+                        if mod_fn_sig.return_type == 12 {
+                            nt := _lnew_str_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                        }
+                        if first_arg >= 0 {
+                            ll = _lemit(ll, new_inst(OpCall, nt_temp, first_arg, reg_count, field, 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpCall, nt_temp, 0, 0, field, 0))
+                        }
+                        if mod_fn_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, mod_fn_sig.return_type) }
+                        left = nt_temp
+                    } else {
+                        // Regular method call
+                        mr := _lower_method_call(ll, left, field)
+                        ll = mr.l
+                        left = mr.temp
+                    }
                 } else if _lk(ll) == "[" && (field == "to" || field == "trunc") {
                     // Conversion with type arg: .to[Type]() or .trunc[Type]()
                     ll = _ladv(ll)  // skip [
