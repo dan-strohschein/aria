@@ -1,0 +1,23 @@
+mod log
+
+// ============================================================
+// Logging Library for Aria
+//
+// Simple level-based logging to stdout/stderr.
+// ============================================================
+
+fn info(msg: str) with [Io] {
+    println("[INFO] " + msg)
+}
+
+fn warn(msg: str) with [Io] {
+    println("[WARN] " + msg)
+}
+
+fn error(msg: str) with [Io] {
+    eprintln("[ERROR] " + msg)
+}
+
+fn debug(msg: str) with [Io] {
+    println("[DEBUG] " + msg)
+}

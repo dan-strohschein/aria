@@ -1,0 +1,35 @@
+mod test
+
+// ============================================================
+// Test Assertion Library for Aria
+//
+// Provides assertion helpers for test blocks.
+// ============================================================
+
+fn expect_eq(actual: i64, expected: i64, msg: str) with [Io] {
+    if actual != expected {
+        eprintln("[FAIL] " + msg + ": expected " + expected.to_str() + ", got " + actual.to_str())
+        assert false
+    }
+}
+
+fn expect_str_eq(actual: str, expected: str, msg: str) with [Io] {
+    if actual != expected {
+        eprintln("[FAIL] " + msg + ": expected '" + expected + "', got '" + actual + "'")
+        assert false
+    }
+}
+
+fn expect_true(val: bool, msg: str) with [Io] {
+    if val == false {
+        eprintln("[FAIL] " + msg + ": expected true")
+        assert false
+    }
+}
+
+fn expect_false(val: bool, msg: str) with [Io] {
+    if val {
+        eprintln("[FAIL] " + msg + ": expected false")
+        assert false
+    }
+}
