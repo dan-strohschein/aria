@@ -97,6 +97,8 @@ fn postfix_binding_power(name: str) -> i64 {
     if name == "catch" { return 150 }
     // Level 16: Field access, call, index (postfix)
     if name == "." { return 160 }
+    dlb := ".\{"
+    if name == dlb { return 160 }
     if name == "?." { return 160 }
     if name == "(" { return 160 }
     if name == "[" { return 160 }

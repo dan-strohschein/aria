@@ -1689,38 +1689,69 @@ fn _parse_prefix(p: Parser) -> PR {
     PR{p: _adv(pp), e: _no_expr()}
 }
 
+// Parse record update body: field: val, ...} — called after .{ has been consumed
+fn _parse_record_update(p: Parser, left_idx: i64, span: Span) -> PR {
+    rb := "\}"
+    mut pp := _skip_nl(p)
+    mut ru_names := [""]
+    mut ru_vals := [0]
+    mut count := 0
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        mut fname := ""
+        if _ck(pp) == "IDENT" {
+            fname = _cur(pp).text
+            pp = _adv(pp)
+        }
+        if _ck(pp) == ":" {
+            pp = _adv(pp)
+            r := _parse_expr(pp, 0)
+            val_idx := _pidx(r.p)
+            pp = _padd(r.p, r.e)
+            ru_names = ru_names.append(fname)
+            ru_vals = ru_vals.append(val_idx)
+        } else {
+            ru_names = ru_names.append(fname)
+            ru_vals = ru_vals.append(0)
+        }
+        count = count + 1
+        pp = _skip_nl(pp)
+        if _ck(pp) == "," {
+            pp = _adv(pp)
+            pp = _skip_nl(pp)
+        }
+    }
+    if _ck(pp) == rb { pp = _adv(pp) }
+    // Emit EkField wrapper nodes: s1=field_name, c0=value_expr_idx
+    list_start := _pidx(pp)
+    mut rfi := 0
+    while rfi < count {
+        pp = _padd(pp, mk_field(ru_names[rfi + 1], ru_vals[rfi + 1], span))
+        rfi = rfi + 1
+    }
+    PR{p: pp, e: Expr{kind: EkStruct, s1: "_update", s2: "", b1: false, b2: false,
+                       c0: left_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+}
+
 fn _parse_postfix(p: Parser, left: Expr) -> PR {
     k := _ck(p)
+    dlb := ".\{"
+    if k == dlb {
+        // Record update via TkDotLBrace token: .{field: val, ...}
+        span := _pspan(p)
+        left_idx := _pidx(p)
+        mut pp := _padd(p, left)
+        pp = _adv(pp)  // consume .{ token
+        return _parse_record_update(pp, left_idx, span)
+    }
     if k == "." {
         span := _pspan(p)
         left_idx := _pidx(p)
         mut pp := _padd(p, left)
         pp = _adv(pp)
         lb := "\{"
-        rb := "\}"
         if _ck(pp) == lb {
-            // Record update: .{field: val, ...}
-            pp = _adv(pp)
-            pp = _skip_nl(pp)
-            list_start := _pidx(pp)
-            mut count := 0
-            while _ck(pp) != rb && _ck(pp) != "EOF" {
-                if _ck(pp) == "IDENT" { pp = _adv(pp) }
-                if _ck(pp) == ":" {
-                    pp = _adv(pp)
-                    r := _parse_expr(pp, 0)
-                    pp = _padd(r.p, r.e)
-                }
-                count = count + 1
-                pp = _skip_nl(pp)
-                if _ck(pp) == "," {
-                    pp = _adv(pp)
-                    pp = _skip_nl(pp)
-                }
-            }
-            if _ck(pp) == rb { pp = _adv(pp) }
-            return PR{p: pp, e: Expr{kind: EkStruct, s1: "_update", s2: "", b1: false, b2: false,
-                                      c0: left_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+            pp = _adv(pp)  // skip {
+            return _parse_record_update(pp, left_idx, span)
         }
         field := _cur(pp).text
         pp = _adv(pp)

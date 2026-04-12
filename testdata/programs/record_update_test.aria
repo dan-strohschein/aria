@@ -5,6 +5,11 @@ struct Point {
     y: i64
 }
 
+struct Named {
+    name: str
+    value: i64
+}
+
 fn make_point(px: i64, py: i64) -> Point =
     Point{x: px, y: py}
 
@@ -14,17 +19,42 @@ fn move_right(p: Point, dx: i64) -> Point {
 }
 
 entry {
-    // Basic record update
+    // Basic record update — one field
     p := Point{x: 1, y: 2}
     nx := 10
     q := p.{x: nx}
     assert q.x == 10
     assert q.y == 2
 
+    // Update multiple fields
+    r := p.{x: 100, y: 200}
+    assert r.x == 100
+    assert r.y == 200
+
+    // Original unchanged
+    assert p.x == 1
+    assert p.y == 2
+
     // Record update in function
     p2 := move_right(p, 5)
     assert p2.x == 6
     assert p2.y == 2
+
+    // Chain: function result into record update
+    s := make_point(3, 4).{y: 99}
+    assert s.x == 3
+    assert s.y == 99
+
+    // Record update with string fields
+    n := Named{name: "hello", value: 42}
+    n2 := n.{name: "world"}
+    assert n2.name == "world"
+    assert n2.value == 42
+
+    // Update numeric, keep string
+    n3 := n.{value: 99}
+    assert n3.name == "hello"
+    assert n3.value == 99
 
     println("record_update_test passed")
 }

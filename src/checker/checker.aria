@@ -1352,9 +1352,10 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
     gp_1 := gp_result[2]
     gp_2 := gp_result[3]
     // Split bounds from gp_result — bounds contain "+" separators
-    gb_0 := gp_result[4]
-    gb_1 := gp_result[5]
-    gb_2 := gp_result[6]
+    // Mutable so where clauses can append additional bounds
+    mut gb_0 := gp_result[4]
+    mut gb_1 := gp_result[5]
+    mut gb_2 := gp_result[6]
 
     // Register TypeVars
     if gp_count > 0 {
@@ -1474,9 +1475,17 @@ fn _register_fn_sig_ast(c: Checker, node_idx: i64, token_start: i64) -> Checker 
                                     cc = _cadv(cc)
                                 }
                             }
-                            // These are already captured in s2; but where clause may add extra bounds
-                            // For now, we only handle where clause bounds via token walk
-                            mut _skip := 0
+                            // Merge where clause bounds into generic bound fields
+                            sgp_0 := _strip_hkt_suffix(gp_0)
+                            sgp_1 := _strip_hkt_suffix(gp_1)
+                            sgp_2 := _strip_hkt_suffix(gp_2)
+                            if wname == gp_0 || wname == sgp_0 {
+                                if gb_0 == "" { gb_0 = wbound } else { gb_0 = gb_0 + "+" + wbound }
+                            } else if wname == gp_1 || wname == sgp_1 {
+                                if gb_1 == "" { gb_1 = wbound } else { gb_1 = gb_1 + "+" + wbound }
+                            } else if wname == gp_2 || wname == sgp_2 {
+                                if gb_2 == "" { gb_2 = wbound } else { gb_2 = gb_2 + "+" + wbound }
+                            }
                         }
                     }
                     if _ck2(cc) == "," { cc = _cadv(cc) } else { parsing_where = false }
@@ -2646,7 +2655,7 @@ fn _is_cont(k: str) -> bool =
     k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
     k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" || k == "~" ||
     k == "<<" || k == ">>" || k == "|>" || k == ".." || k == "..=" ||
-    k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
+    k == "." || k == ".\{" || k == "(" || k == "[" || k == "?" || k == "!" ||
     k == "," || k == "=>" || k == "=" || k == "?." || k == "??" || k == "catch"
 
 fn _check_block(c: Checker) -> CE {
@@ -2885,7 +2894,12 @@ fn _check_expr_full(c: Checker) -> CE {
     mut running := true
     while running {
         k := _ck2(cc)
-        if k == "." {
+        dlb := ".\{"
+        if k == dlb {
+            // Record update via .{ token: .{field: val, ...}
+            cc = _cadv(cc)  // skip .{ token
+            cc = _check_record_update_fields(cc, left_type)
+        } else if k == "." {
             // Field access or method call
             cc = _cadv(cc)
             if _ck2(cc) != "IDENT" {
@@ -3030,7 +3044,7 @@ fn _check_expr_full(c: Checker) -> CE {
             mut rr_running := true
             while rr_running {
                 rk := _ck2(cc)
-                if rk == "." || rk == "(" || rk == "[" || rk == "?" || rk == "!" {
+                if rk == "." || rk == ".\{" || rk == "(" || rk == "[" || rk == "?" || rk == "!" {
                     // Need to handle postfix on right operand
                     post := _check_postfix_chain(cc, right.type_id)
                     cc = post.c
@@ -3132,13 +3146,57 @@ fn _check_expr_full(c: Checker) -> CE {
     CE{c: cc, type_id: left_type}
 }
 
+// Validate record update fields: expects cursor after .{ or { token, stops at }
+fn _check_record_update_fields(c: Checker, cur_type: i64) -> Checker {
+    mut ru_struct := ""
+    if cur_type > 0 && cur_type < store_size(c.store) {
+        ru_info := store_get(c.store, cur_type)
+        if type_kind_name(ru_info.kind) == "Named" { ru_struct = ru_info.name }
+    }
+    rb := "\}"
+    mut cc := _cskip_nl(c)
+    while _ck2(cc) != rb && _ck2(cc) != "EOF" {
+        mut ru_fname := ""
+        if _ck2(cc) == "IDENT" {
+            ru_fname = _ccur(cc).text
+            cc = _cadv(cc)
+        }
+        if _ck2(cc) == ":" {
+            cc = _cadv(cc)
+            ur := _check_expr_full(cc)
+            cc = ur.c
+            if ru_struct != "" && ru_fname != "" {
+                fi := reg_find_field(cc.registry, ru_struct, ru_fname)
+                if fi.name == "" {
+                    q := _q()
+                    cc = _cerror(cc, E0100, "struct " + q + ru_struct + q + " has no field " + q + ru_fname + q)
+                } else if ur.type_id != TY_UNKNOWN && fi.type_id != TY_UNKNOWN {
+                    if types_equal(cc.store, ur.type_id, fi.type_id) == false {
+                        q := _q()
+                        cc = _cerror(cc, E0100, "field " + q + ru_fname + q + " expects " + format_type(cc.store, fi.type_id) + ", got " + format_type(cc.store, ur.type_id))
+                    }
+                }
+            }
+        }
+        cc = _cskip_nl(cc)
+        if _ck2(cc) == "," { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+    }
+    if _ck2(cc) == rb { cc = _cadv(cc) }
+    cc
+}
+
 fn _check_postfix_chain(c: Checker, base_type: i64) -> CE {
     mut cc := c
     mut cur_type := base_type
     mut running := true
     while running {
         k := _ck2(cc)
-        if k == "." {
+        dlb := ".\{"
+        if k == dlb {
+            cc = _cadv(cc)  // skip .{ token
+            cc = _check_record_update_fields(cc, cur_type)
+        } else if k == "." {
             cc = _cadv(cc)
             if _ck2(cc) == "IDENT" {
                 field := _ccur(cc).text
@@ -3172,21 +3230,9 @@ fn _check_postfix_chain(c: Checker, base_type: i64) -> CE {
                     cur_type = TY_UNKNOWN
                 }
             } else if _ck2(cc) == "\{" {
-                // Record update: .{field: val, ...}
-                rb := "\}"
+                // Record update via . then { (fallback path)
                 cc = _cadv(cc)  // skip {
-                cc = _cskip_nl(cc)
-                while _ck2(cc) != rb && _ck2(cc) != "EOF" {
-                    if _ck2(cc) == "IDENT" { cc = _cadv(cc) }
-                    if _ck2(cc) == ":" { cc = _cadv(cc) }
-                    ur := _check_expr_full(cc)
-                    cc = ur.c
-                    cc = _cskip_nl(cc)
-                    if _ck2(cc) == "," { cc = _cadv(cc) }
-                    cc = _cskip_nl(cc)
-                }
-                if _ck2(cc) == rb { cc = _cadv(cc) }
-                // Result type is the same as the original struct type
+                cc = _check_record_update_fields(cc, cur_type)
             } else {
                 running = false
             }

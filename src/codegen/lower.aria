@@ -607,7 +607,7 @@ fn _is_cont_l(k: str) -> bool =
     k == "==" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" ||
     k == "&&" || k == "||" || k == "&" || k == "|" || k == "^" ||
     k == "<<" || k == ">>" || k == "|>" ||
-    k == "." || k == "(" || k == "[" || k == "?" || k == "!" ||
+    k == "." || k == ".\{" || k == "(" || k == "[" || k == "?" || k == "!" ||
     k == "," || k == "=>"
 
 // ============================================================
@@ -2029,6 +2029,83 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "Struct" {
         sname := node.s1
+
+        // Record update: lower base via AST, then walk tokens for .{field: val, ...}
+        if sname == "_update" {
+            base := _lower_expr_node(ll, node.c0)
+            ll = base.l
+            base_tid := _lget_type(ll, base.temp)
+            // Advance past base tokens and .{ token to position at first field
+            dlb := ".\{"
+            mut scan_limit := 0
+            while _lk(ll) != dlb && _lk(ll) != "EOF" && scan_limit < 100 {
+                ll = _ladv(ll)
+                scan_limit = scan_limit + 1
+            }
+            if _lk(ll) == dlb { ll = _ladv(ll) }
+            ll = _lskip_nl(ll)
+            // Resolve struct name from type
+            ru_sname := _struct_name_for_type(ll.store, ll.registry, base_tid)
+            ru_sdef := reg_find_struct(ll.registry, ru_sname)
+            alloc_sz := _struct_field_count(ll.registry, ru_sname)
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, ru_sname, 0))
+            if base_tid > 0 { ll = _lset_type(ll, nt.temp, base_tid) }
+            // Copy all fields from base
+            mut ci := 1
+            while ci < ru_sdef.fields.len() {
+                cname := ru_sdef.fields[ci].name
+                c_slot := _field_index(ll.registry, ru_sname, cname)
+                cft := ru_sdef.fields[ci].type_id
+                if cft == 12 {
+                    cs := _lnew_str_temp(ll)
+                    ll = cs.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, cs.temp, base.temp, c_slot, cname, 0))
+                    cs_len := c_slot + 1
+                    ll = _lemit(ll, new_inst(OpFieldGet, cs.temp + 1, base.temp, cs_len, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, cs.temp, c_slot, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, cs.temp + 1, cs_len, cname, 0))
+                } else {
+                    ct := _lnew_temp(ll)
+                    ll = ct.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, ct.temp, base.temp, c_slot, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, ct.temp, c_slot, cname, 0))
+                }
+                ci = ci + 1
+            }
+            // Walk tokens for updated fields: field: val, ...}
+            rb := "\}"
+            while _lk(ll) != rb && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    ufname := _lcur(ll).text
+                    ll = _ladv(ll)
+                    if _lk(ll) == ":" {
+                        ll = _ladv(ll)
+                        fval := _lower_expr(ll)
+                        ll = fval.l
+                        uf_slot := _field_index(ll.registry, ru_sname, ufname)
+                        ufi := reg_find_field(ll.registry, ru_sname, ufname)
+                        if ufi.type_id == 12 {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp, uf_slot, ufname, 0))
+                            uf_slot_len := uf_slot + 1
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp + 1, uf_slot_len, ufname, 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp, uf_slot, ufname, 0))
+                        }
+                    }
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+            }
+            if _lk(ll) == rb { ll = _ladv(ll) }
+            return LT{l: ll, temp: nt.temp}
+        }
+
+        // --- Normal struct literal ---
         sdef := reg_find_struct(ll.registry, sname)
         if sdef.name == "" { _warn_unresolved(ll, "struct", sname) }
         alloc_sz := _struct_field_count(ll.registry, sname)
@@ -4773,6 +4850,69 @@ fn _lower_expr(l: Lowerer) -> LT {
                 }
                 left = nt_temp
             }
+        } else if k == ".\{" {
+            // Record update: base.{field: val, ...}
+            ll = _ladv(ll)  // skip .{ token
+            ll = _lskip_nl(ll)
+            left_type := _lget_type(ll, left)
+            ru_sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+            ru_sdef := reg_find_struct(ll.registry, ru_sname)
+            alloc_sz := _struct_field_count(ll.registry, ru_sname)
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, ru_sname, 0))
+            if left_type > 0 { ll = _lset_type(ll, nt.temp, left_type) }
+            // Copy all fields from base
+            mut ci := 1
+            while ci < ru_sdef.fields.len() {
+                cname := ru_sdef.fields[ci].name
+                c_slot := _field_index(ll.registry, ru_sname, cname)
+                cft := ru_sdef.fields[ci].type_id
+                if cft == 12 {
+                    cs := _lnew_str_temp(ll)
+                    ll = cs.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, cs.temp, left, c_slot, cname, 0))
+                    cs_len := c_slot + 1
+                    ll = _lemit(ll, new_inst(OpFieldGet, cs.temp + 1, left, cs_len, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, cs.temp, c_slot, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, cs.temp + 1, cs_len, cname, 0))
+                } else {
+                    ct := _lnew_temp(ll)
+                    ll = ct.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, ct.temp, left, c_slot, cname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, ct.temp, c_slot, cname, 0))
+                }
+                ci = ci + 1
+            }
+            // Overwrite updated fields
+            rb := "\}"
+            while _lk(ll) != rb && _lk(ll) != "EOF" {
+                if _lk(ll) == "IDENT" {
+                    ufname := _lcur(ll).text
+                    ll = _ladv(ll)  // skip field name
+                    if _lk(ll) == ":" {
+                        ll = _ladv(ll)  // skip :
+                        fval := _lower_expr(ll)
+                        ll = fval.l
+                        uf_slot := _field_index(ll.registry, ru_sname, ufname)
+                        ufi := reg_find_field(ll.registry, ru_sname, ufname)
+                        if ufi.type_id == 12 {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp, uf_slot, ufname, 0))
+                            uf_slot_len := uf_slot + 1
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp + 1, uf_slot_len, ufname, 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval.temp, uf_slot, ufname, 0))
+                        }
+                    }
+                } else {
+                    ll = _ladv(ll)
+                }
+                ll = _lskip_nl(ll)
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ll = _lskip_nl(ll)
+            }
+            if _lk(ll) == rb { ll = _ladv(ll) }
+            left = nt.temp
         } else if k == "." {
             ll = _ladv(ll)
             if _lk(ll) == "IDENT" {
