@@ -1106,10 +1106,35 @@ fn _resolve_stmt(r: Resolver) -> Resolver {
         }
         return _resolve_expr_until_nl(rr)
     }
-    if k == "break" || k == "continue" { return _radv(r) }
+    if k == "break" || k == "continue" {
+        mut rr := _radv(r)
+        // Skip optional label: break outer / continue outer
+        if _rk(rr) == "IDENT" { rr = _radv(rr) }
+        return rr
+    }
     if k == "for" { return _resolve_for(r) }
     if k == "while" { return _resolve_while(r) }
     if k == "loop" { return _resolve_loop(r) }
+    // Labeled loop: label: for/while/loop — skip label and colon, dispatch to loop handler
+    // Note: NEWLINE may appear between label and colon since IDENT terminates statements
+    if k == "IDENT" {
+        mut lp := r.pos + 1
+        // Skip newlines between label and colon
+        while lp < r.tokens.len() && r.tokens[lp].name == "NEWLINE" { lp = lp + 1 }
+        if lp < r.tokens.len() && r.tokens[lp].name == ":" {
+            mut lp2 := lp + 1
+            while lp2 < r.tokens.len() && r.tokens[lp2].name == "NEWLINE" { lp2 = lp2 + 1 }
+            if lp2 < r.tokens.len() {
+                tk := r.tokens[lp2].name
+                if tk == "for" || tk == "while" || tk == "loop" {
+                    rr := _rset_pos(r, lp2)
+                    if tk == "for" { return _resolve_for(rr) }
+                    if tk == "while" { return _resolve_while(rr) }
+                    return _resolve_loop(rr)
+                }
+            }
+        }
+    }
     if k == "defer" {
         rr := _radv(r)
         return _resolve_expr_until_nl(rr)
