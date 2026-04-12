@@ -355,6 +355,15 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "flat_map", SkBuiltin)
     rr = _add_builtin(rr, "unique", SkBuiltin)
     rr = _add_builtin(rr, "zip", SkBuiltin)
+    // String pipeline methods (used as pipe targets)
+    rr = _add_builtin(rr, "chars", SkBuiltin)
+    rr = _add_builtin(rr, "graphemes", SkBuiltin)
+    rr = _add_builtin(rr, "bytes", SkBuiltin)
+    rr = _add_builtin(rr, "split", SkBuiltin)
+    rr = _add_builtin(rr, "trim", SkBuiltin)
+    // Also register descending/collect_map used in examples
+    rr = _add_builtin(rr, "descending", SkBuiltin)
+    rr = _add_builtin(rr, "collect_map", SkBuiltin)
     // Effect names
     rr = _add_builtin(rr, "Io", SkBuiltin)
     rr = _add_builtin(rr, "Fs", SkBuiltin)
