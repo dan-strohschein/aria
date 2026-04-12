@@ -10,7 +10,7 @@ fn _tok_at(lex: Lexer, idx: i64) -> Token = lex.tokens[idx + 1]
 
 fn _tok_count(lex: Lexer) -> i64 = lex.tokens.len() - 1
 
-fn _kind_at(lex: Lexer, idx: i64) -> str = token_name(_tok_at(lex, idx).kind)
+fn _kind_at(lex: Lexer, idx: i64) -> str = _tok_at(lex, idx).name
 
 // --- Basic token tests ---
 

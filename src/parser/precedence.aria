@@ -20,10 +20,11 @@ struct BindingPower {
 fn no_binding_power() -> BindingPower = BindingPower{left: 0, right: 0}
 
 // --- Infix binding powers ---
+// All these helpers now take the precomputed token name string directly,
+// avoiding ~80M token_name calls during parsing. The parser passes
+// _cur(pp).name (or tokens[i].name) instead of going through token_name.
 
-fn infix_binding_power(kind: TokenKind) -> BindingPower {
-    name := token_name(kind)
-
+fn infix_binding_power(name: str) -> BindingPower {
     // Level 1: Binding/Assignment (non-assoc)
     if name == ":=" { return BindingPower{left: 10, right: 10} }
     if name == "=" { return BindingPower{left: 10, right: 10} }
@@ -79,8 +80,7 @@ fn infix_binding_power(kind: TokenKind) -> BindingPower {
 
 // --- Prefix binding powers ---
 
-fn prefix_binding_power(kind: TokenKind) -> i64 {
-    name := token_name(kind)
+fn prefix_binding_power(name: str) -> i64 {
     // Level 14: Unary prefix (right-assoc)
     if name == "-" { return 140 }
     if name == "!" { return 140 }
@@ -90,8 +90,7 @@ fn prefix_binding_power(kind: TokenKind) -> i64 {
 
 // --- Postfix binding powers ---
 
-fn postfix_binding_power(kind: TokenKind) -> i64 {
-    name := token_name(kind)
+fn postfix_binding_power(name: str) -> i64 {
     // Level 15: Error propagation / assert / catch (postfix)
     if name == "?" { return 150 }
     if name == "!" { return 150 }
@@ -106,24 +105,20 @@ fn postfix_binding_power(kind: TokenKind) -> i64 {
 
 // --- Check if token is an infix operator ---
 
-fn is_infix_op(kind: TokenKind) -> bool {
-    bp := infix_binding_power(kind)
+fn is_infix_op(name: str) -> bool {
+    bp := infix_binding_power(name)
     bp.left > 0
 }
 
-fn is_prefix_op(kind: TokenKind) -> bool =
-    prefix_binding_power(kind) > 0
+fn is_prefix_op(name: str) -> bool =
+    prefix_binding_power(name) > 0
 
-fn is_postfix_op(kind: TokenKind) -> bool =
-    postfix_binding_power(kind) > 0
+fn is_postfix_op(name: str) -> bool =
+    postfix_binding_power(name) > 0
 
-fn is_comparison_op(kind: TokenKind) -> bool {
-    name := token_name(kind)
+fn is_comparison_op(name: str) -> bool =
     name == "==" || name == "!=" || name == "<" || name == ">" ||
     name == "<=" || name == ">="
-}
 
-fn is_assignment_op(kind: TokenKind) -> bool {
-    name := token_name(kind)
+fn is_assignment_op(name: str) -> bool =
     name == "=" || name == ":="
-}

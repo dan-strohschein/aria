@@ -133,10 +133,14 @@ struct Token {
     line: i64
     col: i64
     offset: i64
+    // Precomputed name string (token_name(kind)). The parser's _ck reads this
+    // directly instead of calling token_name on every check, replacing ~80M
+    // 120-arm match dispatches with ~800K (one per token at creation time).
+    name: str
 }
 
 fn new_token(kind: TokenKind, text: str, line: i64, col: i64, offset: i64) -> Token =
-    Token{kind: kind, text: text, line: line, col: col, offset: offset}
+    Token{kind: kind, text: text, line: line, col: col, offset: offset, name: token_name(kind)}
 
 // --- Token name for display ---
 

@@ -82,12 +82,12 @@ fn _new_checker(tokens: [Token], pool: NodePool, table: SymbolTable, file: str) 
 
 fn _ccur(c: Checker) -> Token {
     if c.pos >= c.tokens.len() {
-        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}
     }
     return c.tokens[c.pos]
 }
 
-fn _ck2(c: Checker) -> str = token_name(_ccur(c).kind)
+fn _ck2(c: Checker) -> str = _ccur(c).name
 
 fn _cadv(c: Checker) -> Checker =
     Checker{tokens: c.tokens, pos: c.pos + 1, store: c.store, registry: c.registry,
@@ -264,7 +264,7 @@ fn _parse_type_ann(c: Checker) -> CE {
         }
         mut cc := _cadv(c)
         // Check for qualified name: Type::Assoc (associated type resolution)
-        if _ck2(cc) == ":" && cc.pos + 1 < cc.tokens.len() && token_name(cc.tokens[cc.pos + 1].kind) == ":" {
+        if _ck2(cc) == ":" && cc.pos + 1 < cc.tokens.len() && cc.tokens[cc.pos + 1].name == ":" {
             cc = _cadv(_cadv(cc))  // skip ::
             if _ck2(cc) == "IDENT" {
                 assoc_name := _ccur(cc).text
@@ -1102,7 +1102,7 @@ fn _pass2_fns(c: Checker, index: DeclIndex) -> Checker {
             } else {
                 // Regular function — register annotations and signature
                 next_pos := cc.pos + 1
-                if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == "IDENT" {
+                if next_pos < cc.tokens.len() && cc.tokens[next_pos].name == "IDENT" {
                     fn_name := cc.tokens[next_pos].text
                     if ann_deprecated != "" {
                         cc = _cset_reg(cc, reg_add_deprecated(cc.registry, fn_name, ann_deprecated))
@@ -1692,7 +1692,7 @@ fn _register_fn_sig(c: Checker) -> Checker {
             // Check if current token is followed by ":" — if so, treat as param name
             mut is_param := _ck2(cc) == "IDENT" || _ck2(cc) == "self"
             if is_param == false && cc.pos + 1 < cc.tokens.len() {
-                if token_name(cc.tokens[cc.pos + 1].kind) == ":" {
+                if cc.tokens[cc.pos + 1].name == ":" {
                     is_param = true
                 }
             }
@@ -2532,7 +2532,7 @@ fn _check_impl_fn_ast(c: Checker, impl_type: str, method_node: Expr) -> Checker 
     mut search_pos := cc.pos
     lb := "\{"
     while search_pos < tlen {
-        tk := token_name(cc.tokens[search_pos].kind)
+        tk := cc.tokens[search_pos].name
         if tk == "fn" {
             next := search_pos + 1
             if next < tlen {
@@ -2688,7 +2688,7 @@ fn _check_stmt(c: Checker) -> CE {
             mut res_name := ""
             if _ck2(cc) == "IDENT" {
                 next_pos := cc.pos + 1
-                if next_pos < cc.tokens.len() && token_name(cc.tokens[next_pos].kind) == ":=" {
+                if next_pos < cc.tokens.len() && cc.tokens[next_pos].name == ":=" {
                     res_name = _ccur(cc).text
                     cc = _cadv(cc)  // skip name
                     cc = _cadv(cc)  // skip :=
@@ -2778,10 +2778,10 @@ fn _check_expr_or_binding(c: Checker) -> CE {
         mut scan := c.pos + 1
         mut is_tuple_destr := false
         while scan < c.tokens.len() {
-            sk := token_name(c.tokens[scan].kind)
+            sk := c.tokens[scan].name
             if sk == ")" {
                 next2 := scan + 1
-                if next2 < c.tokens.len() && token_name(c.tokens[next2].kind) == ":=" {
+                if next2 < c.tokens.len() && c.tokens[next2].name == ":=" {
                     is_tuple_destr = true
                 }
                 scan = c.tokens.len()
@@ -2819,7 +2819,7 @@ fn _check_expr_or_binding(c: Checker) -> CE {
         name := _ccur(c).text
         next_pos := c.pos + 1
         if next_pos < c.tokens.len() {
-            next_k := token_name(c.tokens[next_pos].kind)
+            next_k := c.tokens[next_pos].name
             if next_k == ":=" {
                 mut cc := _cadv(c)   // skip name
                 cc = _cadv(cc)       // skip :=
@@ -4257,11 +4257,11 @@ fn _check_match(c: Checker) -> CE {
             mut real_name := pat_name
             atp := cc.pos + 1
             if atp < cc.tokens.len() {
-                if token_name(cc.tokens[atp].kind) == "@" {
+                if cc.tokens[atp].name == "@" {
                     // Skip past name and @ to find real pattern
                     atp2 := atp + 1
                     if atp2 < cc.tokens.len() {
-                        if token_name(cc.tokens[atp2].kind) == "IDENT" {
+                        if cc.tokens[atp2].name == "IDENT" {
                             real_name = cc.tokens[atp2].text
                         }
                     }
@@ -4535,22 +4535,22 @@ fn _check_once_consumption(c: Checker, start: i64, end_tok: i64) -> Checker {
     mut once_names := [""]
     mut once_positions := [0]
     while i < end_tok && i < cc.tokens.len() {
-        tk := token_name(cc.tokens[i].kind)
+        tk := cc.tokens[i].name
         if tk == "IDENT" && i + 2 < end_tok {
             next := i + 1
-            nextk := token_name(cc.tokens[next].kind)
+            nextk := cc.tokens[next].name
             if nextk == ":=" {
                 // Check if RHS starts with `fn once`
                 rhs := i + 2
-                if rhs + 1 < end_tok && token_name(cc.tokens[rhs].kind) == "fn" {
+                if rhs + 1 < end_tok && cc.tokens[rhs].name == "fn" {
                     rhs2 := rhs + 1
-                    if token_name(cc.tokens[rhs2].kind) == "IDENT" && cc.tokens[rhs2].text == "once" {
+                    if cc.tokens[rhs2].name == "IDENT" && cc.tokens[rhs2].text == "once" {
                         // Check for @once_unchecked annotation before the binding
                         mut has_unchecked := false
                         mut back := i - 1
-                        while back >= start && token_name(cc.tokens[back].kind) == "NEWLINE" { back = back - 1 }
-                        if back >= start + 1 && token_name(cc.tokens[back].kind) == "IDENT" && cc.tokens[back].text == "once_unchecked" {
-                            if token_name(cc.tokens[back - 1].kind) == "@" { has_unchecked = true }
+                        while back >= start && cc.tokens[back].name == "NEWLINE" { back = back - 1 }
+                        if back >= start + 1 && cc.tokens[back].name == "IDENT" && cc.tokens[back].text == "once_unchecked" {
+                            if cc.tokens[back - 1].name == "@" { has_unchecked = true }
                         }
                         if has_unchecked == false {
                             once_names = once_names.append(cc.tokens[i].text)
@@ -4572,9 +4572,9 @@ fn _check_once_consumption(c: Checker, start: i64, end_tok: i64) -> Checker {
         mut second_call_line := 0
         mut j := opos + 1
         while j < end_tok && j + 1 < cc.tokens.len() {
-            tk := token_name(cc.tokens[j].kind)
+            tk := cc.tokens[j].name
             if tk == "IDENT" && cc.tokens[j].text == oname {
-                nextk := token_name(cc.tokens[j + 1].kind)
+                nextk := cc.tokens[j + 1].name
                 if nextk == "(" {
                     call_count = call_count + 1
                     if call_count == 1 { first_call_line = cc.tokens[j].line }
@@ -4618,19 +4618,19 @@ fn _scan_effect_decls(c: Checker) -> Checker {
     mut cc := c
     mut i := 0
     while i < cc.tokens.len() - 1 {
-        if token_name(cc.tokens[i].kind) == "IDENT" && cc.tokens[i].text == "effect" {
+        if cc.tokens[i].name == "IDENT" && cc.tokens[i].text == "effect" {
             next := i + 1
-            if next < cc.tokens.len() && token_name(cc.tokens[next].kind) == "IDENT" {
+            if next < cc.tokens.len() && cc.tokens[next].name == "IDENT" {
                 eff_name := cc.tokens[next].text
                 mut parents := [""]
                 // Check for "implies"
                 imp := next + 1
-                if imp < cc.tokens.len() && token_name(cc.tokens[imp].kind) == "IDENT" && cc.tokens[imp].text == "implies" {
+                if imp < cc.tokens.len() && cc.tokens[imp].name == "IDENT" && cc.tokens[imp].text == "implies" {
                     mut pi := imp + 1
-                    while pi < cc.tokens.len() && token_name(cc.tokens[pi].kind) == "IDENT" {
+                    while pi < cc.tokens.len() && cc.tokens[pi].name == "IDENT" {
                         parents = parents.append(cc.tokens[pi].text)
                         pi = pi + 1
-                        if pi < cc.tokens.len() && token_name(cc.tokens[pi].kind) == "," { pi = pi + 1 }
+                        if pi < cc.tokens.len() && cc.tokens[pi].name == "," { pi = pi + 1 }
                     }
                 }
                 tdef := TraitDef{name: eff_name, method_names: [""], parent_traits: parents, assoc_type_names: [""], default_starts: [0], default_ends: [0]}

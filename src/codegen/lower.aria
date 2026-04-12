@@ -75,13 +75,13 @@ fn _new_lowerer(tokens: [Token], pool: NodePool, store: TypeStore, reg: TypeRegi
 
 fn _lcur(l: Lowerer) -> Token {
     if l.pos >= l.tokens.len() {
-        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0}
+        return Token{kind: TkEof, text: "", line: 0, col: 0, offset: 0, name: "EOF"}
     }
     return l.tokens[l.pos]
 }
 
 
-fn _lk(l: Lowerer) -> str = token_name(_lcur(l).kind)
+fn _lk(l: Lowerer) -> str = _lcur(l).name
 
 fn _ladv(l: Lowerer) -> Lowerer =
     Lowerer{tokens: l.tokens, pos: l.pos + 1, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
@@ -498,9 +498,19 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
     if temp > 50000 { return l }
     target := temp + 1
     cur_len := l.temp_types.len()
-    // Fast path: setting the type for a freshly created temp (target == old length).
-    // This is the common case — temps are created sequentially, so this fires ~99% of
-    // calls. A single amortized-O(1) append replaces the original O(N) array rebuild.
+    // Fast path: target is in-bounds — mutate the underlying buffer in place via
+    // _aria_array_set (lowered from `types[target] = type_id`). This requires that the
+    // bootstrap compiler correctly lowers index assignment in helpers; gen0_c does not,
+    // so this fast path was previously disabled. Now that gen2_speed can lower it, we
+    // re-enable it. The Lowerer's reference is unchanged, so we can return l directly,
+    // saving the 19-field struct rebuild on the common path.
+    if target < cur_len {
+        mut types := l.temp_types
+        types[target] = type_id
+        return l
+    }
+    // Common grow path: setting the type for a freshly created temp (target == old length).
+    // Single amortized-O(1) append, then rebuild Lowerer.
     if target == cur_len {
         new_types := l.temp_types.append(type_id)
         return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
@@ -514,22 +524,10 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
                 temp_types: new_types,
                 fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
     }
-    // Grow-then-rebuild path for out-of-order writes (rare). We have to rebuild because
-    // the current bootstrap (gen0_c) does not lower `arr[i] = val` inside helpers, so
-    // we cannot mutate in place. Keep the original O(N) rebuild for correctness; this
-    // branch is taken only when an earlier temp's type is being updated retroactively.
+    // Sparse grow path: target is beyond cur_len. Append zeros until target, then set.
     mut types := l.temp_types
     while types.len() <= target { types = types.append(0) }
-    mut new_types := [0]
-    mut idx := 1
-    while idx < types.len() {
-        if idx == target {
-            new_types = new_types.append(type_id)
-        } else {
-            new_types = new_types.append(types[idx])
-        }
-        idx = idx + 1
-    }
+    types[target] = type_id
     return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
             table: l.table, file: l.file, module: l.module,
             current_func: l.current_func,
@@ -538,7 +536,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: new_types,
+            temp_types: types,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 }
 
@@ -1172,7 +1170,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // First try forward from l.pos
             sp = ll.pos
             while sp < ll.tokens.len() {
-                if token_name(ll.tokens[sp].kind) == "STRING_START" {
+                if ll.tokens[sp].name == "STRING_START" {
                     found_pos = sp
                     sp = ll.tokens.len()
                 }
@@ -1182,7 +1180,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             if found_pos < 0 {
                 sp = 0
                 while sp < ll.tokens.len() {
-                    if token_name(ll.tokens[sp].kind) == "STRING_START" {
+                    if ll.tokens[sp].name == "STRING_START" {
                         found_pos = sp
                         sp = ll.tokens.len()
                     }
@@ -1828,7 +1826,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         }
         // Zero-arg methods: token-walking fallback
         mut tp := _find_tok_pos(ll, node.span.offset)
-        while tp < ll.tokens.len() && token_name(ll.tokens[tp].kind) != "(" { tp = tp + 1 }
+        while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
         ll = _lset_pos(ll, tp)
         return _lower_method_call(ll, recv.temp, method)
     }
@@ -3459,7 +3457,7 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
                 mut method_tstart := sig.token_start
                 mut scan_pos := decl.body_start
                 while scan_pos < ll.tokens.len() - 1 {
-                    if token_name(ll.tokens[scan_pos].kind) == "fn" {
+                    if ll.tokens[scan_pos].name == "fn" {
                         if ll.tokens[scan_pos + 1].text == raw_name {
                             method_tstart = scan_pos
                             scan_pos = ll.tokens.len()
@@ -3532,7 +3530,7 @@ fn _lower_blanket_method_specialized(l: Lowerer, raw_name: str, sig: FnSig, conc
     mut search_pos := ll.pos
     lb := "\{"
     while search_pos < tlen {
-        tk := token_name(ll.tokens[search_pos].kind)
+        tk := ll.tokens[search_pos].name
         if tk == "fn" {
             next := search_pos + 1
             if next < tlen {
@@ -3609,7 +3607,7 @@ fn _lower_impl_method_by_name(l: Lowerer, impl_type: str, raw_name: str, sig: Fn
     mut search_pos := ll.pos
     lb := "\{"
     while search_pos < tlen {
-        tk := token_name(ll.tokens[search_pos].kind)
+        tk := ll.tokens[search_pos].name
         if tk == "fn" {
             next := search_pos + 1
             if next < tlen {
@@ -3884,7 +3882,7 @@ fn _lower_expr_result(l: Lowerer) -> LT {
         name := _lcur(l).text
         next_pos := l.pos + 1
         if next_pos < l.tokens.len() {
-            next_k := token_name(l.tokens[next_pos].kind)
+            next_k := l.tokens[next_pos].name
             if next_k == ":=" {
                 mut ll := _ladv(l)   // skip name
                 ll = _ladv(ll)       // skip :=
@@ -4020,7 +4018,7 @@ fn _lower_stmt(l: Lowerer) -> Lowerer {
             mut res_name := ""
             if _lk(ll) == "IDENT" {
                 next := ll.pos + 1
-                if next < ll.tokens.len() && token_name(ll.tokens[next].kind) == ":=" {
+                if next < ll.tokens.len() && ll.tokens[next].name == ":=" {
                     res_name = _lcur(ll).text
                     ll = _ladv(ll)  // skip name
                     ll = _ladv(ll)  // skip :=
@@ -4177,10 +4175,10 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
         mut scan := l.pos + 1
         mut is_tuple_destr := false
         while scan < l.tokens.len() {
-            sk := token_name(l.tokens[scan].kind)
+            sk := l.tokens[scan].name
             if sk == ")" {
                 next2 := scan + 1
-                if next2 < l.tokens.len() && token_name(l.tokens[next2].kind) == ":=" {
+                if next2 < l.tokens.len() && l.tokens[next2].name == ":=" {
                     is_tuple_destr = true
                 }
                 scan = l.tokens.len()
@@ -4220,7 +4218,7 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
     // Keywords (before, after, where, scope, etc.) followed by := are treated as bindings
     mut _is_binding_name := _lk(l) == "IDENT"
     if _is_binding_name == false && l.pos + 1 < l.tokens.len() {
-        _nk := token_name(l.tokens[l.pos + 1].kind)
+        _nk := l.tokens[l.pos + 1].name
         if _nk == ":=" || _nk == ":" {
             _ck := _lk(l)
             if _ck != "fn" && _ck != "type" && _ck != "struct" && _ck != "enum" && _ck != "trait" && _ck != "impl" && _ck != "const" && _ck != "entry" && _ck != "test" && _ck != "if" && _ck != "match" && _ck != "for" && _ck != "while" && _ck != "loop" && _ck != "return" && _ck != "mut" && _ck != "break" && _ck != "continue" && _ck != "defer" && _ck != "assert" && _ck != "pub" && _ck != "use" && _ck != "mod" {
@@ -4232,7 +4230,7 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
         name := _lcur(l).text
         next_pos := l.pos + 1
         if next_pos < l.tokens.len() {
-            next_k := token_name(l.tokens[next_pos].kind)
+            next_k := l.tokens[next_pos].name
             if next_k == ":=" {
                 mut ll := _ladv(l)   // skip name
                 ll = _ladv(ll)       // skip :=
@@ -4302,20 +4300,20 @@ fn _lower_expr_or_binding(l: Lowerer) -> Lowerer {
             rb := "\}"
             // Skip over (...) or {...} to find :=
             if rp < l.tokens.len() {
-                rpk := token_name(l.tokens[rp].kind)
+                rpk := l.tokens[rp].name
                 if rpk == "(" || rpk == lb {
                     mut close := ")"
                     if rpk == lb { close = rb }
                     mut depth := 1
                     rp = rp + 1
                     while rp < l.tokens.len() && depth > 0 {
-                        rpk2 := token_name(l.tokens[rp].kind)
+                        rpk2 := l.tokens[rp].name
                         if rpk2 == rpk { depth = depth + 1 }
                         if rpk2 == close { depth = depth - 1 }
                         rp = rp + 1
                     }
                     // Now rp should be at :=
-                    if rp < l.tokens.len() && token_name(l.tokens[rp].kind) == ":=" {
+                    if rp < l.tokens.len() && l.tokens[rp].name == ":=" {
                         // Confirmed refutable binding pattern
                         mut ll := _ladv(l)  // skip variant name
                         // Parse destructuring bindings
@@ -4972,7 +4970,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                 mut is_typed_catch := false
                 mut peek_p := ll.pos
                 while peek_p < ll.tokens.len() {
-                    pk := token_name(ll.tokens[peek_p].kind)
+                    pk := ll.tokens[peek_p].name
                     if pk == "=>" { is_typed_catch = true }
                     if pk == "NEWLINE" || pk == rb || pk == "EOF" { peek_p = ll.tokens.len() }
                     peek_p = peek_p + 1
@@ -5560,9 +5558,9 @@ fn _lower_primary(l: Lowerer) -> LT {
         // Method reference: Type::method — rewrite as Type_method fn-value ref
         if _lk(ll) == ":" {
             next_pos := ll.pos + 1
-            if next_pos < ll.tokens.len() && token_name(ll.tokens[next_pos].kind) == ":" {
+            if next_pos < ll.tokens.len() && ll.tokens[next_pos].name == ":" {
                 third_pos := ll.pos + 2
-                if third_pos < ll.tokens.len() && token_name(ll.tokens[third_pos].kind) == "IDENT" {
+                if third_pos < ll.tokens.len() && ll.tokens[third_pos].name == "IDENT" {
                     meth_name := ll.tokens[third_pos].text
                     qualified := name + "_" + meth_name
                     // Advance past :: and method name
@@ -7436,7 +7434,7 @@ fn _lower_primary(l: Lowerer) -> LT {
         mut peek_pos := ll.pos
         mut depth := 0
         while peek_pos < ll.tokens.len() {
-            pk := token_name(ll.tokens[peek_pos].kind)
+            pk := ll.tokens[peek_pos].name
             if pk == "[" || pk == "(" { depth = depth + 1 }
             if pk == "]" {
                 if depth == 0 { peek_pos = ll.tokens.len() } else { depth = depth - 1 }
@@ -9496,7 +9494,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     mut is_inclusive := false
     mut peek := ll.pos
     while peek < ll.tokens.len() {
-        pk := token_name(ll.tokens[peek].kind)
+        pk := ll.tokens[peek].name
         if pk == ".." { is_range = true }
         if pk == "..=" { is_range = true }
         if pk == "..=" { is_inclusive = true }
@@ -9997,7 +9995,7 @@ fn _lower_closure(l: Lowerer) -> LT {
     mut scan_pos := body_start
     while scan_pos < body_end && scan_pos < ll.tokens.len() {
         stok := ll.tokens[scan_pos]
-        if token_name(stok.kind) == "IDENT" {
+        if stok.name == "IDENT" {
             sname := stok.text
             // Check if it's in outer env
             outer_slot := _lenv_lookup(ll, sname)
@@ -11611,17 +11609,17 @@ fn _lower_match(l: Lowerer) -> LT {
     mut subj_tag_temp := subj.temp  // for tag-only sums, subject IS the tag
     // Peek at arm patterns (we're already past { and newlines at this point)
     mut peek_pos := ll.pos
-    while peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "NEWLINE" {
+    while peek_pos < ll.tokens.len() && ll.tokens[peek_pos].name == "NEWLINE" {
         peek_pos = peek_pos + 1
     }
     // First token in arm should be a pattern name (or binding for named patterns)
-    if peek_pos < ll.tokens.len() && token_name(ll.tokens[peek_pos].kind) == "IDENT" {
+    if peek_pos < ll.tokens.len() && ll.tokens[peek_pos].name == "IDENT" {
         mut first_pat := ll.tokens[peek_pos].text
         // If followed by @, this is a named pattern (binding @ pattern) — skip to actual pattern
         mut at_pos := peek_pos + 1
         if at_pos < ll.tokens.len() && ll.tokens[at_pos].text == "@" {
             pat_pos := at_pos + 1
-            if pat_pos < ll.tokens.len() && token_name(ll.tokens[pat_pos].kind) == "IDENT" {
+            if pat_pos < ll.tokens.len() && ll.tokens[pat_pos].name == "IDENT" {
                 first_pat = ll.tokens[pat_pos].text
             }
         }
@@ -11671,7 +11669,7 @@ fn _lower_match(l: Lowerer) -> LT {
             } else {
                 // Check for named pattern: name @ Pattern
                 at_pos := ll.pos + 1
-                if at_pos < ll.tokens.len() && token_name(ll.tokens[at_pos].kind) == "@" {
+                if at_pos < ll.tokens.len() && ll.tokens[at_pos].name == "@" {
                     // Named pattern: save bind name, advance past name and @, re-read pattern
                     at_bind_name = pattern
                     ll = _ladv(ll)  // skip name
@@ -11771,7 +11769,7 @@ fn _lower_match(l: Lowerer) -> LT {
                 if _lk(ll) == "." {
                     // Check for ..rest
                     dot_pos := ll.pos + 1
-                    if dot_pos < ll.tokens.len() && token_name(ll.tokens[dot_pos].kind) == "." {
+                    if dot_pos < ll.tokens.len() && ll.tokens[dot_pos].name == "." {
                         ll = _ladv(ll)  // skip first .
                         ll = _ladv(ll)  // skip second .
                         arr_pat_has_rest = true
