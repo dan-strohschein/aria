@@ -478,6 +478,27 @@ fn _lower_struct_eq(l: Lowerer, a: i64, b: i64, sname: str, result_temp: i64) ->
     ll
 }
 
+// True when tid refers to an Option/Result — either the sentinel ids 200/201
+// produced by Ok/Err/Some/None constructors, or a store-based TyOptional /
+// TyResult type. Tags at slot 0 allow structural equality.
+fn _is_option_or_result_type(store: TypeStore, tid: i64) -> bool {
+    if tid == 200 || tid == 201 { return true }
+    if tid <= 16 { return false }
+    if tid >= store.types.len() { return false }
+    info := store_get(store, tid)
+    k := type_kind_name(info.kind)
+    k == "Optional" || k == "Result"
+}
+
+// True when tid refers specifically to an Option type.
+fn _is_option_type(store: TypeStore, tid: i64) -> bool {
+    if tid == 201 { return true }
+    if tid <= 16 { return false }
+    if tid >= store.types.len() { return false }
+    info := store_get(store, tid)
+    type_kind_name(info.kind) == "Optional"
+}
+
 fn _is_struct_type(store: TypeStore, reg: TypeRegistry, tid: i64) -> bool {
     if tid >= TY_STRUCT_BASE { return true }
     if tid <= 16 { return false }
@@ -1247,6 +1268,22 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if csv.len() > 0 {
             return _lower_string_const(ll, csv)
         }
+        // Option `None` (built-in): allocate a 2-slot Optional so downstream
+        // field access (e.g. equality vs `Some(x)`) has a valid payload slot.
+        if name == "None" {
+            vp0 := _variant_parent(ll.registry, "None")
+            if vp0.name == "" {
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 2, 0, "_Optional", 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                ll = _lset_type(ll, nt.temp, 201)
+                return LT{l: ll, temp: nt.temp}
+            }
+        }
         // Check for variant (tag-only sum type)
         vtag := _variant_tag(ll.registry, name)
         if vtag >= 0 {
@@ -1494,6 +1531,58 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     ll = _lset_type(ll, nt.temp, 1)
                     return LT{l: ll, temp: nt.temp}
                 }
+            }
+            // Option (201) / Result (200) equality: compare tag then payload.
+            // Without this, the fallthrough compares raw pointers and fails for
+            // values from different allocations (e.g. `zero_div == None`).
+            if (op == "==" || op == "!=") && _is_option_or_result_type(ll.store, left_type) {
+                a_tag := _lnew_temp(ll)
+                ll = a_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left.temp, 0, "_tag", 0))
+                b_tag := _lnew_temp(ll)
+                ll = b_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_tag.temp, right.temp, 0, "_tag", 0))
+                tag_eq := _lnew_temp(ll)
+                ll = tag_eq.l
+                ll = _lemit(ll, new_inst(OpEq, tag_eq.temp, a_tag.temp, b_tag.temp, "", 0))
+                ll = _lset_type(ll, tag_eq.temp, 1)
+                a_pay := _lnew_temp(ll)
+                ll = a_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_pay.temp, left.temp, 1, "_val", 0))
+                b_pay := _lnew_temp(ll)
+                ll = b_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_pay.temp, right.temp, 1, "_val", 0))
+                pay_eq := _lnew_temp(ll)
+                ll = pay_eq.l
+                ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+                ll = _lset_type(ll, pay_eq.temp, 1)
+                // For Option (201) tag 0 = None (no payload) — skip payload check.
+                // For Result (200) both variants carry a payload — always require it.
+                mut combined := pay_eq.temp
+                if _is_option_type(ll.store, left_type) {
+                    zero_c := _lnew_temp(ll)
+                    ll = zero_c.l
+                    ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+                    is_none := _lnew_temp(ll)
+                    ll = is_none.l
+                    ll = _lemit(ll, new_inst(OpEq, is_none.temp, a_tag.temp, zero_c.temp, "", 0))
+                    ll = _lset_type(ll, is_none.temp, 1)
+                    or_nt := _lnew_temp(ll)
+                    ll = or_nt.l
+                    ll = _lemit(ll, new_inst(OpOr, or_nt.temp, is_none.temp, pay_eq.temp, "", 0))
+                    ll = _lset_type(ll, or_nt.temp, 1)
+                    combined = or_nt.temp
+                }
+                ll = _lemit(ll, new_inst(OpAnd, nt.temp, tag_eq.temp, combined, "", 0))
+                if op == "!=" {
+                    not_nt := _lnew_temp(ll)
+                    ll = not_nt.l
+                    ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                    ll = _lset_type(ll, not_nt.temp, 1)
+                    return LT{l: ll, temp: not_nt.temp}
+                }
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
             }
             if _is_float_type(left_type) || _is_float_type(right_type) {
                 ll = _lemit(ll, new_inst(_cmp_op(op), nt.temp, left.temp, right.temp, "f64", 0))
@@ -5403,6 +5492,54 @@ fn _lower_expr(l: Lowerer) -> LT {
                     ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                     left = nt.temp
                 }
+            } else if (k == "==" || k == "!=") && _is_option_or_result_type(ll.store, left_type) {
+                // Option / Result equality — tag + payload compare.
+                a_tag := _lnew_temp(ll)
+                ll = a_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left, 0, "_tag", 0))
+                b_tag := _lnew_temp(ll)
+                ll = b_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_tag.temp, right.temp, 0, "_tag", 0))
+                tag_eq := _lnew_temp(ll)
+                ll = tag_eq.l
+                ll = _lemit(ll, new_inst(OpEq, tag_eq.temp, a_tag.temp, b_tag.temp, "", 0))
+                ll = _lset_type(ll, tag_eq.temp, 1)
+                a_pay := _lnew_temp(ll)
+                ll = a_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_pay.temp, left, 1, "_val", 0))
+                b_pay := _lnew_temp(ll)
+                ll = b_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_pay.temp, right.temp, 1, "_val", 0))
+                pay_eq := _lnew_temp(ll)
+                ll = pay_eq.l
+                ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+                ll = _lset_type(ll, pay_eq.temp, 1)
+                mut combined := pay_eq.temp
+                if _is_option_type(ll.store, left_type) {
+                    zero_c := _lnew_temp(ll)
+                    ll = zero_c.l
+                    ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+                    is_none := _lnew_temp(ll)
+                    ll = is_none.l
+                    ll = _lemit(ll, new_inst(OpEq, is_none.temp, a_tag.temp, zero_c.temp, "", 0))
+                    ll = _lset_type(ll, is_none.temp, 1)
+                    or_nt := _lnew_temp(ll)
+                    ll = or_nt.l
+                    ll = _lemit(ll, new_inst(OpOr, or_nt.temp, is_none.temp, pay_eq.temp, "", 0))
+                    ll = _lset_type(ll, or_nt.temp, 1)
+                    combined = or_nt.temp
+                }
+                ll = _lemit(ll, new_inst(OpAnd, nt.temp, tag_eq.temp, combined, "", 0))
+                if k == "!=" {
+                    not_nt := _lnew_temp(ll)
+                    ll = not_nt.l
+                    ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                    left = not_nt.temp
+                    ll = _lset_type(ll, not_nt.temp, 1)
+                } else {
+                    ll = _lset_type(ll, nt.temp, 1)
+                    left = nt.temp
+                }
             } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
                 left = nt.temp
@@ -8287,13 +8424,15 @@ fn _lower_primary(l: Lowerer) -> LT {
             }
         }
 
-        // None — Optional empty value, but only if no user sum type owns "None"
+        // None — Optional empty value, but only if no user sum type owns "None".
+        // Allocate 2 slots (tag + payload) so structural equality can FieldGet
+        // slot 1 without reading past the allocation.
         if name == "None" {
             vp := _variant_parent(ll.registry, "None")
             if vp.name == "" {
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 1, 0, "_Optional", 0))
+                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 2, 0, "_Optional", 0))
                 tag_nt := _lnew_temp(ll)
                 ll = tag_nt.l
                 ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
