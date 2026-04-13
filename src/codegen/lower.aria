@@ -698,6 +698,12 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                         sval := _lcur(ll).text
                         ll = _ladd_const_str(ll, cname, sval)
                         ll = _ladv(ll)
+                    } else if _lk(ll) == "FLOAT" {
+                        // Track as a const-string with a "$FLOAT:" sentinel so
+                        // lookup sites can emit the literal text as an f64.
+                        fval := _lcur(ll).text
+                        ll = _ladd_const_str(ll, cname, "$FLOAT:" + fval)
+                        ll = _ladv(ll)
                     } else if _lk(ll) == "-" {
                         // Negative int: - INT
                         ll = _ladv(ll)
@@ -8527,21 +8533,26 @@ fn _lower_primary(l: Lowerer) -> LT {
         // Const string lookup
         if _lconst_str_has(ll, name) {
             sval := _lconst_str_lookup(ll, name)
+            // Float const sentinel — emit as f64 literal.
+            if sval.len() > 7 && sval.substring(0, 7) == "$FLOAT:" {
+                fval := sval.substring(7, sval.len())
+                mut fstr_idx := mod_find_string(ll.module, fval)
+                if fstr_idx == 0 {
+                    new_mod := mod_add_string(ll.module, fval)
+                    fstr_idx = new_mod.string_constants.len() - 1
+                    ll = _lset_mod(ll, new_mod)
+                }
+                nt := _lnew_temp(ll)
+                ll = _lemit(nt.l, new_inst(OpConstStr, nt.temp, fstr_idx, 0 - 9, "", 0))
+                ll = _lset_type(ll, nt.temp, 9)
+                return LT{l: ll, temp: nt.temp}
+            }
             // Add to string constant pool
             mut str_idx := mod_find_string(ll.module, sval)
             if str_idx == 0 {
                 new_mod := mod_add_string(ll.module, sval)
                 str_idx = new_mod.string_constants.len() - 1
-                ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                             table: ll.table, file: ll.file, module: new_mod,
-                             current_func: ll.current_func,
-                             temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                             env_names: ll.env_names, env_slots: ll.env_slots,
-                             loop_start: ll.loop_start, loop_end: ll.loop_end,
-                             const_names: ll.const_names, const_vals: ll.const_vals,
-                             const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                             temp_types: ll.temp_types,
-            fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+                ll = _lset_mod(ll, new_mod)
             }
             nt := _lnew_str_temp(ll)
             ll = _lemit(nt.l, new_inst(OpConstStr, nt.temp, str_idx, sval.len(), "", 0))
