@@ -110,10 +110,12 @@ fn _is_upper_start(name: str) -> bool {
         if name.charAt(j) == "_" { return false }
         j = j + 1
     }
-    // All-caps with no underscore and len >= 2 is a short PascalCase type name (PR, CE, LT, IO)
-    if nlen >= 2 { return true }
-    // Single letter (T) — generic type param, not a struct name
-    false
+    // All-caps with no underscore is a short PascalCase type name (PR, CE, LT, IO).
+    // Single-letter names (P, T) are also accepted as types — disambiguation
+    // from generic params happens at the call site via context (e.g. `{` for
+    // struct literal). Callers that want to *exclude* single-letter generic
+    // params should check separately.
+    true
 }
 
 // --- Public API: parse a token stream ---
@@ -2907,6 +2909,10 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
     mut count := 0
     rb := "\}"
     while _ck(pp) != rb && _ck(pp) != "EOF" {
+        // Capture the field name before advancing so shorthand `{ radius }` can
+        // materialize an Ident node referencing the same-named local.
+        fld_name := _cur(pp).text
+        fld_span := _pspan(pp)
         pp = _adv(pp)  // field name
         if _ck(pp) == ":" {
             pp = _adv(pp)
@@ -2915,7 +2921,10 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
             pp = _padd(r.p, r.e)
             sf_indices = sf_indices.append(fval_idx)
         } else {
-            sf_indices = sf_indices.append(0)
+            // Shorthand field: `{ radius }` → `{ radius: radius }`.
+            short_idx := _pidx(pp)
+            pp = _padd(pp, mk_ident(fld_name, fld_span))
+            sf_indices = sf_indices.append(short_idx)
         }
         count = count + 1
         pp = _skip_nl(pp)
