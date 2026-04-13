@@ -1701,7 +1701,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // Then branch
         then_result := _lower_expr_node(ll, node.c1)
         ll = then_result.l
+        mut branch_type := 0
         if then_result.temp >= 0 {
+            branch_type = _lget_type(ll, then_result.temp)
             ll = _lemit(ll, new_inst(OpStore, result_nt.temp, then_result.temp, 0, "", 0))
             then_len_dst := result_nt.temp + 1
             then_len_src := then_result.temp + 1
@@ -1714,6 +1716,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             else_result := _lower_expr_node(ll, node.c2)
             ll = else_result.l
             if else_result.temp >= 0 {
+                if branch_type == 0 { branch_type = _lget_type(ll, else_result.temp) }
                 ll = _lemit(ll, new_inst(OpStore, result_nt.temp, else_result.temp, 0, "", 0))
                 else_len_dst := result_nt.temp + 1
                 else_len_src := else_result.temp + 1
@@ -1721,6 +1724,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             }
         }
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        if branch_type > 0 { ll = _lset_type(ll, result_nt.temp, branch_type) }
         return LT{l: ll, temp: result_nt.temp}
     }
 

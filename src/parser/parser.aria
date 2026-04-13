@@ -2285,8 +2285,15 @@ fn _parse_if(p: Parser) -> PR {
     pp = _padd(then_br.p, then_br.e)
     mut has_else := false
     mut else_idx := 0
-    if _ck(pp) == "else" {
+    // Peek past newlines so multiline `if { ... }\nelse if ...` chains are
+    // recognized. Only commit to consuming newlines if `else` actually follows.
+    mut lookahead := pp
+    while _ck(lookahead) == "NEWLINE" { lookahead = _adv(lookahead) }
+    if _ck(lookahead) == "else" {
+        pp = lookahead
         pp = _adv(pp)
+        // Also allow newlines between `else` and its body.
+        while _ck(pp) == "NEWLINE" { pp = _adv(pp) }
         has_else = true
         if _ck(pp) == "if" {
             r := _parse_if(pp)
