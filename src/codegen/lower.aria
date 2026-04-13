@@ -1536,10 +1536,24 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 fname := right_node.s1
                 fsig := reg_find_fn(ll.registry, fname)
                 if fsig.name != "" {
+                    // Generic pipe target: resolve specialization from left_type.
+                    mut call_name := fname
+                    mut call_sig := fsig
+                    if fn_is_generic(fsig) {
+                        suffix := _type_name_suffix_l(ll.store, ll.registry, left_type)
+                        if suffix != "unknown" {
+                            cand := fname + "_" + suffix
+                            sp_sig := reg_find_fn(ll.registry, cand)
+                            if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
+                                call_name = cand
+                                call_sig = sp_sig
+                            }
+                        }
+                    }
                     mut reg_count := 1
                     if left_type == 12 { reg_count = 2 }
                     mut nt_temp := 0
-                    if fsig.return_type == 12 {
+                    if call_sig.return_type == 12 {
                         nt := _lnew_str_temp(ll)
                         ll = nt.l
                         nt_temp = nt.temp
@@ -1548,8 +1562,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         ll = nt.l
                         nt_temp = nt.temp
                     }
-                    ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, fname, fsig.return_type))
-                    if fsig.return_type > 0 { ll = _lset_type(ll, nt_temp, fsig.return_type) }
+                    ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
+                    if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
                     return LT{l: ll, temp: nt_temp}
                 }
             }
@@ -2443,10 +2457,25 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             fname := right_node.s1
             fsig := reg_find_fn(ll.registry, fname)
             if fsig.name != "" {
+                // If generic, resolve the specialization name from left_type and
+                // prefer its FnSig so codegen emits e.g. @identity_i64.
+                mut call_name := fname
+                mut call_sig := fsig
+                if fn_is_generic(fsig) {
+                    suffix := _type_name_suffix_l(ll.store, ll.registry, left_type)
+                    if suffix != "unknown" {
+                        cand := fname + "_" + suffix
+                        sp_sig := reg_find_fn(ll.registry, cand)
+                        if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
+                            call_name = cand
+                            call_sig = sp_sig
+                        }
+                    }
+                }
                 mut reg_count := 1
                 if left_type == 12 { reg_count = 2 }
                 mut nt_temp := 0
-                if fsig.return_type == 12 {
+                if call_sig.return_type == 12 {
                     nt := _lnew_str_temp(ll)
                     ll = nt.l
                     nt_temp = nt.temp
@@ -2455,8 +2484,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     ll = nt.l
                     nt_temp = nt.temp
                 }
-                ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, fname, fsig.return_type))
-                if fsig.return_type > 0 { ll = _lset_type(ll, nt_temp, fsig.return_type) }
+                ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
+                if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
                 return LT{l: ll, temp: nt_temp}
             }
         }
@@ -6809,16 +6838,40 @@ fn _lower_primary(l: Lowerer) -> LT {
                     sp_sig := reg_find_fn(ll.registry, call_name)
                     if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
                         call_sig = sp_sig
+                    } else if call_name != name && arg_types.len() > 1 {
+                        // Specialization named but not yet registered — create
+                        // MonoSpec + specialized FnSig so the mono pass emits it.
+                        // Mirrors the AST-call path in _lower_call_node.
+                        first_concrete := arg_types[1]
+                        sp_ptypes := [0]
+                        mut spi := 1
+                        while spi < sig.param_types.len() {
+                            mut pt := sig.param_types[spi]
+                            if pt > 0 && pt < ll.store.types.len() {
+                                pti := store_get(ll.store, pt)
+                                if type_kind_name(pti.kind) == "TypeVar" { pt = first_concrete }
+                            }
+                            sp_ptypes = sp_ptypes.append(pt)
+                            spi = spi + 1
+                        }
+                        mut sp_ret := sig.return_type
+                        if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                            rti := store_get(ll.store, sp_ret)
+                            if type_kind_name(rti.kind) == "TypeVar" { sp_ret = first_concrete }
+                        }
+                        new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
+                        ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                        spec := MonoSpec{generic_name: name, specialized_name: call_name,
+                                         type_arg_0: first_concrete, type_arg_1: 0, type_arg_2: 0}
+                        ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
+                        call_sig = new_sig
                     } else if arg_types.len() > 1 {
                         // Fallback: HKT or derived-from-bound generics.
-                        // First try by concrete arg type
                         sp := reg_find_mono_by_generic(ll.registry, name, arg_types[1])
                         if sp.specialized_name == "" {
-                            // HKT: find any mono spec for this generic name
                             mut msi := 1
                             while msi < ll.registry.mono_specs.len() {
                                 if ll.registry.mono_specs[msi].generic_name == name {
-                                    sp = ll.registry.mono_specs[msi]
                                     msi = ll.registry.mono_specs.len()
                                 }
                                 msi = msi + 1
@@ -10083,13 +10136,29 @@ fn _resolve_generic_call_name(store: TypeStore, reg: TypeRegistry, base_name: st
     mut resolved_tys := [""]
     mut gi := 1
     while gi < arg_types.len() && gi < sig.param_types.len() {
-        pt := sig.param_types[gi]
-        at := arg_types[gi]
+        // Unwrap container types (Array, Optional, Result) on both sides so
+        // generic fns like `fn largest[T](items: [T])` match T→i64 when
+        // called with [i64]. Walk in lockstep until we hit a TypeVar.
+        mut pt := sig.param_types[gi]
+        mut at := arg_types[gi]
+        mut guard := 0
+        while guard < 4 && pt > 0 && at > 0 && pt < store.types.len() && at < store.types.len() {
+            ptik := type_kind_name(store_get(store, pt).kind)
+            atik := type_kind_name(store_get(store, at).kind)
+            if ptik == "TypeVar" { guard = 4 }
+            else if ptik == atik && (ptik == "Array" || ptik == "Optional") {
+                pt = store_get(store, pt).type_id
+                at = store_get(store, at).type_id
+            } else if ptik == atik && ptik == "Result" {
+                pt = store_get(store, pt).type_id
+                at = store_get(store, at).type_id
+            } else { guard = 4 }
+            guard = guard + 1
+        }
         if pt > 0 && pt < store.types.len() {
             ptinfo := store_get(store, pt)
             if type_kind_name(ptinfo.kind) == "TypeVar" {
                 tv_name := ptinfo.name
-                // Only add if this TypeVar hasn't been resolved yet
                 mut already := false
                 mut ri := 1
                 while ri < resolved_tvs.len() {
