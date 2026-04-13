@@ -778,6 +778,14 @@ fn tokenize(source: str, file: str) -> Lexer {
             if _peek_next(lex) == "=" {
                 lex = _add_token(lex, TkColonEq, ":=", lex.line, lex.col, lex.pos)
                 lex = _advance(_advance(lex))
+            } else if lex.interp_depth > 0 && lex.brace_depth == lex.interp_brace_depth {
+                // Format specifier inside string interpolation: skip until }
+                lex = _advance(lex)  // skip :
+                rb := "\}"
+                while _at_end(lex) == false && _peek(lex) != rb {
+                    lex = _advance(lex)
+                }
+                // Don't consume } — let the main loop handle it as interpolation end
             } else {
                 lex = _add_token(lex, TkColon, ":", lex.line, lex.col, lex.pos)
                 lex = _advance(lex)

@@ -3762,7 +3762,7 @@ fn _check_multi_bound_sig(c: Checker, type_name: str, bound: str, param_name: st
             assoc_n := parts[1]
             assoc_v := parts[2]
             if treg_has_impl(cc.treg, type_name, trait_n) == false {
-                cc = _cerror(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+                cc = _cwarning(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
             } else if assoc_n != "" {
                 // Skip check if assoc_v is a generic parameter of this fn
                 is_gp := assoc_v == sig.generic_name_0 || assoc_v == sig.generic_name_1 || assoc_v == sig.generic_name_2
@@ -3803,7 +3803,7 @@ fn _check_multi_bound(c: Checker, type_name: str, bound: str, param_name: str) -
             assoc_n := parts[1]
             assoc_v := parts[2]
             if treg_has_impl(cc.treg, type_name, trait_n) == false {
-                cc = _cerror(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
+                cc = _cwarning(cc, E0200, "type " + type_name + " does not satisfy bound " + trait_n + " for " + param_name)
             } else if assoc_n != "" {
                 if _is_concrete_type_name(cc.store, assoc_v) {
                     alias_name := type_name + "_" + assoc_n

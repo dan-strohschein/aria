@@ -75,22 +75,41 @@ void _aria_exit(aria_int code) {
 
 // --- I/O ---
 
+// Avoid name collision with generated Aria stdlib functions (@write, @read, etc.).
+// Use syscall() to bypass any shadowing by generated code.
+#include <sys/syscall.h>
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static inline ssize_t _posix_write(int fd, const void *buf, size_t len) {
+    return syscall(SYS_write, fd, buf, len);
+}
+static inline ssize_t _posix_read(int fd, void *buf, size_t len) {
+    return syscall(SYS_read, fd, buf, len);
+}
+static inline int _posix_close(int fd) {
+    return (int)syscall(SYS_close, fd);
+}
+static inline int _posix_open(const char *path, int flags, int mode) {
+    return (int)syscall(SYS_open, path, flags, mode);
+}
+#pragma clang diagnostic pop
+
 aria_int _aria_write(aria_int fd, char *ptr, aria_int len) {
-    return (aria_int)write((int)fd, ptr, (size_t)len);
+    return (aria_int)_posix_write((int)fd, ptr, (size_t)len);
 }
 
 void _aria_println_str(char *ptr, aria_int len) {
-    write(1, ptr, (size_t)len);
-    write(1, "\n", 1);
+    _posix_write(1, ptr, (size_t)len);
+    _posix_write(1, "\n", 1);
 }
 
 void _aria_print_str(char *ptr, aria_int len) {
-    write(1, ptr, (size_t)len);
+    _posix_write(1, ptr, (size_t)len);
 }
 
 void _aria_eprintln_str(char *ptr, aria_int len) {
-    write(2, ptr, (size_t)len);
-    write(2, "\n", 1);
+    _posix_write(2, ptr, (size_t)len);
+    _posix_write(2, "\n", 1);
 }
 
 // ====================================================================
@@ -670,7 +689,7 @@ struct _aria_str _aria_read_file(char *path_ptr, aria_int path_len) {
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
-    int fd = open(path, O_RDONLY);
+    int fd = _posix_open(path, O_RDONLY, 0);
     free(path);
     if (fd < 0) {
         struct _aria_str result = {NULL, 0};
@@ -682,9 +701,9 @@ struct _aria_str _aria_read_file(char *path_ptr, aria_int path_len) {
     aria_int size = (aria_int)st.st_size;
 
     char *buf = (char *)malloc((size_t)(size + 1));
-    read(fd, buf, (size_t)size);
+    _posix_read(fd, buf, (size_t)size);
     buf[size] = '\0';
-    close(fd);
+    _posix_close(fd);
 
     struct _aria_str result = {buf, size};
     return result;
@@ -695,11 +714,11 @@ void _aria_write_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_in
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = _posix_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     free(path);
     if (fd < 0) return;
-    write(fd, data_ptr, (size_t)data_len);
-    close(fd);
+    _posix_write(fd, data_ptr, (size_t)data_len);
+    _posix_close(fd);
 }
 
 // Append data to a file (creates if doesn't exist)
@@ -708,11 +727,11 @@ void _aria_append_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_i
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    int fd = _posix_open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     free(path);
     if (fd < 0) return;
-    write(fd, data_ptr, (size_t)data_len);
-    close(fd);
+    _posix_write(fd, data_ptr, (size_t)data_len);
+    _posix_close(fd);
 }
 
 // Write a [str] array directly to a file — avoids building one huge joined string.
@@ -722,7 +741,7 @@ void _aria_write_str_parts(char *path_ptr, aria_int path_len, aria_int arr_ptr) 
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = _posix_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     free(path);
     if (fd < 0) return;
 
@@ -741,10 +760,10 @@ void _aria_write_str_parts(char *path_ptr, aria_int path_len, aria_int arr_ptr) 
         char *s_ptr = (char *)str_pair[0];
         aria_int s_len = str_pair[1];
         if (s_ptr && s_len > 0) {
-            write(fd, s_ptr, (size_t)s_len);
+            _posix_write(fd, s_ptr, (size_t)s_len);
         }
     }
-    close(fd);
+    _posix_close(fd);
 }
 
 void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_arr, aria_int data_len) {
@@ -752,7 +771,7 @@ void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_a
     memcpy(path, path_ptr, (size_t)path_len);
     path[path_len] = '\0';
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    int fd = _posix_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     free(path);
     if (fd < 0) return;
 
@@ -762,9 +781,9 @@ void _aria_write_binary_file(char *path_ptr, aria_int path_len, aria_int *data_a
     for (aria_int i = 0; i < data_len; i++) {
         bytes[i] = (char)(data_arr[i + 1] & 0xFF);
     }
-    write(fd, bytes, (size_t)data_len);
+    _posix_write(fd, bytes, (size_t)data_len);
     free(bytes);
-    close(fd);
+    _posix_close(fd);
 }
 
 // --- Integer to string ---
@@ -1208,6 +1227,17 @@ aria_int _aria_array_get(aria_int arr_ptr, aria_int index) {
     aria_int *data = (aria_int *)header[2];
     aria_int val = data[index];
     return val;
+}
+
+aria_int _aria_array_contains(aria_int arr_ptr, aria_int value) {
+    if (arr_ptr == 0) return 0;
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+    for (aria_int i = 0; i < length; i++) {
+        if (data[i] == value) return 1;
+    }
+    return 0;
 }
 
 void _aria_array_set(aria_int arr_ptr, aria_int index, aria_int value) {
@@ -1772,7 +1802,7 @@ aria_int _aria_tcp_accept(aria_int fd) {
 // Read from socket. Returns {ptr, len} or {NULL, 0} on error/closed.
 struct _aria_str _aria_tcp_read(aria_int fd, aria_int max_len) {
     char *buf = (char *)malloc((size_t)(max_len + 1));
-    ssize_t n = read((int)fd, buf, (size_t)max_len);
+    ssize_t n = _posix_read((int)fd, buf, (size_t)max_len);
     if (n <= 0) {
         free(buf);
         struct _aria_str s = {"", 0};
@@ -1787,7 +1817,7 @@ struct _aria_str _aria_tcp_read(aria_int fd, aria_int max_len) {
 aria_int _aria_tcp_write(aria_int fd, char *ptr, aria_int len) {
     ssize_t total = 0;
     while (total < len) {
-        ssize_t n = write((int)fd, ptr + total, (size_t)(len - total));
+        ssize_t n = _posix_write((int)fd, ptr + total, (size_t)(len - total));
         if (n <= 0) return -1;
         total += n;
     }
@@ -1796,7 +1826,7 @@ aria_int _aria_tcp_write(aria_int fd, char *ptr, aria_int len) {
 
 // Close socket.
 void _aria_tcp_close(aria_int fd) {
-    close((int)fd);
+    _posix_close((int)fd);
 }
 
 // Get peer address as string. Returns "ip:port".

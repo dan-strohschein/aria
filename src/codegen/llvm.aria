@@ -103,7 +103,7 @@ fn _is_definitely_scalar_op(op: str) -> bool =
     op == "Mod" || op == "Neg" || op == "Eq" || op == "Neq" || op == "Lt" ||
     op == "Gt" || op == "Lte" || op == "Gte" || op == "And" || op == "Or" ||
     op == "Not" || op == "BitAnd" || op == "BitOr" || op == "BitXor" ||
-    op == "Shl" || op == "Shr" || op == "ArrayLen" || op == "StrLen" ||
+    op == "Shl" || op == "Shr" || op == "ArrayLen" || op == "ArrayContains" || op == "StrLen" ||
     op == "StrEq" || op == "StrCmp" || op == "StrContains" || op == "StrStartsWith" ||
     op == "StrEndsWith" || op == "StrIndexOf" || op == "MapContains" ||
     op == "MapLen" || op == "SetContains" || op == "SetLen" ||
@@ -494,6 +494,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare void @_aria_array_set(i64, i64, i64)" + nl)
     p = p.append("declare i64 @_aria_array_append(i64, i64)" + nl)
     p = p.append("declare i64 @_aria_array_slice(i64, i64)" + nl)
+    p = p.append("declare i64 @_aria_array_contains(i64, i64)" + nl)
     p = p.append("declare i64 @_aria_list_dir(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_is_dir(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_args_get()" + nl)
@@ -786,6 +787,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare void @_aria_array_set(i64, i64, i64)" + nl)
     h = h.append("declare i64 @_aria_array_append(i64, i64)" + nl)
     h = h.append("declare i64 @_aria_array_slice(i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_array_contains(i64, i64)" + nl)
     h = h.append("declare i64 @_aria_list_dir(i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_is_dir(i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_args_get()" + nl)
@@ -1623,6 +1625,18 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         len_v := "%alen_" + i2s(idx)
         gg = _lg_emit(gg, len_v + " = call i64 @_aria_array_len(i64 " + arr_v + ")")
         gg = _lg_emit(gg, "store i64 " + len_v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "ArrayContains" {
+        mut gg := g
+        arr_v := "%acont_arr_" + i2s(idx)
+        gg = _lg_emit(gg, arr_v + " = load i64, i64* " + _t(inst.arg1))
+        val_v := "%acont_val_" + i2s(idx)
+        gg = _lg_emit(gg, val_v + " = load i64, i64* " + _t(inst.arg2))
+        res := "%acont_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_array_contains(i64 " + arr_v + ", i64 " + val_v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 

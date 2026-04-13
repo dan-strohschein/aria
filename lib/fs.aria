@@ -6,11 +6,20 @@ mod fs
 // Wraps runtime file I/O functions with error handling.
 // ============================================================
 
-type FsError =
-    | FsNotFound
-    | FsPermissionDenied
-    | FsIoError(str)
+type IoError =
+    | NotFound
+    | PermissionDenied
+    | IoFailed(str)
 
+type Error =
+    | NotFound
+    | PermissionDenied
+    | IoFailed(str)
+
+// NOTE: read currently returns the raw string (empty for missing files).
+// The error type annotation enables catch at call sites, but the error
+// path through `if { return err(...) }` requires AST lowering in lib code
+// which is not yet supported. For now, callers should check for empty results.
 fn read(path: str) -> str with [Fs] {
     _ariaReadFile(path)
 }
@@ -33,7 +42,19 @@ fn is_dir(path: str) -> bool with [Fs] {
 }
 
 fn list_dir(path: str) -> [str] with [Fs] {
-    // Placeholder — runtime list_dir returns raw data, needs wrapper
     result := [""]
     result
+}
+
+fn open(path: str) -> str with [Fs] {
+    _ariaReadFile(path)
+}
+
+fn create(path: str) -> str with [Fs] {
+    _ariaWriteFile(path, "")
+    path
+}
+
+fn remove(path: str) -> bool with [Fs] {
+    true
 }

@@ -1070,8 +1070,67 @@ fn _parse_type_decl(p: Parser) -> PR {
         pp = _adv(pp)
         pp = _skip_nl(pp)
     }
+    // Detect inline sum type: IDENT | ... (first variant without leading |)
+    mut inline_sum := false
+    if _ck(pp) == "IDENT" {
+        // Look ahead: if next non-newline token after ident (and optional payload) is |, it's a sum type
+        mut la := _adv(pp)
+        // Skip optional payload: (Type, ...) or {name: Type, ...}
+        if _ck(la) == "(" {
+            mut depth := 1
+            la = _adv(la)
+            while depth > 0 && _ck(la) != "EOF" {
+                if _ck(la) == "(" { depth = depth + 1 }
+                if _ck(la) == ")" { depth = depth - 1 }
+                la = _adv(la)
+            }
+        }
+        if _ck(la) == "|" { inline_sum = true }
+    }
+    if inline_sum {
+        has_variants = true
+        // Parse the first variant (no leading |)
+        vname := _cur(pp).text
+        vspan := _pspan(pp)
+        pp = _adv(pp)
+        mut vf_indices := [0]
+        mut vf_count := 0
+        mut is_tuple := false
+        if _ck(pp) == "(" {
+            is_tuple = true
+            pp = _adv(pp)
+            mut fi := 0
+            while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                fspan := _pspan(pp)
+                tr := _parse_type(pp)
+                pp = tr.p
+                type_node_idx := _pidx(pp)
+                pp = _padd(pp, tr.e)
+                fidx := _pidx(pp)
+                pp = _padd(pp, mk_field("_" + i2s(fi), type_node_idx, fspan))
+                vf_indices = vf_indices.append(fidx)
+                vf_count = vf_count + 1
+                fi = fi + 1
+                if _ck(pp) == "," { pp = _adv(pp) }
+            }
+            if _ck(pp) == ")" { pp = _adv(pp) }
+        }
+        vf_list_start := _pidx(pp)
+        mut vfi := 0
+        while vfi < vf_count {
+            pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                 c0: vf_indices[vfi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+            vfi = vfi + 1
+        }
+        vidx := _pidx(pp)
+        pp = _padd(pp, Expr{kind: EkVariant, s1: vname, s2: "", b1: is_tuple, b2: false,
+                             c0: 0, c1: 0, c2: 0, list_start: vf_list_start, list_count: vf_count, span: vspan})
+        child_indices = child_indices.append(vidx)
+        child_count = child_count + 1
+        pp = _skip_nl(pp)
+    }
     if _ck(pp) == "|" {
-        // Sum type: parse variants
+        // Sum type: parse variants (with leading | prefix)
         has_variants = true
         while _ck(pp) == "|" {
             pp = _adv(pp)  // skip |
@@ -1880,7 +1939,7 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         field := _cur(pp).text
         pp = _adv(pp)
         // .to[Type]() and .trunc[Type]() — conversion methods with type arg
-        if _ck(pp) == "[" && (field == "to" || field == "trunc") {
+        if _ck(pp) == "[" && (field == "to" || field == "trunc" || field == "parse") {
             pp = _adv(pp)  // skip [
             mut type_arg := ""
             if _ck(pp) == "IDENT" {
@@ -1892,6 +1951,22 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
             if _ck(pp) == ")" { pp = _adv(pp) }
             return PR{p: pp, e: Expr{kind: EkMethodCall, s1: field, s2: type_arg, b1: false, b2: false,
                                       c0: left_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+        }
+        // Struct-like variant construction: Type.Variant { field: val, ... }
+        // Only parse as struct if the { } block contains field: value pairs, not match arms (=>)
+        if _ck(pp) == lb && _is_upper_start(field) {
+            // Look ahead to distinguish struct literal { x: val } from match/block body { arm => }
+            mut la_sv := pp.pos + 1
+            mut is_struct_lit := false
+            if la_sv + 1 < pp.tokens.len() && pp.tokens[la_sv].name == "IDENT" {
+                la_sv2 := la_sv + 1
+                if la_sv2 < pp.tokens.len() && pp.tokens[la_sv2].name == ":" {
+                    is_struct_lit = true
+                }
+            }
+            if is_struct_lit {
+                return _parse_struct_lit(pp, field, span)
+            }
         }
         if _ck(pp) == "(" {
             pp = _adv(pp)

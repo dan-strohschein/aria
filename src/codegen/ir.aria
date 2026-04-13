@@ -48,6 +48,7 @@ type IrOp =
     | OpArraySet
     | OpArrayLen
     | OpArrayAppend
+    | OpArrayContains
     | OpStrLen
     | OpStrConcat
     | OpStrEq
@@ -126,6 +127,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpArraySet => "ArraySet"
     OpArrayLen => "ArrayLen"
     OpArrayAppend => "ArrayAppend"
+    OpArrayContains => "ArrayContains"
     OpStrLen => "StrLen"
     OpStrConcat => "StrConcat"
     OpStrEq => "StrEq"
@@ -392,6 +394,7 @@ fn _is_def_op(op: IrOp) -> bool {
     if name == "ArrayGet" { return true }
     if name == "ArrayLen" { return true }
     if name == "ArrayAppend" { return true }
+    if name == "ArrayContains" { return true }
     if name == "MapNew" { return true }
     if name == "SetNew" { return true }
     if name == "IntToStr" { return true }
