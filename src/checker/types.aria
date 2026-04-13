@@ -235,12 +235,20 @@ struct StoreAddResult {
     id: i64
 }
 
+// Guardrail: if canonical dedup is bypassed by a bug, a runaway caller can
+// push the TypeStore into millions of entries and exhaust RAM during
+// self-compile. Hard-cap growth — degrade to TY_UNKNOWN instead of OOMing.
+const STORE_CAP: i64 = 500000
+
 fn store_add_canonical(store: TypeStore, info: TypeInfo) -> StoreAddResult {
     kn := type_kind_name(info.kind)
     // Only canonicalize container types — Named/TypeVar are unique by definition
     if kn == "Array" || kn == "Optional" || kn == "Result" || kn == "Tuple" || kn == "Applied" {
         existing := store_find_type(store, info)
         if existing >= 0 { return StoreAddResult{store: store, id: existing} }
+    }
+    if store.types.len() >= STORE_CAP {
+        return StoreAddResult{store: store, id: TY_UNKNOWN}
     }
     new_store := store_add(store, info)
     StoreAddResult{store: new_store, id: store_last_id(new_store)}

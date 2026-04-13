@@ -7,7 +7,9 @@ src/main
 src/src
 src/src.ll
 src/main.ll
-src/aria_generated
+# NOTE: src/aria_generated is the tracked durable bootstrap binary.
+# Do NOT add it to this ignore list — losing it forces the 30+ min bisection rebuild.
+# Workflow: build new binary, copy over src/aria_generated, commit.
 
 # Test binaries (compiled test programs)
 testdata/programs/*_test
