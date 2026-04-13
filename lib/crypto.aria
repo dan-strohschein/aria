@@ -1,0 +1,20 @@
+mod crypto
+
+// ============================================================
+// Cryptographic Utilities for Aria (stub)
+// ============================================================
+
+fn crypto_hash(data: str) -> str {
+    // Placeholder: return a fake hash
+    "sha256:" + data
+}
+
+fn crypto_hash_password(password: str) -> str {
+    // Placeholder: return a fake password hash
+    "bcrypt:" + password
+}
+
+fn crypto_verify(password: str, hash_val: str) -> bool {
+    // Placeholder: compare fake hash
+    "bcrypt:" + password == hash_val
+}

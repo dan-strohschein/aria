@@ -1,0 +1,44 @@
+mod net
+
+// ============================================================
+// HTTP types for Aria (stub)
+// ============================================================
+
+struct Request {
+    method:  str
+    path:    str
+    body:    str
+    headers: [str]
+    query:   str
+}
+
+struct Response {
+    status:  i64
+    headers: [str]
+    body:    str
+}
+
+struct Router {
+    routes: [str]
+}
+
+fn Router_new() -> Router = Router { routes: [""] }
+
+fn Router_get(self: Router, path: str, handler: fn(Request) -> Response) -> Router {
+    Router { routes: self.routes.append("GET:" + path) }
+}
+
+fn Router_post(self: Router, path: str, handler: fn(Request) -> Response) -> Router {
+    Router { routes: self.routes.append("POST:" + path) }
+}
+
+struct Server {
+    addr:          str
+    router:        Router
+    read_timeout:  i64
+    write_timeout: i64
+}
+
+fn Server_listen_and_serve(self: Server) -> i64!str {
+    0
+}

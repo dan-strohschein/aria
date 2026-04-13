@@ -440,6 +440,20 @@ fn is_assignable(store: TypeStore, src: i64, dst: i64) -> bool {
                 err_ok := si.type_id2 == TY_UNKNOWN || di.type_id2 == TY_UNKNOWN || is_assignable(store, si.type_id2, di.type_id2)
                 return ok_ok && err_ok
             }
+            if sk == "Tuple" && si.param_count == di.param_count {
+                // Element-wise assignability: compare encoded element IDs
+                // Tuple types store element IDs as comma-separated string in name
+                // Accept if all elements are assignable (including TY_UNKNOWN matching any)
+                mut ti := 0
+                mut all_ok := true
+                while ti < si.param_count {
+                    se := tuple_elem_type(store, src, ti)
+                    de := tuple_elem_type(store, dst, ti)
+                    if is_assignable(store, se, de) == false { all_ok = false }
+                    ti = ti + 1
+                }
+                return all_ok
+            }
         }
     }
     return false

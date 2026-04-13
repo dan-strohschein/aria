@@ -377,7 +377,7 @@ fn _parse_test_files_directive(file_path: str) -> [str] with [Fs] {
 // Known standard library modules and their file names
 fn _is_stdlib_module(name: str) -> bool =
     name == "json" || name == "http" || name == "db" ||
-    name == "fs" || name == "time" || name == "log" ||
+    name == "fs" || name == "time" || name == "log" || name == "test" ||
     name == "property" || name == "crypto" || name == "net" || name == "os" || name == "flag"
 
 fn _find_aria_home() -> str with [Fs] {
@@ -493,6 +493,85 @@ fn _resolve_stdlib_files(files: [str]) -> [str] with [Fs] {
             mi = mi + 1
         }
         fi = fi + 1
+    }
+    extra
+}
+
+fn _scan_file_for_local_imports(file_path: str) -> [str] with [Fs] {
+    // Scan a source file for `use <module>` where module is NOT a stdlib module.
+    // Returns non-stdlib module names (e.g., "codegen", "lexer").
+    mut modules := [""]
+    source := _ariaReadFile(file_path)
+    mut i := 0
+    while i < source.len() {
+        if i == 0 || (i > 0 && source.charAt(i - 1) == "\n") {
+            mut j := i
+            while j < source.len() && (source.charAt(j) == " " || source.charAt(j) == "\t") { j = j + 1 }
+            if j + 4 <= source.len() && source.substring(j, j + 4) == "use " {
+                mut k := j + 4
+                while k < source.len() && (source.charAt(k) == " " || source.charAt(k) == "\t") { k = k + 1 }
+                mut name_start := k
+                while k < source.len() && source.charAt(k) != " " && source.charAt(k) != "\n" && source.charAt(k) != "\t" && source.charAt(k) != "." && source.charAt(k) != "\{" {
+                    k = k + 1
+                }
+                if k > name_start {
+                    name := source.substring(name_start, k)
+                    // Skip stdlib and std.* imports
+                    if _is_stdlib_module(name) == false && name != "std" {
+                        modules = modules.append(name)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    modules
+}
+
+fn _resolve_local_modules(files: [str]) -> [str] with [Fs] {
+    // For each user file, find `use <module>` imports that correspond to
+    // sibling directories (e.g., `use codegen` → src/codegen/*.aria).
+    mut extra := [""]
+    mut seen := [""]
+    mut queue := [""]
+    // Seed queue with user files
+    mut qi := 1
+    while qi < files.len() {
+        queue = queue.append(files[qi])
+        qi = qi + 1
+    }
+    mut qpos := 1
+    while qpos < queue.len() {
+        file := queue[qpos]
+        dir := _dir_of(file)
+        modules := _scan_file_for_local_imports(file)
+        mut mi := 1
+        while mi < modules.len() {
+            mod_name := modules[mi]
+            mut already := false
+            mut si := 1
+            while si < seen.len() {
+                if seen[si] == mod_name { already = true }
+                si = si + 1
+            }
+            if already == false {
+                // Check if <dir>/<module>/ is a directory
+                mod_dir := dir + mod_name
+                if _ariaIsDir(mod_dir) == 1 {
+                    seen = seen.append(mod_name)
+                    mod_files := _expand_dir(mod_dir)
+                    mut mfi := 1
+                    while mfi < mod_files.len() {
+                        extra = extra.append(mod_files[mfi])
+                        // Also queue these files to scan for their own imports
+                        queue = queue.append(mod_files[mfi])
+                        mfi = mfi + 1
+                    }
+                }
+            }
+            mi = mi + 1
+        }
+        qpos = qpos + 1
     }
     extra
 }
@@ -716,8 +795,10 @@ fn run_check(raw_files: [str], format: str) -> i64 with [Io, Fs] {
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     diags := check_sources(files)
     if bag_has_errors(diags) {
         _print_diagnostics(diags, format)
@@ -763,8 +844,10 @@ fn run_build(raw_files: [str], format: str, target: str, runtime_path: str, outp
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     rt := _resolve_and_validate_runtime(runtime_path)
     if rt == "" { return 1 }
     file := files[1]
@@ -791,8 +874,10 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str, output
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     rt := _resolve_and_validate_runtime(runtime_path)
     if rt == "" { return 1 }
     file := files[1]
@@ -819,8 +904,10 @@ fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) ->
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     rt := _resolve_and_validate_runtime(runtime_path)
     if rt == "" { return 1 }
     file := files[1]
@@ -908,8 +995,10 @@ fn run_fix(raw_files: [str], format: str) -> i64 with [Io, Fs] {
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     // Run check and collect diagnostics with suggestions
     diags := check_sources(files)
     mut fix_count := 0
@@ -944,8 +1033,10 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 with [Io, 
         println("error: no input files")
         return 1
     }
-    stdlib_files := _resolve_stdlib_files(user_files)
-    files := _merge_file_lists(user_files, stdlib_files)
+    local_files := _resolve_local_modules(user_files)
+    all_user := _merge_file_lists(user_files, local_files)
+    stdlib_files := _resolve_stdlib_files(all_user)
+    files := _merge_file_lists(all_user, stdlib_files)
     rt := _resolve_and_validate_runtime(runtime_path)
     if rt == "" { return 1 }
     file := files[1]

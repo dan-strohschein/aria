@@ -2774,6 +2774,66 @@ fn _check_stmt(c: Checker) -> CE {
         }
     }
 
+    // Local type declaration: type Name = | Variant1 | Variant2(payload)
+    if k == "type" || k == "struct" {
+        mut cc := _cadv(c)  // skip type/struct
+        mut tname := ""
+        if _ck2(cc) == "IDENT" { tname = _ccur(cc).text; cc = _cadv(cc) }
+        // Skip generic params
+        if _ck2(cc) == "[" {
+            cc = _cadv(cc)
+            while _ck2(cc) != "]" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+            if _ck2(cc) == "]" { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "=" { cc = _cadv(cc) }
+        cc = _cskip_nl(cc)
+        // Register as named type + sum type variants
+        if tname.len() > 0 {
+            new_st := store_add(cc.store, TypeInfo{kind: TyNamed, name: tname, type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
+            cc = _cset_store(cc, new_st)
+            local_tid := store_last_id(cc.store)
+            // Check for sum type variants: | Variant1 | Variant2(payload)
+            if _ck2(cc) == "|" {
+                mut vnames := [""]
+                while _ck2(cc) == "|" {
+                    cc = _cadv(cc)  // skip |
+                    cc = _cskip_nl(cc)
+                    if _ck2(cc) == "IDENT" {
+                        vn := _ccur(cc).text
+                        vnames = vnames.append(vn)
+                        cc = _cadv(cc)
+                        // Skip variant payload
+                        if _ck2(cc) == "(" {
+                            mut depth := 1
+                            cc = _cadv(cc)
+                            while depth > 0 && _ck2(cc) != "EOF" {
+                                if _ck2(cc) == "(" { depth = depth + 1 }
+                                if _ck2(cc) == ")" { depth = depth - 1 }
+                                if depth > 0 { cc = _cadv(cc) }
+                            }
+                            if _ck2(cc) == ")" { cc = _cadv(cc) }
+                        }
+                    }
+                    cc = _cskip_nl(cc)
+                }
+                // Register the sum type with its variants
+                if vnames.len() > 1 {
+                    sdef := StructDef{name: tname, field_names: [""], field_types: [0], is_sum: true, variant_names: vnames, generics: "", generic_count: 0, methods: [""]}
+                    cc = _cset_reg(cc, reg_add_struct(cc.registry, sdef))
+                }
+            } else {
+                // Simple struct or single-variant type — skip to end of line
+                lb2 := "\{"
+                if _ck2(cc) == lb2 {
+                    cc = _skip_braces2(cc)
+                } else {
+                    while _ck2(cc) != "NEWLINE" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+                }
+            }
+        }
+        return CE{c: cc, type_id: TY_UNIT}
+    }
+
     // Check for binding or expression
     _check_expr_or_binding(c)
 }
@@ -3122,7 +3182,7 @@ fn _check_expr_full(c: Checker) -> CE {
             // Skip check for &&/|| and when left_type is bool (precedence flattening)
             if op != "&&" && op != "||" && left_type != TY_BOOL {
                 if left_type != TY_UNKNOWN && right.type_id != TY_UNKNOWN {
-                    if types_equal(cc.store, left_type, right.type_id) == false {
+                    if is_assignable(cc.store, left_type, right.type_id) == false {
                         is_str_concat := left_type == TY_STR && right.type_id == TY_STR
                         is_cmp := op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
                         if is_str_concat == false && is_cmp {
@@ -3344,9 +3404,20 @@ fn _check_primary(c: Checker) -> CE {
     if k == "STRING" { return CE{c: _cadv(c), type_id: TY_STR} }
     if k == "CHAR" { return CE{c: _cadv(c), type_id: TY_CHAR} }
     if k == "STRING_START" {
-        // String interpolation — skip tokens until STRING_END, result is str
+        // String interpolation — check embedded expressions for type checking and monomorphization
         mut cc := _cadv(c)
-        while _ck2(cc) != "STRING_END" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
+        while _ck2(cc) != "STRING_END" && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "INTERP_START" {
+                cc = _cadv(cc)  // skip {
+                if _ck2(cc) != "INTERP_END" && _ck2(cc) != "STRING_END" && _ck2(cc) != "EOF" {
+                    result := _check_expr_full(cc)
+                    cc = result.c
+                }
+                if _ck2(cc) == "INTERP_END" { cc = _cadv(cc) }
+            } else {
+                cc = _cadv(cc)
+            }
+        }
         if _ck2(cc) == "STRING_END" { cc = _cadv(cc) }
         return CE{c: cc, type_id: TY_STR}
     }
@@ -3370,24 +3441,32 @@ fn _check_primary(c: Checker) -> CE {
 
         // Ok(value) and Err(value) — Result constructors
         if _ck2(cc) == "(" && (name == "Ok" || name == "Err" || name == "err") {
-            cr := _check_call_args(cc, TY_UNKNOWN)
-            cc = cr.c
+            // Parse single argument to get its actual type
+            cc = _cadv(cc)  // skip (
+            cc = _cskip_nl(cc)
+            arg_r := _check_expr_full(cc)
+            cc = arg_r.c
+            cc = _cskip_nl(cc)
+            if _ck2(cc) == ")" { cc = _cadv(cc) }
+            arg_type := arg_r.type_id
             // Construct Result type from function context
             if name == "Ok" {
+                mut err_type := TY_UNKNOWN
                 if cc.fn_error_type > 0 {
-                    sar := store_add_canonical(cc.store, mk_result_type(cr.type_id, cc.fn_error_type))
-                    cc = _cset_store(cc, sar.store)
-                    return CE{c: cc, type_id: sar.id}
+                    err_type = cc.fn_error_type
                 }
-                return CE{c: cc, type_id: cr.type_id}
+                sar := store_add_canonical(cc.store, mk_result_type(arg_type, err_type))
+                cc = _cset_store(cc, sar.store)
+                return CE{c: cc, type_id: sar.id}
             }
             if name == "Err" || name == "err" {
-                if cc.fn_return_type > 0 {
-                    sar := store_add_canonical(cc.store, mk_result_type(cc.fn_return_type, cr.type_id))
-                    cc = _cset_store(cc, sar.store)
-                    return CE{c: cc, type_id: sar.id}
+                mut ok_type := TY_UNKNOWN
+                if cc.fn_error_type > 0 && cc.fn_return_type > 0 {
+                    ok_type = cc.fn_return_type
                 }
-                return CE{c: cc, type_id: cr.type_id}
+                sar := store_add_canonical(cc.store, mk_result_type(ok_type, arg_type))
+                cc = _cset_store(cc, sar.store)
+                return CE{c: cc, type_id: sar.id}
             }
         }
 
@@ -3533,6 +3612,14 @@ fn _check_primary(c: Checker) -> CE {
         // Check builtins
         if name == "true" { return CE{c: cc, type_id: TY_BOOL} }
         if name == "false" { return CE{c: cc, type_id: TY_BOOL} }
+
+        // TypeName.Variant — resolve type name so postfix dot can find variants
+        if _ck2(cc) == "." {
+            tid := resolve_type_name(cc.store, name)
+            if tid != TY_UNKNOWN {
+                return CE{c: cc, type_id: tid}
+            }
+        }
 
         return CE{c: cc, type_id: TY_UNKNOWN}
     }
@@ -3692,6 +3779,12 @@ fn _check_call_args_sig(c: Checker, sig: FnSig) -> CE {
         if _ck2(cc) == "," { cc = _cadv(cc) }
     }
     if _ck2(cc) == ")" { cc = _cadv(cc) }
+    // Fallible functions return Result type, not just the Ok type
+    if sig.error_type > 0 {
+        sar := store_add_canonical(cc.store, mk_result_type(sig.return_type, sig.error_type))
+        cc = _cset_store(cc, sar.store)
+        return CE{c: cc, type_id: sar.id}
+    }
     return CE{c: cc, type_id: sig.return_type}
 }
 
@@ -4237,6 +4330,17 @@ fn _check_field(c: Checker, obj_type: i64, field: str) -> CE {
         if fi.name != "" {
             return CE{c: c, type_id: fi.type_id}
         }
+        // Sum type variant access: Type.Variant → Type
+        sdef := reg_find_struct(c.registry, info.name)
+        if sdef.is_sum {
+            mut vvi := 1
+            while vvi < sdef.variant_names.len() {
+                if sdef.variant_names[vvi] == field {
+                    return CE{c: c, type_id: obj_type}
+                }
+                vvi = vvi + 1
+            }
+        }
         // Method ref: obj.method (no parens) → bound closure
         qualified := info.name + "_" + field
         msig := reg_find_fn(c.registry, qualified)
@@ -4273,7 +4377,7 @@ fn _check_struct_lit(c: Checker, name: str, type_id: i64) -> CE {
                 // Check field type matches expected
                 fi := reg_find_field(cc.registry, name, field_name)
                 if fi.name != "" && result.type_id != TY_UNKNOWN && fi.type_id != TY_UNKNOWN {
-                    if types_equal(cc.store, result.type_id, fi.type_id) == false {
+                    if is_assignable(cc.store, result.type_id, fi.type_id) == false {
                         q := _q()
                         cc = _cerror(cc, E0100, "field " + q + field_name + q + " expects " + format_type(cc.store, fi.type_id) + ", got " + format_type(cc.store, result.type_id))
                     }

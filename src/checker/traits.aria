@@ -346,6 +346,14 @@ fn type_supports_op(treg: TraitRegistry, store: TypeStore, type_id: i64, op: str
     // Trait-based operators
     trait_name := op_requires_trait(op)
     if trait_name == "" { return true }
+    // Optional and Result types support Eq/Ord if their inner types do
+    if trait_name == "Eq" || trait_name == "Ord" {
+        if type_id > 0 && type_id < store.types.len() {
+            info := store.types[type_id]
+            ik := type_kind_name(info.kind)
+            if ik == "Optional" || ik == "Result" { return true }
+        }
+    }
     type_name := format_type(store, type_id)
     return treg_has_impl(treg, type_name, trait_name)
 }

@@ -1754,6 +1754,15 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     if nk == "IntLit" || nk == "FloatLit" || nk == "StringLit" || nk == "BoolLit" ||
        nk == "None" || nk == "Break" || nk == "Continue" { return r }
 
+    // Local type declaration — register type name and variant names in current scope
+    if nk == "TypeDecl" {
+        mut rr := r
+        if node.s1.len() > 0 {
+            rr = _add_sym(rr, node.s1, SkType, node.span, false, false)
+        }
+        return rr
+    }
+
     if nk == "Ident" {
         return _resolve_ident_by_name(r, node.s1, node.span)
     }

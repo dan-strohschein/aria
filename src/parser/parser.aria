@@ -687,6 +687,7 @@ fn _parse_top(p: Parser) -> PR {
     if k == "const" { return _parse_const_decl(p) }
     if k == "entry" { return _parse_entry(p) }
     if k == "test" { return _parse_test(p) }
+    if k == "bench" { return _parse_bench(p) }
     _parse_stmt(p)
 }
 
@@ -1494,6 +1495,21 @@ fn _parse_test(p: Parser) -> PR {
                        c0: body_idx, c1: 0, c2: 0, list_start: result.e.list_start, list_count: result.e.list_count, span: span}}
 }
 
+fn _parse_bench(p: Parser) -> PR {
+    span := _pspan(p)
+    mut pp := _adv(p)
+    mut bench_name := ""
+    if _ck(pp) == "STRING" || _ck(pp) == "IDENT" {
+        bench_name = _cur(pp).text
+        pp = _adv(pp)
+    }
+    result := _parse_block(pp)
+    body_idx := _pidx(result.p)
+    pp = _padd(result.p, result.e)
+    PR{p: pp, e: Expr{kind: EkBlock, s1: "_test:_bench:" + bench_name, s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: result.e.list_start, list_count: result.e.list_count, span: span}}
+}
+
 // --- Statement ---
 
 fn _parse_stmt(p: Parser) -> PR {
@@ -1563,6 +1579,7 @@ fn _parse_stmt(p: Parser) -> PR {
     }
     if k == "assert" { return _parse_assert(p) }
     if k == "with" { return _parse_with(p) }
+    if k == "type" || k == "struct" { return _parse_type_decl(p) }
 
     result := _parse_expr(p, 0)
     mut pp := result.p
