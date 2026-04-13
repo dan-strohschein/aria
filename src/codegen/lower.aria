@@ -898,6 +898,8 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
         pi = pi + 1
     }
 
+    // Position token cursor to function body (needed for string interpolation fallback)
+    ll = _lset_pos(ll, decl.body_start)
     // Try AST path if FnDecl has body in pool
     if decl.node_idx > 0 {
         fn_node := pool_get(ll.pool, decl.node_idx)
@@ -905,8 +907,7 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             return _lower_fn_body_ast(ll, fn_node.c0, sig)
         }
     }
-    // Legacy: jump directly to body using DeclIndex body_start
-    ll = _lset_pos(ll, decl.body_start)
+    // Legacy: token-walking path
     _lower_fn_body_d(ll, sig)
 }
 
@@ -1174,37 +1175,15 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "StringLit" {
         val := node.s1
-        // Empty s1 with a span may indicate interpolated string — fall back to tokens
-        if val.len() == 0 {
-            // Search ALL tokens for STRING_START with no offset constraint.
-            // Use l.pos as a hint to find the closest STRING_START.
-            mut sp := 0
-            mut found_pos := 0 - 1
-            // First try forward from l.pos
-            sp = ll.pos
-            while sp < ll.tokens.len() {
-                if ll.tokens[sp].name == "STRING_START" {
-                    found_pos = sp
-                    sp = ll.tokens.len()
-                }
-                sp = sp + 1
-            }
-            // Fallback: search from 0
-            if found_pos < 0 {
-                sp = 0
-                while sp < ll.tokens.len() {
-                    if ll.tokens[sp].name == "STRING_START" {
-                        found_pos = sp
-                        sp = ll.tokens.len()
-                    }
-                    sp = sp + 1
-                }
-            }
-            if found_pos >= 0 {
+        // Empty s1 with c0 > 0 indicates interpolated string — c0 is the STRING_START token index
+        if val.len() == 0 && node.c0 > 0 {
+            found_pos := node.c0
+            if found_pos < ll.tokens.len() && ll.tokens[found_pos].name == "STRING_START" {
                 ll = _lset_pos(ll, found_pos)
                 return _lower_interpolated_string(ll)
             }
         }
+        // Non-interpolated or actual empty string
         return _lower_string_const(ll, val)
     }
 
@@ -1864,10 +1843,48 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- MethodCall ---
 
     if nk == "MethodCall" {
+        method := node.s1
+        // Check if this is qualified variant construction: Type.Variant(args)
+        // The receiver (c0) is an Ident that names the type, method is the variant
+        vtag := _variant_tag(ll.registry, method)
+        if vtag > 0 {
+            vparent := _variant_parent(ll.registry, method)
+            vdc := variant_data_count(vparent, vtag)
+            if vdc > 0 && node.list_count > 0 {
+                // Data variant construction: allocate struct, set tag, fill fields
+                alloc_sz := sum_alloc_size(vparent)
+                vnt := _lnew_temp(ll)
+                ll = vnt.l
+                ll = _lemit(ll, new_inst(OpAlloc, vnt.temp, alloc_sz, 0, vparent.name, 0))
+                st_id := _struct_type_id(ll.registry, vparent.name)
+                if st_id > 0 { ll = _lset_type(ll, vnt.temp, st_id) }
+                vtag_nt := _lnew_temp(ll)
+                ll = vtag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, vtag_nt.temp, 0, "_tag", 0))
+                mut vfi := 0
+                mut vslot := 1
+                while vfi < node.list_count {
+                    arg_holder := pool_get(ll.pool, node.list_start + vfi)
+                    val := _lower_expr_node(ll, arg_holder.c0)
+                    ll = val.l
+                    vft := variant_field_type(vparent, vtag, vfi)
+                    if vft == 12 {
+                        ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp, vslot, "", 0))
+                        ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp + 1, vslot + 1, "", 0))
+                        vslot = vslot + 2
+                    } else {
+                        ll = _lemit(ll, new_inst(OpFieldSet, vnt.temp, val.temp, vslot, "", 0))
+                        vslot = vslot + 1
+                    }
+                    vfi = vfi + 1
+                }
+                return LT{l: ll, temp: vnt.temp}
+            }
+        }
         // Lower receiver from AST
         recv := _lower_expr_node(ll, node.c0)
         ll = recv.l
-        method := node.s1
         // .to[Type]() and .trunc[Type]() — conversion with type arg in s2
         if node.s2.len() > 0 && (method == "to" || method == "trunc") {
             return _lower_conversion(ll, recv.temp, method, node.s2)
@@ -2445,15 +2462,120 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = err_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
         if node.b1 {
-            // Multi-arm catch: bind error as "e" and lower the last arm (catch-all)
-            // TODO: proper match-like dispatch on error variants
-            ll = _lenv_add(ll, "e", err_val.temp)
-            // Multi-arm catch: emit safe default (0) for the error path
-            // This prevents SEGV from broken handler code
-            safe_nt := _lnew_temp(ll)
-            ll = safe_nt.l
-            ll = _lemit(ll, new_inst(OpConst, safe_nt.temp, 0, 0, "", 0))
-            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, safe_nt.temp, 0, "", 0))
+            // Multi-arm catch: dispatch on error variant tags
+            // Extract tag from error value for sum-type matching
+            err_tag_nt := _lnew_temp(ll)
+            ll = err_tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, err_tag_nt.temp, err_val.temp, 0, "_tag", 0))
+            catch_end := _lnew_label(ll)
+            ll = catch_end.l
+            mut cai := 0
+            while cai < node.list_count {
+                arm_node := pool_get(ll.pool, node.list_start + cai)
+                pat := pool_get(ll.pool, arm_node.c0)
+                body_idx := arm_node.c1
+                pat_kind := expr_kind_name(pat.kind)
+                // Determine variant name and whether there are destructured args
+                mut vname := ""
+                mut has_destr := false
+                mut destr_list_start := 0
+                mut destr_list_count := 0
+                if pat_kind == "Ident" {
+                    vname = pat.s1
+                } else if pat_kind == "FieldAccess" {
+                    // Qualified: ParseError.EmptyInput — s1 is the variant name
+                    vname = pat.s1
+                } else if pat_kind == "MethodCall" {
+                    // Qualified with args: ParseError.InvalidFormat(s) — s1 is variant, list has args
+                    vname = pat.s1
+                    has_destr = true
+                    destr_list_start = pat.list_start
+                    destr_list_count = pat.list_count
+                } else if pat_kind == "Call" {
+                    // Unqualified with args: InvalidFormat(s)
+                    vname = pat.s1
+                    has_destr = true
+                    destr_list_start = pat.list_start
+                    destr_list_count = pat.list_count
+                }
+                is_last := cai == node.list_count - 1
+                vtag := _variant_tag(ll.registry, vname)
+                if vname == "_" || (vtag == 0 && pat_kind == "Ident") {
+                    // Wildcard or binding — always matches
+                    if vname != "_" {
+                        ll = _lenv_add(ll, vname, err_val.temp)
+                    }
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    if body.temp >= 0 {
+                        btype := _lget_type(ll, body.temp)
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        if btype == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                        }
+                    }
+                    ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
+                } else if vtag > 0 {
+                    // Variant match: compare tag
+                    next_arm := _lnew_label(ll)
+                    ll = next_arm.l
+                    vtag_nt := _lnew_temp(ll)
+                    ll = vtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, vtag, 0, "", 0))
+                    vcmp := _lnew_temp(ll)
+                    ll = vcmp.l
+                    ll = _lemit(ll, new_inst(OpEq, vcmp.temp, err_tag_nt.temp, vtag_nt.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, vcmp.temp, next_arm.temp, "", 0))
+                    // Destructure variant fields if present
+                    if has_destr {
+                        vparent := _variant_parent(ll.registry, vname)
+                        mut dfi := 0
+                        mut dslot := 1
+                        while dfi < destr_list_count {
+                            arg_holder := pool_get(ll.pool, destr_list_start + dfi)
+                            arg_node := pool_get(ll.pool, arg_holder.c0)
+                            fname := arg_node.s1
+                            ftype := variant_field_type(vparent, vtag, dfi)
+                            if fname != "_" {
+                                if ftype == 12 {
+                                    fld_nt := _lnew_str_temp(ll)
+                                    ll = fld_nt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, err_val.temp, dslot, fname, 0))
+                                    ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp + 1, err_val.temp, dslot + 1, fname, 0))
+                                    ll = _lset_type(ll, fld_nt.temp, 12)
+                                    ll = _lenv_add(ll, fname, fld_nt.temp)
+                                } else {
+                                    fld_nt := _lnew_temp(ll)
+                                    ll = fld_nt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, err_val.temp, dslot, fname, 0))
+                                    if ftype > 0 { ll = _lset_type(ll, fld_nt.temp, ftype) }
+                                    ll = _lenv_add(ll, fname, fld_nt.temp)
+                                }
+                            }
+                            if ftype == 12 { dslot = dslot + 2 } else { dslot = dslot + 1 }
+                            dfi = dfi + 1
+                        }
+                    }
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    if body.temp >= 0 {
+                        btype := _lget_type(ll, body.temp)
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        if btype == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                        }
+                    }
+                    ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpLabel, 0, next_arm.temp, 0, "", 0))
+                } else {
+                    // Unknown pattern — skip
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
+                }
+                cai = cai + 1
+            }
+            ll = _lemit(ll, new_inst(OpLabel, 0, catch_end.temp, 0, "", 0))
         } else {
             // Single-body catch: bind s1 as error and lower c1
             if node.s1.len() > 0 {
@@ -3368,6 +3490,42 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
 }
 
 // --- Lower entry block ---
+
+fn _lower_entry_ast(l: Lowerer, decl: DeclInfo) -> Lowerer {
+    mut ll := l
+    ll = _lset_pos(ll, decl.body_start)
+    ll = _lset_func(ll, new_ir_func("_main", 0, 0))
+
+    // Use AST path if available
+    if decl.node_idx > 0 {
+        entry_node := pool_get(ll.pool, decl.node_idx)
+        if entry_node.c0 > 0 {
+            body := pool_get(ll.pool, entry_node.c0)
+            if expr_kind_name(body.kind) == "Block" {
+                result := _lower_block_node_result(ll, body)
+                ll = result.l
+            }
+        }
+    } else {
+        // Fallback: token-based
+        ll = _ladv(ll)  // skip entry
+        lb := "\{"
+        if _lk(ll) == lb {
+            ll = _lower_block(ll)
+        }
+    }
+
+    // Add exit call at end
+    nt := _lnew_temp(ll)
+    ll = nt.l
+    ll = _lemit(ll, new_inst(OpConst, nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, nt.temp, 1, "_aria_exit", 0))
+
+    ll = _lfinish_func(ll)
+    mut new_mod := ll.module
+    new_mod = mod_set_entry(new_mod, "_main")
+    _lset_mod(ll, new_mod)
+}
 
 fn _lower_entry(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip entry
@@ -12473,10 +12631,54 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
                 ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
             } else if pat_kind == "Call" {
-                // Variant destructuring: Circle(r) or Move{x, y}
+                // Variant destructuring: Circle(r), Move{x, y}, Ok(n), Err(e)
                 vname := pat.s1
-                dvtag := _variant_tag(ll.registry, vname)
-                if dvtag > 0 {
+                mut dvtag := _variant_tag(ll.registry, vname)
+                // Special case: Ok/Err are built-in Result variants
+                if dvtag == 0 && vname == "Ok" { dvtag = 0 - 1 }
+                if dvtag == 0 && vname == "Err" { dvtag = 0 - 2 }
+                if dvtag == 0 - 1 || dvtag == 0 - 2 {
+                    // Ok(n) has tag=0, Err(e) has tag=1
+                    mut result_tag := 0
+                    if dvtag == 0 - 2 { result_tag = 1 }
+                    dvtag_nt := _lnew_temp(ll)
+                    ll = dvtag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, dvtag_nt.temp, result_tag, 0, "", 0))
+                    dcmp_nt := _lnew_temp(ll)
+                    ll = dcmp_nt.l
+                    ll = _lemit(ll, new_inst(OpEq, dcmp_nt.temp, subj_tag, dvtag_nt.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, dcmp_nt.temp, next_lbl.temp, "", 0))
+                    // Extract value from slot 1
+                    if pat.list_count > 0 {
+                        field_node := pool_get(ll.pool, pat.list_start)
+                        fname := field_node.s1
+                        if fname != "_" {
+                            fld_nt := _lnew_temp(ll)
+                            ll = fld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, 1, fname, 0))
+                            ll = _lenv_add(ll, fname, fld_nt.temp)
+                        }
+                    }
+                    // Guard check
+                    if has_guard {
+                        g := _lower_expr_node(ll, guard_idx)
+                        ll = g.l
+                        ll = _lemit(ll, new_inst(OpBranchFalse, 0, g.temp, next_lbl.temp, "", 0))
+                    }
+                    body := _lower_expr_node(ll, body_idx)
+                    ll = body.l
+                    if body.temp >= 0 {
+                        body_type := _lget_type(ll, body.temp)
+                        if body_type == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        }
+                    }
+                    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+                } else if dvtag > 0 {
                     // Compare tag
                     dvtag_nt := _lnew_temp(ll)
                     ll = dvtag_nt.l

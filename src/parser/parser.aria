@@ -489,6 +489,7 @@ fn _bridge_ast_to_decl_index(idx: DeclIndex, pool: NodePool, root: Expr) -> Decl
         }
         if is_decl {
             mut di := 1
+            mut found := false
             while di < decl_index_len(out) {
                 decl := decl_index_get(out, di)
                 mut matched := false
@@ -500,6 +501,7 @@ fn _bridge_ast_to_decl_index(idx: DeclIndex, pool: NodePool, root: Expr) -> Decl
                     matched = true
                 }
                 if matched {
+                    found = true
                     updated := DeclInfo{kind: decl.kind, name: decl.name, token_start: decl.token_start,
                                         body_start: decl.body_start, body_end: decl.body_end,
                                         is_pub: decl.is_pub, node_idx: actual_idx}
@@ -1689,7 +1691,9 @@ fn _parse_prefix(p: Parser) -> PR {
     }
     if k == "STRING_START" {
         // String interpolation: "text{expr}more{expr}end"
+        // Store token position in c0 for lowerer to find STRING_START directly
         span := _pspan(p)
+        tok_pos := p.pos
         mut pp := _adv(p)
         while _ck(pp) != "STRING_END" && _ck(pp) != "EOF" {
             if _ck(pp) == "STRING_MIDDLE" {
@@ -1700,7 +1704,8 @@ fn _parse_prefix(p: Parser) -> PR {
             }
         }
         if _ck(pp) == "STRING_END" { pp = _adv(pp) }
-        return PR{p: pp, e: mk_string_lit("", span)}
+        return PR{p: pp, e: Expr{kind: EkStringLit, s1: "", s2: "", b1: false, b2: false,
+                                  c0: tok_pos, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
     }
     if k == "true" { return PR{p: _adv(p), e: mk_bool_lit(true, _pspan(p))} }
     if k == "false" { return PR{p: _adv(p), e: mk_bool_lit(false, _pspan(p))} }
@@ -1748,8 +1753,12 @@ fn _parse_prefix(p: Parser) -> PR {
                 if _ck(pp) == "=>" { pp = _adv(pp) }
                 pp = _skip_nl(pp)
                 mut body_e := _no_expr()
-                if _ck(pp) == lb2 {
+                pbk := _ck(pp)
+                if pbk == lb2 {
                     br := _parse_block(pp)
+                    pp = br.p; body_e = br.e
+                } else if pbk == "return" || pbk == "break" || pbk == "continue" {
+                    br := _parse_stmt(pp)
                     pp = br.p; body_e = br.e
                 } else {
                     br := _parse_expr(pp, 0)
@@ -2025,10 +2034,15 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
                 while _ck(pp) != "=>" && _ck(pp) != rb && _ck(pp) != "EOF" { pp = _adv(pp) }
                 if _ck(pp) == "=>" { pp = _adv(pp) }
                 pp = _skip_nl(pp)
-                // Parse body
+                // Parse body — handle statement keywords that _parse_expr can't
                 mut body_e := _no_expr()
-                if _ck(pp) == lb {
+                bk := _ck(pp)
+                if bk == lb {
                     br := _parse_block(pp)
+                    pp = br.p
+                    body_e = br.e
+                } else if bk == "return" || bk == "break" || bk == "continue" {
+                    br := _parse_stmt(pp)
                     pp = br.p
                     body_e = br.e
                 } else {
@@ -2203,9 +2217,20 @@ fn _parse_match(p: Parser) -> PR {
             pp = _padd(g.p, g.e)
         }
         pp = _expect(pp, "=>")
-        body := _parse_expr(pp, 0)
-        body_idx := _pidx(body.p)
-        pp = _padd(body.p, body.e)
+        // Parse body — handle statement keywords that _parse_expr can't
+        mut body_e := _no_expr()
+        mbk := _ck(pp)
+        if mbk == "return" || mbk == "break" || mbk == "continue" {
+            mbr := _parse_stmt(pp)
+            pp = mbr.p
+            body_e = mbr.e
+        } else {
+            mbr := _parse_expr(pp, 0)
+            pp = mbr.p
+            body_e = mbr.e
+        }
+        body_idx := _pidx(pp)
+        pp = _padd(pp, body_e)
         pat_indices = pat_indices.append(pat_idx)
         guard_indices = guard_indices.append(guard_idx)
         alt_starts = alt_starts.append(alts_start)
