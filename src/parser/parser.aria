@@ -2491,7 +2491,31 @@ fn _parse_pattern(p: Parser) -> PR {
     }
     if k == "INT" {
         tok := _cur(p)
-        return PR{p: _adv(p), e: mk_int_lit(tok.text, span)}
+        mut pp := _adv(p)
+        // Range pattern: `lo..=hi` / `lo..hi` — encode as a Range node with
+        // c0=lo-IntLit, c1=hi-IntLit, b1=inclusive.
+        if _ck(pp) == "..=" || _ck(pp) == ".." {
+            inclusive := _ck(pp) == "..="
+            pp = _adv(pp)
+            mut hi_text := ""
+            mut neg := false
+            if _ck(pp) == "-" { neg = true; pp = _adv(pp) }
+            if _ck(pp) == "INT" {
+                htok := _cur(pp)
+                hi_text = htok.text
+                if neg { hi_text = "-" + hi_text }
+                pp = _adv(pp)
+            }
+            lo_idx := _pidx(pp)
+            pp = _padd(pp, mk_int_lit(tok.text, span))
+            hi_idx := _pidx(pp)
+            pp = _padd(pp, mk_int_lit(hi_text, span))
+            return PR{p: pp, e: Expr{kind: EkRange, s1: "", s2: "",
+                                      b1: inclusive, b2: false,
+                                      c0: lo_idx, c1: hi_idx, c2: 0,
+                                      list_start: 0, list_count: 0, span: span}}
+        }
+        return PR{p: pp, e: mk_int_lit(tok.text, span)}
     }
     if k == "FLOAT" {
         tok := _cur(p)
