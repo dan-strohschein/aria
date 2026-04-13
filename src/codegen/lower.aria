@@ -1917,7 +1917,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             recv_slot := _lenv_lookup(ll, recv_name)
             if recv_slot < 0 {
                 // Receiver not in scope — check if method is a registered function
-                msig := reg_find_fn(ll.registry, method)
+                // Try qualified name first: Type.method → Type_method
+                mut msig := reg_find_fn(ll.registry, recv_name + "_" + method)
+                mut mcall_name := recv_name + "_" + method
+                if msig.name == "" {
+                    // Try bare method name (module-qualified call)
+                    msig = reg_find_fn(ll.registry, method)
+                    mcall_name = method
+                }
                 if msig.name != "" {
                     // Module-qualified call: lower args, then emit direct function call
                     mut marg_temps := [0]
@@ -1976,8 +1983,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         ll = mnt.l
                         mnt_temp = mnt.temp
                     }
-                    ll = _lemit(ll, new_inst(OpCall, mnt_temp, mfa, mreg_count, method, mrt))
-                    if mrt > 0 { ll = _lset_type(ll, mnt_temp, mrt) }
+                    ll = _lemit(ll, new_inst(OpCall, mnt_temp, mfa, mreg_count, mcall_name, mrt))
+                    if mrt > 0 {
+                        ll = _lset_type(ll, mnt_temp, mrt)
+                    } else {
+                        // If return type unknown, try to infer from receiver type name
+                        recv_tid := _struct_type_id(ll.registry, recv_name)
+                        if recv_tid > 0 { ll = _lset_type(ll, mnt_temp, recv_tid) }
+                    }
                     return LT{l: ll, temp: mnt_temp}
                 }
             }
@@ -5505,14 +5518,32 @@ fn _lower_expr(l: Lowerer) -> LT {
                         // Module-qualified or type-qualified call
                         ll = _ladv(ll)  // skip (
                         ll = _lskip_nl(ll)
+                        // Determine if this is a method call (has self param) vs module function
+                        // If sig has "self" as first param, prepend receiver as self arg
+                        mut is_method := false
+                        if mod_fn_sig.param_names.len() > 1 && mod_fn_sig.param_names[1] == "self" {
+                            is_method = true
+                        }
+                        // Marshal self + explicit args
+                        mut self_nt := _lnew_temp(ll)
+                        ll = self_nt.l
+                        if is_method {
+                            ll = _lemit(ll, new_inst(OpStore, self_nt.temp, left, 0, "", 0))
+                        }
                         mut arg_count := 0
-                        mut first_arg := -1
                         mut reg_count := 0
+                        if is_method {
+                            left_tid := _lget_type(ll, left)
+                            if left_tid == 12 { reg_count = reg_count + 2 } else { reg_count = reg_count + 1 }
+                            arg_count = arg_count + 1
+                        }
                         while _lk(ll) != ")" && _lk(ll) != "EOF" {
                             ll = _lskip_nl(ll)
                             arg := _lower_expr(ll)
                             ll = arg.l
-                            if arg_count == 0 { first_arg = arg.temp }
+                            extra := _lnew_temp(ll)
+                            ll = extra.l
+                            ll = _lemit(ll, new_inst(OpStore, self_nt.temp + reg_count, arg.temp, 0, "", 0))
                             atid := _lget_type(ll, arg.temp)
                             if atid == 12 { reg_count = reg_count + 2 } else { reg_count = reg_count + 1 }
                             arg_count = arg_count + 1
@@ -5530,8 +5561,8 @@ fn _lower_expr(l: Lowerer) -> LT {
                             ll = nt.l
                             nt_temp = nt.temp
                         }
-                        if first_arg >= 0 {
-                            ll = _lemit(ll, new_inst(OpCall, nt_temp, first_arg, reg_count, field, 0))
+                        if arg_count > 0 {
+                            ll = _lemit(ll, new_inst(OpCall, nt_temp, self_nt.temp, reg_count, field, 0))
                         } else {
                             ll = _lemit(ll, new_inst(OpCall, nt_temp, 0, 0, field, 0))
                         }
