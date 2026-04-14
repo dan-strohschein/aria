@@ -6321,14 +6321,17 @@ fn _lower_expr(l: Lowerer) -> LT {
             end_lbl := _lnew_label(ll)
             ll = end_lbl.l
             ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, catch_lbl.temp, "", 0))
-            // Ok path: extract value
+            // Ok path: extract value (2 slots so str payloads can carry len)
             ok_val := _lnew_temp(ll)
             ll = ok_val.l
             ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left, 1, "_val", 0))
-            // Store to final result temp
-            final_nt := _lnew_temp(ll)
+            ok_len := _lnew_temp(ll)
+            ll = ok_len.l
+            ll = _lemit(ll, new_inst(OpFieldGet, ok_len.temp, left, 2, "_val_len", 0))
+            final_nt := _lnew_str_temp(ll)
             ll = final_nt.l
             ll = _lemit(ll, new_inst(OpStore, final_nt.temp, ok_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp + 1, ok_len.temp, 0, "", 0))
             ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
             // Catch path: bind error, lower body
             ll = _lemit(ll, new_inst(OpLabel, 0, catch_lbl.temp, 0, "", 0))
@@ -6357,6 +6360,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                 if is_typed_catch {
                     // Typed catch arms: process as match on error value
                     // Each arm: Pattern => expr
+                    mut catch_result_type := 0
                     catch_end := _lnew_label(ll)
                     ll = catch_end.l
                     // Check if error is a data sum type (has tag)
@@ -6423,12 +6427,35 @@ fn _lower_expr(l: Lowerer) -> LT {
                         if pat == "_" || (pat_kind == "IDENT" && _variant_tag(ll.registry, pat) == 0) {
                             // Wildcard or binding — always matches
                             if pat != "_" { ll = _lenv_add(ll, pat, err_val.temp) }
+                            mut arm_last := -1
                             if _lk(ll) == "\{" {
-                                ll = _lower_block(ll)
+                                // Block body: run stmts, keep the last expr's temp
+                                ll = _ladv(ll)  // skip {
+                                ll = _lskip_nl(ll)
+                                while _lk(ll) != "\}" && _lk(ll) != "EOF" {
+                                    ck2 := _lk(ll)
+                                    if ck2 == "return" || ck2 == "mut" || ck2 == "break" || ck2 == "continue" || ck2 == "assert" {
+                                        ll = _lower_stmt(ll)
+                                    } else {
+                                        cr2 := _lower_expr_result(ll)
+                                        ll = cr2.l
+                                        arm_last = cr2.temp
+                                    }
+                                    ll = _lskip_nl(ll)
+                                }
+                                if _lk(ll) == "\}" { ll = _ladv(ll) }
                             } else {
                                 cr := _lower_expr(ll)
                                 ll = cr.l
-                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, cr.temp, 0, "", 0))
+                                arm_last = cr.temp
+                            }
+                            if arm_last >= 0 {
+                                arm_type := _lget_type(ll, arm_last)
+                                if catch_result_type == 0 && arm_type > 0 { catch_result_type = arm_type }
+                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, arm_last, 0, "", 0))
+                                if arm_type == 12 {
+                                    ll = _lemit(ll, new_inst(OpStore, final_nt.temp + 1, arm_last + 1, 0, "", 0))
+                                }
                             }
                             ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
                         } else {
@@ -6443,12 +6470,34 @@ fn _lower_expr(l: Lowerer) -> LT {
                             ll = vcmp.l
                             ll = _lemit(ll, new_inst(OpEq, vcmp.temp, err_tag_temp, vtag_nt.temp, "", 0))
                             ll = _lemit(ll, new_inst(OpBranchFalse, 0, vcmp.temp, next_arm.temp, "", 0))
+                            mut varm_last := -1
                             if _lk(ll) == "\{" {
-                                ll = _lower_block(ll)
+                                ll = _ladv(ll)
+                                ll = _lskip_nl(ll)
+                                while _lk(ll) != "\}" && _lk(ll) != "EOF" {
+                                    ck3 := _lk(ll)
+                                    if ck3 == "return" || ck3 == "mut" || ck3 == "break" || ck3 == "continue" || ck3 == "assert" {
+                                        ll = _lower_stmt(ll)
+                                    } else {
+                                        cr3 := _lower_expr_result(ll)
+                                        ll = cr3.l
+                                        varm_last = cr3.temp
+                                    }
+                                    ll = _lskip_nl(ll)
+                                }
+                                if _lk(ll) == "\}" { ll = _ladv(ll) }
                             } else {
                                 cr := _lower_expr(ll)
                                 ll = cr.l
-                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, cr.temp, 0, "", 0))
+                                varm_last = cr.temp
+                            }
+                            if varm_last >= 0 {
+                                varm_type := _lget_type(ll, varm_last)
+                                if catch_result_type == 0 && varm_type > 0 { catch_result_type = varm_type }
+                                ll = _lemit(ll, new_inst(OpStore, final_nt.temp, varm_last, 0, "", 0))
+                                if varm_type == 12 {
+                                    ll = _lemit(ll, new_inst(OpStore, final_nt.temp + 1, varm_last + 1, 0, "", 0))
+                                }
                             }
                             ll = _lemit(ll, new_inst(OpJump, 0, catch_end.temp, 0, "", 0))
                             ll = _lemit(ll, new_inst(OpLabel, 0, next_arm.temp, 0, "", 0))
@@ -6457,6 +6506,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                     }
                     if _lk(ll) == rb { ll = _ladv(ll) }
                     ll = _lemit(ll, new_inst(OpLabel, 0, catch_end.temp, 0, "", 0))
+                    if catch_result_type > 0 { ll = _lset_type(ll, final_nt.temp, catch_result_type) }
                 } else {
                     // Simple catch body
                     mut catch_last := -1
@@ -6473,7 +6523,11 @@ fn _lower_expr(l: Lowerer) -> LT {
                     }
                     if _lk(ll) == rb { ll = _ladv(ll) }
                     if catch_last >= 0 {
+                        catch_last_type := _lget_type(ll, catch_last)
                         ll = _lemit(ll, new_inst(OpStore, final_nt.temp, catch_last, 0, "", 0))
+                        if catch_last_type == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, final_nt.temp + 1, catch_last + 1, 0, "", 0))
+                        }
                     }
                 }
             }
