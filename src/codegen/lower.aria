@@ -6573,30 +6573,38 @@ fn _lower_expr(l: Lowerer) -> LT {
                 left = final_nt.temp
             }
         } else if k == "[" {
-            // Array index
+            // Array or map index
             ll = _ladv(ll)
             idx := _lower_expr(ll)
             ll = idx.l
             if _lk(ll) == "]" { ll = _ladv(ll) }
-            // Determine array element type
+            // Determine container kind
             left_type := _lget_type(ll, left)
-            elem_type := _array_elem_type(ll.store, left_type)
-            if elem_type == 12 {
-                // String array: dereference string struct pointer
-                nt := _lnew_str_temp(ll)
-                ll = nt.l
-                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
-                ll = _lset_type(ll, nt.temp, 12)
-                left = nt.temp
-            } else {
+            if left_type == 300 {
+                // Map get: `m[k]` — dispatch to OpMapGet.
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
-                // Propagate element type (e.g., struct type for [Diagnostic])
-                if elem_type > 0 {
-                    ll = _lset_type(ll, nt.temp, elem_type)
-                }
+                ll = _lemit(ll, new_inst(OpMapGet, nt.temp, left, idx.temp, "", 0))
                 left = nt.temp
+            } else {
+                elem_type := _array_elem_type(ll.store, left_type)
+                if elem_type == 12 {
+                    // String array: dereference string struct pointer
+                    nt := _lnew_str_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
+                    ll = _lset_type(ll, nt.temp, 12)
+                    left = nt.temp
+                } else {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
+                    // Propagate element type (e.g., struct type for [Diagnostic])
+                    if elem_type > 0 {
+                        ll = _lset_type(ll, nt.temp, elem_type)
+                    }
+                    left = nt.temp
+                }
             }
         } else if k == "?" {
             // Error propagation — with optional |e| transform
@@ -11090,23 +11098,30 @@ fn _lower_atom(l: Lowerer) -> LT {
             idx := _lower_expr(ll)
             ll = idx.l
             if _lk(ll) == "]" { ll = _ladv(ll) }
-            // Determine array element type
+            // Determine container kind
             left_type := _lget_type(ll, left)
-            elem_type := _array_elem_type(ll.store, left_type)
-            if elem_type == 12 {
-                nt := _lnew_str_temp(ll)
-                ll = nt.l
-                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
-                ll = _lset_type(ll, nt.temp, 12)
-                left = nt.temp
-            } else {
+            if left_type == 300 {
                 nt := _lnew_temp(ll)
                 ll = nt.l
-                ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
-                if elem_type > 0 {
-                    ll = _lset_type(ll, nt.temp, elem_type)
-                }
+                ll = _lemit(ll, new_inst(OpMapGet, nt.temp, left, idx.temp, "", 0))
                 left = nt.temp
+            } else {
+                elem_type := _array_elem_type(ll.store, left_type)
+                if elem_type == 12 {
+                    nt := _lnew_str_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 12))
+                    ll = _lset_type(ll, nt.temp, 12)
+                    left = nt.temp
+                } else {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, left, idx.temp, "", 0))
+                    if elem_type > 0 {
+                        ll = _lset_type(ll, nt.temp, elem_type)
+                    }
+                    left = nt.temp
+                }
             }
         } else if k == "(" {
             cr := _lower_call_args(ll, left)
