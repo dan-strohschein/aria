@@ -40,6 +40,8 @@ struct Lowerer {
     const_str_vals: [str]
     // Type tracking per temp: 0=unknown, 1=i64, 12=str, 100+=struct
     temp_types: [i64]
+    // Shadow channel: 1 if temp holds a Result pointer (fallible call / Ok/Err ctor), 0 otherwise
+    is_result: [i64]
     // Error type for current function (0 = not fallible)
     fn_error_type: i64
     // Defer tracking: token positions of deferred expressions (dynamic)
@@ -68,6 +70,7 @@ fn _new_lowerer(tokens: [Token], pool: NodePool, store: TypeStore, reg: TypeRegi
         const_names: [""], const_vals: [0],
         const_str_names: [""], const_str_vals: [""],
         temp_types: [0],
+        is_result: [0],
         fn_error_type: 0, defer_starts: [0], defer_ends: [0]
     }
 
@@ -92,7 +95,7 @@ fn _ladv(l: Lowerer) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 // Skip pub modifier, including optional (pkg) scope qualifier
@@ -118,7 +121,7 @@ fn _lset_reg(l: Lowerer, reg: TypeRegistry) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lset_store(l: Lowerer, store: TypeStore) -> Lowerer =
@@ -130,7 +133,7 @@ fn _lset_store(l: Lowerer, store: TypeStore) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
@@ -142,7 +145,7 @@ fn _lset_pos(l: Lowerer, pos: i64) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lskip_nl(l: Lowerer) -> Lowerer {
@@ -161,7 +164,7 @@ fn _lnew_temp(l: Lowerer) -> LT {
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
     // Default new temps to type=0 (unknown/potential pointer). The lowerer
     // explicitly sets type=1 (scalar) for known integers and type=12 (str)
@@ -179,7 +182,7 @@ fn _lnew_label(l: Lowerer) -> LT {
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
     LT{l: ll, temp: lbl}
 }
@@ -194,7 +197,7 @@ fn _lemit(l: Lowerer, inst: IrInst) -> Lowerer {
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 }
 
@@ -207,7 +210,7 @@ fn _lset_func(l: Lowerer, f: IrFunc) -> Lowerer =
             loop_start: -1, loop_end: -1,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: [0],
+            temp_types: [0], is_result: [0],
             fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
 
 fn _lset_mod(l: Lowerer, m: IrModule) -> Lowerer =
@@ -219,7 +222,7 @@ fn _lset_mod(l: Lowerer, m: IrModule) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lfinish_func(l: Lowerer) -> Lowerer {
@@ -234,7 +237,7 @@ fn _lfinish_func(l: Lowerer) -> Lowerer {
             loop_start: -1, loop_end: -1,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 }
 
@@ -247,7 +250,7 @@ fn _lset_loop(l: Lowerer, start: i64, end_l: i64) -> Lowerer =
             loop_start: start, loop_end: end_l,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
@@ -259,7 +262,7 @@ fn _lenv_add(l: Lowerer, name: str, slot: i64) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
@@ -295,7 +298,7 @@ fn _lset_error_type(l: Lowerer, et: i64) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: et, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _ladd_const(l: Lowerer, name: str, val: i64) -> Lowerer =
@@ -307,7 +310,7 @@ fn _ladd_const(l: Lowerer, name: str, val: i64) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names.append(name), const_vals: l.const_vals.append(val),
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _ladd_const_str(l: Lowerer, name: str, val: str) -> Lowerer =
@@ -319,7 +322,7 @@ fn _ladd_const_str(l: Lowerer, name: str, val: str) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names.append(name), const_str_vals: l.const_str_vals.append(val),
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 fn _lenv_restore(l: Lowerer, names: [str], slots: [i64]) -> Lowerer =
@@ -331,7 +334,7 @@ fn _lenv_restore(l: Lowerer, names: [str], slots: [i64]) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 
 // Helper: allocate 2 consecutive temp slots for a string fat pointer (ptr + len)
@@ -582,7 +585,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
                 loop_start: l.loop_start, loop_end: l.loop_end,
                 const_names: l.const_names, const_vals: l.const_vals,
                 const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-                temp_types: new_types,
+                temp_types: new_types, is_result: l.is_result,
                 fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
     }
     // Sparse grow path: target is beyond cur_len. Append zeros until target, then set.
@@ -597,7 +600,7 @@ fn _lset_type(l: Lowerer, temp: i64, type_id: i64) -> Lowerer {
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: types,
+            temp_types: types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
 }
 
@@ -607,6 +610,47 @@ fn _lget_type(l: Lowerer, temp: i64) -> i64 {
         return l.temp_types[idx]
     }
     return 0
+}
+
+// Mark temp as holding a Result pointer (from fallible call, Ok/Err ctor)
+fn _lset_is_result(l: Lowerer, temp: i64) -> Lowerer {
+    idx := temp + 1
+    cur_len := l.is_result.len()
+    if idx < cur_len {
+        mut flags := l.is_result
+        flags[idx] = 1
+        return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+                table: l.table, file: l.file, module: l.module,
+                current_func: l.current_func,
+                temp_counter: l.temp_counter, label_counter: l.label_counter,
+                env_names: l.env_names, env_slots: l.env_slots,
+                loop_start: l.loop_start, loop_end: l.loop_end,
+                const_names: l.const_names, const_vals: l.const_vals,
+                const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+                temp_types: l.temp_types, is_result: flags,
+                fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+    }
+    mut flags := l.is_result
+    while flags.len() <= idx { flags = flags.append(0) }
+    flags[idx] = 1
+    return Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: l.env_names, env_slots: l.env_slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types, is_result: flags,
+            fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+}
+
+fn _lis_result(l: Lowerer, temp: i64) -> bool {
+    idx := temp + 1
+    if idx >= 0 && idx < l.is_result.len() {
+        return l.is_result[idx] != 0
+    }
+    return false
 }
 
 // --- Op selection helpers (avoid mut reassignment of sum types) ---
@@ -744,7 +788,7 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                                          loop_start: ll.loop_start, loop_end: ll.loop_end,
                                          const_names: ll.const_names.append(cname), const_vals: ll.const_vals.append(num),
                                          const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                                         temp_types: ll.temp_types,
+                                         temp_types: ll.temp_types, is_result: ll.is_result,
             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
                             ll = _ladv(ll)
                         }
@@ -1700,6 +1744,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     }
                     ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
                     if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+                    if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
                     return LT{l: ll, temp: nt_temp}
                 }
             }
@@ -2750,6 +2795,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 }
                 ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
                 if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+                if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
                 return LT{l: ll, temp: nt_temp}
             }
         }
@@ -3362,6 +3408,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
                 ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 1, "_val", 0))
             }
             ll = _lset_type(ll, nt.temp, 200)
+            ll = _lset_is_result(ll, nt.temp)
             return LT{l: ll, temp: nt.temp}
         }
     }
@@ -3929,6 +3976,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         }
         if call_sig.name != "" {
             if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+            if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
         }
         return LT{l: ll, temp: nt_temp}
     }
@@ -5884,6 +5932,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                     } else if pipe_call_sig.name != "" && pipe_call_sig.return_type > 0 {
                         ll = _lset_type(ll, nt_temp, pipe_call_sig.return_type)
                     }
+                    if pipe_call_sig.name != "" && pipe_call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
                     left = nt_temp
                 }
             }
@@ -7095,6 +7144,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 }
                 // Mark as Result so implicit Ok wrapping is skipped
                 ll = _lset_type(ll, nt.temp, 200)
+                ll = _lset_is_result(ll, nt.temp)
                 return LT{l: ll, temp: nt.temp}
             }
 
@@ -7450,6 +7500,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 } else if call_sig.return_type > 0 {
                     ll = _lset_type(ll, nt_temp, call_sig.return_type)
                 }
+                if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
                 return LT{l: ll, temp: nt_temp}
             }
             // Built-in function calls
@@ -10320,7 +10371,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                                      loop_start: ll.loop_start, loop_end: ll.loop_end,
                                      const_names: ll.const_names, const_vals: ll.const_vals,
                                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                                     temp_types: ll.temp_types,
+                                     temp_types: ll.temp_types, is_result: ll.is_result,
                                      fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
                     }
                     sep_nt := _lnew_str_temp(ll)
@@ -10345,7 +10396,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
                                  loop_start: ll.loop_start, loop_end: ll.loop_end,
                                  const_names: ll.const_names, const_vals: ll.const_vals,
                                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                                 temp_types: ll.temp_types,
+                                 temp_types: ll.temp_types, is_result: ll.is_result,
                                  fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
                 }
                 fname_nt := _lnew_str_temp(ll)
@@ -11742,7 +11793,7 @@ fn _lower_for_range(l: Lowerer, var_name: str, inclusive: bool) -> Lowerer {
                  loop_start: inc_lbl.temp, loop_end: end_lbl.temp,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
+                 temp_types: ll.temp_types, is_result: ll.is_result,
             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
 
     // Body
@@ -11937,7 +11988,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
                  loop_start: inc_lbl.temp, loop_end: end_lbl.temp,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: ll.temp_types,
+                 temp_types: ll.temp_types, is_result: ll.is_result,
             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
 
     // Body
@@ -12144,7 +12195,7 @@ fn _lappend_defer(l: Lowerer, start: i64, end: i64) -> Lowerer =
             loop_start: l.loop_start, loop_end: l.loop_end,
             const_names: l.const_names, const_vals: l.const_vals,
             const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
-            temp_types: l.temp_types,
+            temp_types: l.temp_types, is_result: l.is_result,
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts.append(start), defer_ends: l.defer_ends.append(end)}
 
 // Emit deferred expressions in reverse order (LIFO)
@@ -12336,6 +12387,7 @@ fn _lower_closure(l: Lowerer) -> LT {
     saved_env_names := ll.env_names
     saved_env_slots := ll.env_slots
     saved_types := ll.temp_types
+    saved_is_result := ll.is_result
 
     // Scan for captured variables: identifiers in body that exist in outer env
     // but are NOT closure parameters
@@ -12448,7 +12500,7 @@ fn _lower_closure(l: Lowerer) -> LT {
                  loop_start: ll.loop_start, loop_end: ll.loop_end,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: saved_types,
+                 temp_types: saved_types, is_result: saved_is_result,
                  fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
 
     // Build fat pointer: {fn_ptr, env_ptr}
@@ -12677,6 +12729,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     saved_env_names := ll.env_names
     saved_env_slots := ll.env_slots
     saved_types := ll.temp_types
+    saved_is_result := ll.is_result
 
     ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
 
@@ -12737,7 +12790,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                  loop_start: ll.loop_start, loop_end: ll.loop_end,
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                 temp_types: saved_types,
+                 temp_types: saved_types, is_result: saved_is_result,
                  fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
 
     // Build fat pointer: {fn_ptr, env_ptr}
@@ -13073,7 +13126,7 @@ fn _lower_string_const(l: Lowerer, val: str) -> LT {
                      loop_start: ll.loop_start, loop_end: ll.loop_end,
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                     temp_types: ll.temp_types,
+                     temp_types: ll.temp_types, is_result: ll.is_result,
             fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
     }
     nt := _lnew_str_temp(ll)
@@ -14863,7 +14916,7 @@ fn _lower_match(l: Lowerer) -> LT {
                                  loop_start: fll.loop_start, loop_end: fll.loop_end,
                                  const_names: fll.const_names, const_vals: fll.const_vals,
                                  const_str_names: fll.const_str_names, const_str_vals: fll.const_str_vals,
-                                 temp_types: fll.temp_types,
+                                 temp_types: fll.temp_types, is_result: fll.is_result,
                                  fn_error_type: fll.fn_error_type, defer_starts: fll.defer_starts, defer_ends: fll.defer_ends}
                 }
                 ll = fll
@@ -15973,7 +16026,7 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
                      loop_start: ll.loop_start, loop_end: ll.loop_end,
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                     temp_types: ll.temp_types,
+                     temp_types: ll.temp_types, is_result: ll.is_result,
                      fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
         return ll
     }
@@ -16099,7 +16152,7 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
                      loop_start: ll.loop_start, loop_end: ll.loop_end,
                      const_names: ll.const_names, const_vals: ll.const_vals,
                      const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                     temp_types: ll.temp_types,
+                     temp_types: ll.temp_types, is_result: ll.is_result,
                      fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
     }
     done_nt := _lnew_str_temp(ll)
