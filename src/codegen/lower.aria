@@ -1689,7 +1689,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 }
             }
             // Pipeline with Call right side (e.g., |> filter(fn(x) => ...))
-            // Skip lowering to avoid state corruption from unresolved function closures
+            // Skip lowering to avoid state corruption from unresolved function closures.
+            // Proper dispatch for zero-arg pipe-to-method like `arr |> reverse()`
+            // requires token-cursor recovery that's not yet wired up.
             if expr_kind_name(right_node.kind) == "Call" {
                 return LT{l: ll, temp: left.temp}
             }
@@ -9116,8 +9118,10 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
-        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_chars", 1))
-        ll = _lset_type(ll, nt.temp, 1)
+        // chars() returns [str] — emit via graphemes runtime (single-char
+        // strings). Plain codepoint-int array doesn't compose with join("").
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 2, "_aria_str_graphemes", 13))
+        ll = _lset_type(ll, nt.temp, 13)
         return LT{l: ll, temp: nt.temp}
     }
     if method == "graphemes" && _lget_type(ll, obj) == 12 {
