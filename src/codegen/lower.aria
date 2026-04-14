@@ -1020,7 +1020,7 @@ fn _lower_fn_body_d(l: Lowerer, sig: FnSig) -> Lowerer {
         result := _lower_expr(ll)
         ll = result.l
         ll = _emit_defers(ll)
-        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 && !_lis_result(ll, result.temp) {
             ret_type := _lget_type(ll, result.temp)
             mut ok_slots := 2
             if ret_type == 12 { ok_slots = 3 }
@@ -1134,7 +1134,7 @@ fn _lower_fn_body_ast(l: Lowerer, body_idx: i64, sig: FnSig) -> Lowerer {
             }
             if already_returned == false {
                 ll = _emit_defers(ll)
-                if ll.fn_error_type > 0 && _lget_type(ll, last_temp) != 200 {
+                if ll.fn_error_type > 0 && _lget_type(ll, last_temp) != 200 && !_lis_result(ll, last_temp) {
                     ret_type := _lget_type(ll, last_temp)
                     mut ok_slots := 2
                     if ret_type == 12 { ok_slots = 3 }
@@ -1164,7 +1164,7 @@ fn _lower_fn_body_ast(l: Lowerer, body_idx: i64, sig: FnSig) -> Lowerer {
         result := _lower_expr_node(ll, body_idx)
         ll = result.l
         ll = _emit_defers(ll)
-        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 && !_lis_result(ll, result.temp) {
             ret_type := _lget_type(ll, result.temp)
             mut ok_slots := 2
             if ret_type == 12 { ok_slots = 3 }
@@ -1626,7 +1626,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // Option (201) / Result (200) equality: compare tag then payload.
             // Without this, the fallthrough compares raw pointers and fails for
             // values from different allocations (e.g. `zero_div == None`).
-            if (op == "==" || op == "!=") && _is_option_or_result_type(ll.store, left_type) {
+            if (op == "==" || op == "!=") && (_is_option_or_result_type(ll.store, left_type) || _lis_result(ll, left.temp) || _lis_result(ll, right.temp)) {
                 a_tag := _lnew_temp(ll)
                 ll = a_tag.l
                 ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left.temp, 0, "_tag", 0))
@@ -2016,7 +2016,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             result := _lower_expr_node(ll, node.c0)
             ll = result.l
             ll = _emit_defers(ll)
-            if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+            if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 && !_lis_result(ll, result.temp) {
                 ret_type := _lget_type(ll, result.temp)
                 mut ok_slots := 2
                 if ret_type == 12 { ok_slots = 3 }
@@ -3005,7 +3005,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // b1=false: single-body catch (c1=handler)
         expr := _lower_expr_node(ll, node.c0)
         ll = expr.l
-        // If the expression is a known non-Result type, catch is a no-op — return value as-is
+        // If the expression is a known non-Result type, catch is a no-op — return value as-is.
         expr_type := _lget_type(ll, expr.temp)
         if expr_type == 12 || expr_type == 9 || expr_type == 8 {
             return LT{l: ll, temp: expr.temp}
@@ -4204,7 +4204,7 @@ fn _lower_fn(l: Lowerer) -> Lowerer {
         // Emit defers before return
         ll = _emit_defers(ll)
         // Implicit Ok wrapping for fallible functions (skip if already Ok/Err)
-        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+        if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 && !_lis_result(ll, result.temp) {
             ret_type := _lget_type(ll, result.temp)
             mut ok_slots := 2
             if ret_type == 12 { ok_slots = 3 }
@@ -5268,7 +5268,7 @@ fn _lower_return(l: Lowerer) -> Lowerer {
     ll = result.l
     ll = _emit_defers(ll)
     // Implicit Ok wrapping for fallible functions (skip if already Ok/Err)
-    if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 {
+    if ll.fn_error_type > 0 && _lget_type(ll, result.temp) != 200 && !_lis_result(ll, result.temp) {
         ret_type := _lget_type(ll, result.temp)
         mut ok_slots := 2
         if ret_type == 12 { ok_slots = 3 }
@@ -5807,7 +5807,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                     ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                     left = nt.temp
                 }
-            } else if (k == "==" || k == "!=") && _is_option_or_result_type(ll.store, left_type) {
+            } else if (k == "==" || k == "!=") && (_is_option_or_result_type(ll.store, left_type) || _lis_result(ll, left) || _lis_result(ll, right.temp)) {
                 // Option / Result equality — tag + payload compare.
                 a_tag := _lnew_temp(ll)
                 ll = a_tag.l
@@ -15280,11 +15280,23 @@ fn _lower_assert(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip assert
     result := _lower_expr(ll)
     ll = result.l
-    // If false, call exit(1)
+    // If false, print a FAIL: marker then call exit(1). Without the print, a
+    // failing assert is silent — test runners can't report which test died,
+    // and callers see an exit code with no indication of why.
     ok_lbl := _lnew_label(ll)
     ll = ok_lbl.l
     ll = _lemit(ll, new_inst(OpBranchTrue, 0, result.temp, ok_lbl.temp, "", 0))
-    // Assertion failed — exit
+    // Assertion failed — print FAIL marker then exit
+    mut fail_idx := mod_find_string(ll.module, "FAIL: assertion failed")
+    if fail_idx == 0 {
+        new_mod := mod_add_string(ll.module, "FAIL: assertion failed")
+        fail_idx = new_mod.string_constants.len() - 1
+        ll = _lset_mod(ll, new_mod)
+    }
+    fail_nt := _lnew_str_temp(ll)
+    ll = fail_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, fail_nt.temp, fail_idx, 22, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, fail_nt.temp, 2, "_aria_println_str", 0))
     nt := _lnew_temp(ll)
     ll = nt.l
     ll = _lemit(ll, new_inst(OpConst, nt.temp, 1, 0, "", 0))
