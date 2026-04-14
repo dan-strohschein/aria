@@ -9267,7 +9267,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    if method == "has" && obj_type_ch == 300 {
+    if (method == "has" || method == "contains_key" || method == "contains") && obj_type_ch == 300 {
         // map.has(key) -> bool
         key := _lower_expr(ll)
         ll = key.l
@@ -9275,6 +9275,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpMapContains, nt.temp, obj, key.temp, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -10831,10 +10832,11 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         ll = _lemit(ll, new_inst(OpMapGet, nt.temp, obj, arg1, "", 0))
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "has" && obj_type == 300 {
+    if (method == "has" || method == "contains_key" || method == "contains") && obj_type == 300 {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpMapContains, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
 
