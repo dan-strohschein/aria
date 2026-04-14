@@ -2279,6 +2279,207 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // Check if this is a module-qualified function call: mod.func(args)
         // If the receiver is an unresolved Ident and the method is a known function, emit a direct call
         recv_node := pool_get(ll.pool, node.c0)
+        // Type-qualified method with explicit type args: `Stack[i64].new(...)`.
+        // Parser built this as MethodCall(Index(Ident "Stack", Ident "i64"), "new").
+        // Rewrite to a call on the base type whose registered method is generic;
+        // resolve specialization via the type argument.
+        if expr_kind_name(recv_node.kind) == "Index" {
+            inner := pool_get(ll.pool, recv_node.c0)
+            idx_node := pool_get(ll.pool, recv_node.c1)
+            if expr_kind_name(inner.kind) == "Ident" && expr_kind_name(idx_node.kind) == "Ident" {
+                type_name := inner.s1
+                type_arg_name := idx_node.s1
+                base_method := type_name + "_" + method
+                bm_sig := reg_find_fn(ll.registry, base_method)
+                if bm_sig.name != "" {
+                    type_arg := _type_from_suffix(ll.store, ll.registry, type_arg_name)
+                    // Lower call args
+                    mut ta_arg_temps := [0]
+                    mut ta_arg_types := [0]
+                    mut tai := 0
+                    while tai < node.list_count {
+                        ah := pool_get(ll.pool, node.list_start + tai)
+                        ar := _lower_expr_node(ll, ah.c0)
+                        ll = ar.l
+                        ta_arg_temps = ta_arg_temps.append(ar.temp)
+                        ta_arg_types = ta_arg_types.append(_lget_type(ll, ar.temp))
+                        tai = tai + 1
+                    }
+                    // Resolve specialized name (even if params don't mention the
+                    // type var, we key the spec by type_arg so each instantiation
+                    // gets its own — harmless when body is identical).
+                    specialized_name := base_method + "_" + type_arg_name
+                    mut chosen_sig := bm_sig
+                    mut chosen_name := base_method
+                    // Always build the specialized struct return type so the
+                    // caller's temp is tagged correctly even when the callee
+                    // isn't generic (phantom/unused-type-param case).
+                    if type_arg > 0 && bm_sig.return_type > 0 && bm_sig.return_type < ll.store.types.len() {
+                        nrti := store_get(ll.store, bm_sig.return_type)
+                        if type_kind_name(nrti.kind) == "Named" {
+                            nbase := nrti.name
+                            n_sdef := reg_find_struct(ll.registry, nbase)
+                            if n_sdef.name != "" && n_sdef.generic_count > 0 {
+                                n_cand := nbase + "_" + type_arg_name
+                                mut n_spec_tid := _struct_type_id(ll.registry, n_cand)
+                                if n_spec_tid == 0 {
+                                    mut n_sp_fields := [FieldInfo{name: "", type_id: 0}]
+                                    mut n_rfi := 1
+                                    while n_rfi < n_sdef.fields.len() {
+                                        n_decl_ft := n_sdef.fields[n_rfi].type_id
+                                        mut n_chosen_ft := n_decl_ft
+                                        if n_decl_ft > 0 && n_decl_ft < ll.store.types.len() {
+                                            n_dk := type_kind_name(store_get(ll.store, n_decl_ft).kind)
+                                            if n_dk == "TypeVar" { n_chosen_ft = type_arg }
+                                            if n_dk == "Array" {
+                                                n_inner := store_get(ll.store, n_decl_ft).type_id
+                                                if n_inner > 0 && n_inner < ll.store.types.len() && type_kind_name(store_get(ll.store, n_inner).kind) == "TypeVar" {
+                                                    new_arr := TypeInfo{kind: store_get(ll.store, n_decl_ft).kind, name: store_get(ll.store, n_decl_ft).name,
+                                                                         type_id: type_arg, type_id2: 0, param_start: 0, param_count: 0}
+                                                    sar3 := store_add_canonical(ll.store, new_arr)
+                                                    ll = _lset_store(ll, sar3.store)
+                                                    n_chosen_ft = sar3.id
+                                                }
+                                            }
+                                        }
+                                        n_sp_fields = n_sp_fields.append(FieldInfo{name: n_sdef.fields[n_rfi].name, type_id: n_chosen_ft})
+                                        n_rfi = n_rfi + 1
+                                    }
+                                    n_sp_def := new_struct_def(n_cand, n_sp_fields, false, [""])
+                                    ll = _lset_reg(ll, reg_add_struct(ll.registry, n_sp_def))
+                                    n_spec_tid = _struct_type_id(ll.registry, n_cand)
+                                }
+                                if n_spec_tid > 0 {
+                                    // When bm_sig isn't generic, we still want
+                                    // the result tagged with the specialized
+                                    // struct id — keep bm_sig's name/params but
+                                    // swap return_type. Safe because name lookup
+                                    // still hits the same implementation.
+                                    chosen_sig = new_fn_sig(bm_sig.name, bm_sig.param_names, bm_sig.param_types, n_spec_tid, bm_sig.error_type)
+                                }
+                            }
+                        }
+                    }
+                    if fn_is_generic(bm_sig) && type_arg > 0 {
+                        existing := reg_find_fn(ll.registry, specialized_name)
+                        if existing.name != "" {
+                            chosen_sig = existing
+                            chosen_name = specialized_name
+                        } else {
+                            // Substitute TypeVar params with type_arg.
+                            mut ta_sp_pt := [0]
+                            mut ta_spi := 1
+                            while ta_spi < bm_sig.param_types.len() {
+                                mut ta_pt := bm_sig.param_types[ta_spi]
+                                if ta_pt > 0 && ta_pt < ll.store.types.len() {
+                                    if type_kind_name(store_get(ll.store, ta_pt).kind) == "TypeVar" { ta_pt = type_arg }
+                                }
+                                ta_sp_pt = ta_sp_pt.append(ta_pt)
+                                ta_spi = ta_spi + 1
+                            }
+                            // Return type: if Named(base) && base is a generic struct whose
+                            // specialized version exists or can be built, use it.
+                            mut ta_sp_ret := bm_sig.return_type
+                            if ta_sp_ret > 0 && ta_sp_ret < ll.store.types.len() {
+                                rti := store_get(ll.store, ta_sp_ret)
+                                if type_kind_name(rti.kind) == "Named" {
+                                    rbase := rti.name
+                                    r_sdef := reg_find_struct(ll.registry, rbase)
+                                    if r_sdef.name != "" && r_sdef.generic_count > 0 {
+                                        cand := rbase + "_" + type_arg_name
+                                        mut spec_tid := _struct_type_id(ll.registry, cand)
+                                        if spec_tid == 0 {
+                                            mut sp_fields := [FieldInfo{name: "", type_id: 0}]
+                                            mut rfi := 1
+                                            while rfi < r_sdef.fields.len() {
+                                                decl_ft := r_sdef.fields[rfi].type_id
+                                                mut chosen_ft := decl_ft
+                                                if decl_ft > 0 && decl_ft < ll.store.types.len() {
+                                                    dk := type_kind_name(store_get(ll.store, decl_ft).kind)
+                                                    if dk == "TypeVar" { chosen_ft = type_arg }
+                                                    // Array<TypeVar> -> Array<type_arg>
+                                                    if dk == "Array" {
+                                                        inner_id := store_get(ll.store, decl_ft).type_id
+                                                        if inner_id > 0 && inner_id < ll.store.types.len() {
+                                                            if type_kind_name(store_get(ll.store, inner_id).kind) == "TypeVar" {
+                                                                new_arr := TypeInfo{kind: store_get(ll.store, decl_ft).kind, name: store_get(ll.store, decl_ft).name,
+                                                                                     type_id: type_arg, type_id2: 0, param_start: 0, param_count: 0}
+                                                                sar2 := store_add_canonical(ll.store, new_arr)
+                                                                ll = _lset_store(ll, sar2.store)
+                                                                chosen_ft = sar2.id
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                sp_fields = sp_fields.append(FieldInfo{name: r_sdef.fields[rfi].name, type_id: chosen_ft})
+                                                rfi = rfi + 1
+                                            }
+                                            r_sp_def := new_struct_def(cand, sp_fields, false, [""])
+                                            ll = _lset_reg(ll, reg_add_struct(ll.registry, r_sp_def))
+                                            spec_tid = _struct_type_id(ll.registry, cand)
+                                        }
+                                        if spec_tid > 0 { ta_sp_ret = spec_tid }
+                                    }
+                                }
+                            }
+                            new_sig := new_fn_sig(specialized_name, bm_sig.param_names, ta_sp_pt, ta_sp_ret, bm_sig.error_type)
+                            ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                            ta_spec := MonoSpec{generic_name: base_method, specialized_name: specialized_name,
+                                                 type_arg_0: type_arg, type_arg_1: 0, type_arg_2: 0}
+                            ll = _lset_reg(ll, reg_add_mono(ll.registry, ta_spec))
+                            chosen_sig = new_sig
+                            chosen_name = specialized_name
+                        }
+                    }
+                    // Marshal args + emit call.
+                    mut ta_reg_count := 0
+                    mut tk := 1
+                    while tk < ta_arg_temps.len() {
+                        if ta_arg_types[tk] == 12 { ta_reg_count = ta_reg_count + 2 } else { ta_reg_count = ta_reg_count + 1 }
+                        tk = tk + 1
+                    }
+                    mut ta_fa := 0
+                    if ta_arg_temps.len() > 1 {
+                        ta_first_nt := _lnew_temp(ll)
+                        ll = ta_first_nt.l
+                        mut ta_ri := 1
+                        while ta_ri < ta_reg_count {
+                            ta_extra := _lnew_temp(ll)
+                            ll = ta_extra.l
+                            ta_ri = ta_ri + 1
+                        }
+                        mut ta_slot := 0
+                        tk = 1
+                        while tk < ta_arg_temps.len() {
+                            if ta_arg_types[tk] == 12 {
+                                ll = _lemit(ll, new_inst(OpStore, ta_first_nt.temp + ta_slot, ta_arg_temps[tk], 0, "", 0))
+                                ll = _lemit(ll, new_inst(OpStore, ta_first_nt.temp + ta_slot + 1, ta_arg_temps[tk] + 1, 0, "", 0))
+                                ta_slot = ta_slot + 2
+                            } else {
+                                ll = _lemit(ll, new_inst(OpStore, ta_first_nt.temp + ta_slot, ta_arg_temps[tk], 0, "", 0))
+                                ta_slot = ta_slot + 1
+                            }
+                            tk = tk + 1
+                        }
+                        ta_fa = ta_first_nt.temp
+                    }
+                    ta_rt := chosen_sig.return_type
+                    mut ta_nt_temp := 0
+                    if ta_rt == 12 {
+                        ta_nt := _lnew_str_temp(ll)
+                        ll = ta_nt.l
+                        ta_nt_temp = ta_nt.temp
+                    } else {
+                        ta_nt := _lnew_temp(ll)
+                        ll = ta_nt.l
+                        ta_nt_temp = ta_nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpCall, ta_nt_temp, ta_fa, ta_reg_count, chosen_name, ta_rt))
+                    if ta_rt > 0 { ll = _lset_type(ll, ta_nt_temp, ta_rt) }
+                    return LT{l: ll, temp: ta_nt_temp}
+                }
+            }
+        }
         if expr_kind_name(recv_node.kind) == "Ident" {
             recv_name := recv_node.s1
             recv_slot := _lenv_lookup(ll, recv_name)
@@ -11565,8 +11766,87 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
     // --- User-defined methods (qualified call: StructName_method) ---
     sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
     if sname.len() > 0 {
-        qualified := sname + "_" + method
-        sig := reg_find_fn(ll.registry, qualified)
+        mut qualified := sname + "_" + method
+        mut sig := reg_find_fn(ll.registry, qualified)
+        // If the receiver is a specialization (Stack_i64) but only the base
+        // method (Stack_push) is registered, fall back to the base, specialize
+        // it, and register a MonoSpec so the mono pass emits the body.
+        if sig.name == "" {
+            base_name := _base_generic_name(sname)
+            if base_name != sname {
+                base_method := base_name + "_" + method
+                base_sig := reg_find_fn(ll.registry, base_method)
+                if base_sig.name != "" {
+                    if fn_is_generic(base_sig) {
+                        specialized_method := base_method + sname.substring(base_name.len(), sname.len())
+                        existing := reg_find_fn(ll.registry, specialized_method)
+                        if existing.name != "" {
+                            qualified = specialized_method
+                            sig = existing
+                        } else {
+                            suffix := sname.substring(base_name.len() + 1, sname.len())
+                            concrete := _type_from_suffix(ll.store, ll.registry, suffix)
+                            // Substitute TypeVar params with concrete type; map
+                            // `self` to the specialized receiver type, and
+                            // Array<TypeVar> params to Array<concrete>.
+                            mut sp_pt := [0]
+                            mut spi := 1
+                            while spi < base_sig.param_types.len() {
+                                mut pt := base_sig.param_types[spi]
+                                if spi == 1 && base_sig.param_names.len() > 1 && base_sig.param_names[1] == "self" {
+                                    pt = obj_type
+                                } else if pt > 0 && pt < ll.store.types.len() {
+                                    pti := store_get(ll.store, pt)
+                                    ptk := type_kind_name(pti.kind)
+                                    if ptk == "TypeVar" { pt = concrete }
+                                    else if ptk == "Array" {
+                                        inner_id := pti.type_id
+                                        if inner_id > 0 && inner_id < ll.store.types.len() {
+                                            if type_kind_name(store_get(ll.store, inner_id).kind) == "TypeVar" {
+                                                new_arr := TypeInfo{kind: pti.kind, name: pti.name,
+                                                                     type_id: concrete, type_id2: 0,
+                                                                     param_start: 0, param_count: 0}
+                                                sar := store_add_canonical(ll.store, new_arr)
+                                                ll = _lset_store(ll, sar.store)
+                                                pt = sar.id
+                                            }
+                                        }
+                                    }
+                                }
+                                sp_pt = sp_pt.append(pt)
+                                spi = spi + 1
+                            }
+                            // Substitute return type: bare TypeVar -> concrete,
+                            // Named(base) with generic struct -> specialized.
+                            mut sp_ret := base_sig.return_type
+                            if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                                rti := store_get(ll.store, sp_ret)
+                                rk := type_kind_name(rti.kind)
+                                if rk == "TypeVar" {
+                                    if concrete > 0 { sp_ret = concrete }
+                                } else if rk == "Named" {
+                                    rname := rti.name
+                                    if rname == base_name {
+                                        sp_ret_tid := _struct_type_id(ll.registry, sname)
+                                        if sp_ret_tid > 0 { sp_ret = sp_ret_tid }
+                                    }
+                                }
+                            }
+                            new_sig := new_fn_sig(specialized_method, base_sig.param_names, sp_pt, sp_ret, base_sig.error_type)
+                            ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                            ms_spec := MonoSpec{generic_name: base_method, specialized_name: specialized_method,
+                                                 type_arg_0: concrete, type_arg_1: 0, type_arg_2: 0}
+                            ll = _lset_reg(ll, reg_add_mono(ll.registry, ms_spec))
+                            qualified = specialized_method
+                            sig = new_sig
+                        }
+                    } else {
+                        qualified = base_method
+                        sig = base_sig
+                    }
+                }
+            }
+        }
         if sig.name != "" {
             // Emit OpCall: pack obj + args into consecutive temps
             base_nt := _lnew_temp(ll)
