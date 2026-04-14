@@ -2486,9 +2486,74 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             mut qualified := method
             if obj_sname != "" { qualified = obj_sname + "_" + method }
             mut msig := reg_find_fn(ll.registry, qualified)
+            // If the receiver is a specialized generic struct (Pair_i64_str) but
+            // only the base generic method is registered (Pair_new), fall back to
+            // the base name so generic-dispatch can mono it.
+            if msig.name == "" && obj_sname != "" {
+                base := _base_generic_name(obj_sname)
+                if base != obj_sname {
+                    cand := base + "_" + method
+                    fallback := reg_find_fn(ll.registry, cand)
+                    if fallback.name != "" { msig = fallback; qualified = cand }
+                }
+            }
             if msig.name == "" {
                 msig = reg_find_fn(ll.registry, method)
                 qualified = method
+            }
+            // Generic instance method: resolve specialization like the static path.
+            if msig.name != "" && fn_is_generic(msig) && obj_type > 0 {
+                // Treat `self` as the first concrete arg for resolution.
+                mut marg_types := [0]
+                marg_types = marg_types.append(obj_type)
+                resolved := _resolve_generic_call_name(ll.store, ll.registry, qualified, msig, marg_types)
+                if resolved != qualified {
+                    sp_sig := reg_find_fn(ll.registry, resolved)
+                    if sp_sig.name != "" {
+                        qualified = resolved
+                        msig = sp_sig
+                    } else {
+                        // Substitute TypeVar params with obj_type (self) — for a
+                        // `fn value(self) -> T` in an impl[T] with T bound to the
+                        // struct's type param, this gives the right concrete type.
+                        mut sp_ptypes := [0]
+                        mut spi := 1
+                        while spi < msig.param_types.len() {
+                            mut pt := msig.param_types[spi]
+                            if pt > 0 && pt < ll.store.types.len() {
+                                ptik := type_kind_name(store_get(ll.store, pt).kind)
+                                if ptik == "TypeVar" { pt = obj_type }
+                            }
+                            sp_ptypes = sp_ptypes.append(pt)
+                            spi = spi + 1
+                        }
+                        mut sp_ret := msig.return_type
+                        if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                            rti := store_get(ll.store, sp_ret)
+                            rk := type_kind_name(rti.kind)
+                            if rk == "TypeVar" {
+                                // Bare TypeVar return: map to the struct's first type arg if known
+                                // via recv_info param. For Measurement[U] -> U, substitute from
+                                // specialized struct name suffix.
+                                if obj_sname != "" {
+                                    base := _base_generic_name(obj_sname)
+                                    if base != obj_sname {
+                                        suffix := obj_sname.substring(base.len() + 1, obj_sname.len())
+                                        concrete := _type_from_suffix(ll.store, ll.registry, suffix)
+                                        if concrete > 0 { sp_ret = concrete }
+                                    }
+                                }
+                            }
+                        }
+                        new_sig := new_fn_sig(resolved, msig.param_names, sp_ptypes, sp_ret, msig.error_type)
+                        ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                        spec := MonoSpec{generic_name: qualified, specialized_name: resolved,
+                                          type_arg_0: obj_type, type_arg_1: 0, type_arg_2: 0}
+                        ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
+                        qualified = resolved
+                        msig = new_sig
+                    }
+                }
             }
             if msig.name != "" {
                 mut nt_temp := 0
@@ -11112,6 +11177,33 @@ fn _field_index_any(reg: TypeRegistry, field_name: str) -> i64 {
         si = si + 1
     }
     0
+}
+
+// Given a specialized struct name like "Pair_i64_str", return "Pair" by
+// stripping the first `_` suffix whose base half names a registered struct.
+// For a non-specialized name, returns it unchanged.
+fn _base_generic_name(name: str) -> str {
+    mut i := 1
+    while i < name.len() {
+        if name.charAt(i) == "_" {
+            cand := name.substring(0, i)
+            // We can't check the registry here without a reference, so just
+            // return the first "_" prefix — callers that need validation
+            // should consult reg_find_struct separately.
+            return cand
+        }
+        i = i + 1
+    }
+    name
+}
+
+// Map a type-name suffix (e.g. "i64", "str", "Pair_i64") back to a type id.
+fn _type_from_suffix(store: TypeStore, reg: TypeRegistry, suffix: str) -> i64 {
+    if suffix == "i64" { return 1 }
+    if suffix == "f64" { return 9 }
+    if suffix == "bool" { return 8 }
+    if suffix == "str" { return 12 }
+    _struct_type_id(reg, suffix)
 }
 
 fn _struct_name_from_type(reg: TypeRegistry, type_id: i64) -> str {
