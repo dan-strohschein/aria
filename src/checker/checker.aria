@@ -1653,18 +1653,33 @@ fn _register_impl_fn_sig_ast_inner(c: Checker, impl_type: str, method_idx: i64, 
     // Effects and where clause — token walk not needed for impl methods
     // (effects on impl methods are rare; add if needed)
 
-    // Inherit impl's generic params when the method itself declares none. This
-    // makes `impl[A, B] Pair[A, B] { fn new(first: A, second: B) ... }` treat
-    // `new` as generic over A, B so the mono pass can specialize per call.
+    // Inherit impl's generic params when the method itself declares none AND
+    // at least one param actually references a TypeVar. An impl-method that
+    // doesn't use its type vars in params (e.g. `fn new(v: f64) ->
+    // Measurement[U]` where U only appears in the return) compiles to a
+    // single body usable for any U — treating it as generic would force
+    // monomorphization we can't always infer (the `U` may come from a caller
+    // annotation, not from arg types).
     mut eff_gp_count := gp_count
     mut eff_gp_0 := gp_0
     mut eff_gp_1 := gp_1
     mut eff_gp_2 := gp_2
     if gp_count == 0 && impl_gp_count > 0 {
-        eff_gp_count = impl_gp_count
-        eff_gp_0 = impl_gp_0
-        eff_gp_1 = impl_gp_1
-        eff_gp_2 = impl_gp_2
+        mut uses_tv := false
+        mut tvi := 1
+        while tvi < ptypes.len() {
+            pt := ptypes[tvi]
+            if pt > 0 && pt < cc.store.types.len() {
+                if type_kind_name(store_get(cc.store, pt).kind) == "TypeVar" { uses_tv = true }
+            }
+            tvi = tvi + 1
+        }
+        if uses_tv {
+            eff_gp_count = impl_gp_count
+            eff_gp_0 = impl_gp_0
+            eff_gp_1 = impl_gp_1
+            eff_gp_2 = impl_gp_2
+        }
     }
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if eff_gp_count > 0 {
