@@ -2266,6 +2266,13 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         subscript := _lower_expr_node(ll, node.c1)
         ll = subscript.l
         left_type := _lget_type(ll, container.temp)
+        // Map index-get: `m[k]`. Maps are type 300.
+        if left_type == 300 {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpMapGet, nt.temp, container.temp, subscript.temp, "", 0))
+            return LT{l: ll, temp: nt.temp}
+        }
         elem_type := _array_elem_type(ll.store, left_type)
         if elem_type == 12 {
             nt := _lnew_str_temp(ll)
@@ -3158,7 +3165,13 @@ fn _lower_assign_node(l: Lowerer, node: Expr) -> LT {
         ll = container.l
         subscript := _lower_expr_node(ll, lhs.c1)
         ll = subscript.l
-        ll = _lemit(ll, new_inst(OpArraySet, container.temp, subscript.temp, result.temp, "", 0))
+        // Map index-assign: `m[k] = v`. Maps are type 300.
+        ctype := _lget_type(ll, container.temp)
+        if ctype == 300 {
+            ll = _lemit(ll, new_inst(OpMapSet, 0, container.temp, subscript.temp, "", result.temp))
+        } else {
+            ll = _lemit(ll, new_inst(OpArraySet, container.temp, subscript.temp, result.temp, "", 0))
+        }
     }
     LT{l: ll, temp: result.temp}
 }
