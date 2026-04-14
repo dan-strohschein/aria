@@ -2010,7 +2010,11 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
 
     // For blanket impls, prefix method names with "_" so dispatch knows they're blanket
     mut reg_prefix := impl_type
-    if is_blanket { reg_prefix = "" }
+    // True blanket impls always take the form `impl[T: Trait] ThatTrait2 for T`
+    // (impl_trait is set). A generic struct impl `impl[A, B] Pair[A, B] { ... }`
+    // is *parameterized*, not blanket — its methods still need the type prefix so
+    // `Pair.new(...)` can resolve to `Pair_new`.
+    if is_blanket && impl_trait != "" { reg_prefix = "" }
     // AST path: iterate method children from the EkImplDecl node
     if node_idx > 0 {
         saved_impl_pos := cc.pos

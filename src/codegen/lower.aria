@@ -10957,7 +10957,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     if method == "clone" {
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        return LT{l: ll, temp: first_arg}
+        return LT{l: ll, temp: obj}
     }
     // Unknown method — skip args, return 0
     println("warning: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
@@ -16688,11 +16688,14 @@ fn _lower_mono_fn(l: Lowerer, spec: MonoSpec) -> Lowerer {
         while _lk(ll) == "IDENT" { ll = _ladv(ll) }
     }
 
+    // Skip optional newline+indent before `where` (common formatting).
+    ll = _lskip_nl(ll)
     // Skip where clause: where T: Trait + Trait2, U: Trait3
     if _lk(ll) == "where" {
         ll = _ladv(ll)  // skip where
         lb2 := "\{"
-        while _lk(ll) != "=" && _lk(ll) != lb2 && _lk(ll) != "EOF" && _lk(ll) != "NEWLINE" {
+        // Allow the where clause to span multiple lines up to the body brace.
+        while _lk(ll) != "=" && _lk(ll) != lb2 && _lk(ll) != "EOF" {
             ll = _ladv(ll)
         }
     }
