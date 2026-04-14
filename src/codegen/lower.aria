@@ -1440,13 +1440,27 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         }
 
 
-        // Binding: x := expr
+        // Binding: x := expr  or  (a, b) := tuple_expr
         if op == ":=" {
             lhs := pool_get(ll.pool, node.c0)
             result := _lower_expr_node(ll, node.c1)
             ll = result.l
-            if expr_kind_name(lhs.kind) == "Ident" {
+            lhs_kind := expr_kind_name(lhs.kind)
+            if lhs_kind == "Ident" {
                 ll = _lenv_add(ll, lhs.s1, result.temp)
+            } else if lhs_kind == "Tuple" {
+                // Destructure: FieldGet each tuple slot into a fresh env entry.
+                mut ti := 0
+                while ti < lhs.list_count {
+                    holder := pool_get(ll.pool, lhs.list_start + ti)
+                    elem := pool_get(ll.pool, holder.c0)
+                    nm := elem.s1
+                    et := _lnew_temp(ll)
+                    ll = et.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, et.temp, result.temp, ti, nm, 0))
+                    ll = _lenv_add(ll, nm, et.temp)
+                    ti = ti + 1
+                }
             }
             return LT{l: ll, temp: result.temp}
         }
@@ -1959,6 +1973,35 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // s1=name, b1=is_mut, c0=value
         result := _lower_expr_node(ll, node.c0)
         ll = result.l
+        // Tuple destructuring binding: s1="$tuple", s2=comma-separated names.
+        // RHS is a Tuple allocation — FieldGet per element into separate env
+        // slots so callers like `(lo, hi) := mm(...)` resolve `lo` and `hi`.
+        if node.s1 == "$tuple" {
+            mut names_src := node.s2
+            mut ti := 0
+            while ti < node.list_count {
+                // Parse next name (split on commas)
+                mut comma_pos := names_src.len()
+                mut ci := 0
+                while ci < names_src.len() {
+                    if names_src.charAt(ci) == "," { comma_pos = ci; ci = names_src.len() }
+                    ci = ci + 1
+                }
+                nm := names_src.substring(0, comma_pos)
+                if comma_pos + 1 < names_src.len() {
+                    names_src = names_src.substring(comma_pos + 1, names_src.len())
+                } else {
+                    names_src = ""
+                }
+                // FieldGet tuple[ti] into a fresh env slot.
+                et := _lnew_temp(ll)
+                ll = et.l
+                ll = _lemit(ll, new_inst(OpFieldGet, et.temp, result.temp, ti, nm, 0))
+                ll = _lenv_add(ll, nm, et.temp)
+                ti = ti + 1
+            }
+            return LT{l: ll, temp: result.temp}
+        }
         ll = _lenv_add(ll, node.s1, result.temp)
         return LT{l: ll, temp: result.temp}
     }

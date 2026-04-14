@@ -1770,11 +1770,21 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     if nk == "Binary" {
         // Special case: ":=" is a binding (Pratt parser handles it as infix)
         if node.s1 == ":=" {
-            // c0=lhs (name), c1=rhs (value) — resolve value first, then add binding
+            // c0=lhs (name or tuple), c1=rhs (value).
             lhs := pool_get(r.pool, node.c0)
             mut rr := _resolve_expr_node(r, node.c1)
-            if expr_kind_name(lhs.kind) == "Ident" {
+            lhs_kind := expr_kind_name(lhs.kind)
+            if lhs_kind == "Ident" {
                 rr = _add_sym_warn_shadow(rr, lhs.s1, SkVariable, lhs.span, false)
+            } else if lhs_kind == "Tuple" {
+                // Tuple destructuring: register each element name.
+                mut ti := 0
+                while ti < lhs.list_count {
+                    holder := pool_get(rr.pool, lhs.list_start + ti)
+                    elem := pool_get(rr.pool, holder.c0)
+                    rr = _add_sym_warn_shadow(rr, elem.s1, SkVariable, elem.span, false)
+                    ti = ti + 1
+                }
             }
             return rr
         }
@@ -1927,6 +1937,26 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
     if nk == "Binding" {
         // c0=value, s1=name, b1=is_mut
         mut rr := _resolve_expr_node(r, node.c0)
+        // Tuple destructuring: s1="$tuple", s2=comma-separated names
+        if node.s1 == "$tuple" {
+            mut names_src := node.s2
+            while names_src.len() > 0 {
+                mut comma_pos := names_src.len()
+                mut ci := 0
+                while ci < names_src.len() {
+                    if names_src.charAt(ci) == "," { comma_pos = ci; ci = names_src.len() }
+                    ci = ci + 1
+                }
+                nm := names_src.substring(0, comma_pos)
+                if comma_pos + 1 < names_src.len() {
+                    names_src = names_src.substring(comma_pos + 1, names_src.len())
+                } else {
+                    names_src = ""
+                }
+                rr = _add_sym_warn_shadow(rr, nm, SkVariable, node.span, node.b1)
+            }
+            return rr
+        }
         rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, node.b1)
         return rr
     }

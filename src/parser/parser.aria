@@ -1662,6 +1662,22 @@ fn _parse_stmt(p: Parser) -> PR {
         val_idx := _pidx(val.p)
         pp = _padd(val.p, val.e)
         pp = _skip_nl(pp)
+        // Tuple-destructuring binding: (a, b, ...) := rhs
+        // Encoded as EkBinding with s1="$tuple", s2 = comma-separated names,
+        // list_count = element count. Lowerer expands into FieldGet per elem.
+        if expr_kind_name(result.e.kind) == "Tuple" {
+            mut tup_names := ""
+            mut ti := 0
+            while ti < result.e.list_count {
+                holder := pool_get(pp.pool, result.e.list_start + ti)
+                elem := pool_get(pp.pool, holder.c0)
+                if ti > 0 { tup_names = tup_names + "," }
+                tup_names = tup_names + elem.s1
+                ti = ti + 1
+            }
+            return PR{p: pp, e: Expr{kind: EkBinding, s1: "$tuple", s2: tup_names, b1: false, b2: false,
+                                      c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: result.e.list_count, span: result.e.span}}
+        }
         return PR{p: pp, e: Expr{kind: EkBinding, s1: result.e.s1, s2: "", b1: false, b2: false,
                                   c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: result.e.span}}
     }
