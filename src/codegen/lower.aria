@@ -2146,11 +2146,40 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             }
             return _lower_method_with_args(ll, recv.temp, method, arg1_r.temp, arg2, node.list_count)
         }
-        // Zero-arg methods: token-walking fallback
-        mut tp := _find_tok_pos(ll, node.span.offset)
-        while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
-        ll = _lset_pos(ll, tp)
-        return _lower_method_call(ll, recv.temp, method)
+        // Zero-arg methods: emit the call directly from the AST so we don't
+        // drift into the callee's body when the token cursor isn't already
+        // positioned at the call site's `(`.
+        {
+            obj_type := _lget_type(ll, recv.temp)
+            obj_sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
+            mut qualified := method
+            if obj_sname != "" { qualified = obj_sname + "_" + method }
+            mut msig := reg_find_fn(ll.registry, qualified)
+            if msig.name == "" {
+                msig = reg_find_fn(ll.registry, method)
+                qualified = method
+            }
+            if msig.name != "" {
+                mut nt_temp := 0
+                if msig.return_type == 12 {
+                    nt := _lnew_str_temp(ll)
+                    ll = nt.l
+                    nt_temp = nt.temp
+                } else {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    nt_temp = nt.temp
+                }
+                ll = _lemit(ll, new_inst(OpCall, nt_temp, recv.temp, 1, qualified, 0))
+                if msig.return_type > 0 { ll = _lset_type(ll, nt_temp, msig.return_type) }
+                return LT{l: ll, temp: nt_temp}
+            }
+            // Fall back to token walker for builtin methods (len, sqrt, etc.)
+            mut tp := _find_tok_pos(ll, node.span.offset)
+            while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
+            ll = _lset_pos(ll, tp)
+            return _lower_method_call(ll, recv.temp, method)
+        }
     }
 
     // --- FieldAccess ---
@@ -10643,21 +10672,51 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
         if _lk(ll) == "IDENT" {
             fname := _lcur(ll).text
             ll = _ladv(ll)
+            mut have_val := false
+            mut fval_temp := 0
+            mut fval_type := 0
             if _lk(ll) == ":" {
                 ll = _ladv(ll)
                 val := _lower_expr(ll)
                 ll = val.l
+                fval_temp = val.temp
+                fval_type = _lget_type(ll, val.temp)
+                have_val = true
+            } else {
+                // Shorthand: `{ radius }` treats `radius` as the same-named
+                // local/parameter in the enclosing scope.
+                slot := _lenv_lookup(ll, fname)
+                if slot >= 0 {
+                    slot_type := _lget_type(ll, slot)
+                    if slot_type == 12 {
+                        s_nt := _lnew_str_temp(ll)
+                        ll = s_nt.l
+                        ll = _lemit(ll, new_inst(OpLoad, s_nt.temp, slot, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpLoad, s_nt.temp + 1, slot + 1, 0, "", 0))
+                        ll = _lset_type(ll, s_nt.temp, 12)
+                        fval_temp = s_nt.temp
+                        fval_type = 12
+                    } else {
+                        s_nt := _lnew_temp(ll)
+                        ll = s_nt.l
+                        ll = _lemit(ll, new_inst(OpLoad, s_nt.temp, slot, 0, "", 0))
+                        if slot_type > 0 { ll = _lset_type(ll, s_nt.temp, slot_type) }
+                        fval_temp = s_nt.temp
+                        fval_type = slot_type
+                    }
+                    have_val = true
+                }
+            }
+            if have_val {
                 fidx := _field_index(ll.registry, name, fname)
-                val_type := _lget_type(ll, val.temp)
                 ft := _field_type_id(ll, name, fname)
-                if val_type == 12 || ft == 12 {
-                    // String field: store both ptr and len to consecutive field slots
+                if fval_type == 12 || ft == 12 {
                     fidx_len := fidx + 1
-                    val_len := val.temp + 1
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, fidx, fname, 0))
+                    val_len := fval_temp + 1
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
                     ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val_len, fidx_len, fname, 0))
                 } else {
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, fidx, fname, 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
                 }
             }
         } else {
