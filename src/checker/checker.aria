@@ -317,6 +317,16 @@ fn _parse_type_ann(c: Checker) -> CE {
             return CE{c: cc, type_id: TY_UNKNOWN}
         }
         mut cc := _cadv(c)
+        // Module-qualified name: net.Request — consume trailing `.Ident`s and
+        // treat the full path as the type name for resolution. Also ensures
+        // callers (like fn-type parsing) advance past the dot so the outer
+        // `while != ")"` loop terminates.
+        mut qname := name
+        while _ck2(cc) == "." && cc.pos + 1 < cc.tokens.len() && cc.tokens[cc.pos + 1].name == "IDENT" {
+            cc = _cadv(cc)  // skip .
+            qname = qname + "." + _ccur(cc).text
+            cc = _cadv(cc)  // skip ident
+        }
         // Check for qualified name: Type::Assoc (associated type resolution)
         if _ck2(cc) == ":" && cc.pos + 1 < cc.tokens.len() && cc.tokens[cc.pos + 1].name == ":" {
             cc = _cadv(_cadv(cc))  // skip ::
@@ -393,7 +403,7 @@ fn _parse_type_ann(c: Checker) -> CE {
         // Check for optional T?
         if _ck2(cc) == "?" {
             cc = _cadv(cc)
-            inner := resolve_type_name(cc.store, name)
+            inner := resolve_type_name(cc.store, qname)
             sar := store_add_canonical(cc.store, mk_optional_type(inner))
             cc = _cset_store(cc, sar.store)
             return CE{c: cc, type_id: sar.id}
@@ -401,14 +411,14 @@ fn _parse_type_ann(c: Checker) -> CE {
         // Check for result T ! E
         if _ck2(cc) == "!" {
             cc = _cadv(cc)
-            ok_type := resolve_type_name(cc.store, name)
+            ok_type := resolve_type_name(cc.store, qname)
             err_result := _parse_type_ann(cc)
             cc = err_result.c
             sar := store_add_canonical(cc.store, mk_result_type(ok_type, err_result.type_id))
             cc = _cset_store(cc, sar.store)
             return CE{c: cc, type_id: sar.id}
         }
-        tid := resolve_type_name(cc.store, name)
+        tid := resolve_type_name(cc.store, qname)
         return CE{c: cc, type_id: tid}
     }
     if k == "[" {
