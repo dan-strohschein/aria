@@ -2305,6 +2305,88 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         marg_types = marg_types.append(_lget_type(ll, arg_r.temp))
                         mai = mai + 1
                     }
+                    // If this is a generic impl method (e.g. Pair_new with T, U
+                    // inherited from `impl[A, B] Pair[A, B]`), resolve the call
+                    // to its specialization by suffixing the arg types so the
+                    // mono pass emits Pair_new_i64_str rather than leaving the
+                    // generic symbol undefined at link time.
+                    if fn_is_generic(msig) {
+                        resolved_name := _resolve_generic_call_name(ll.store, ll.registry, mcall_name, msig, marg_types)
+                        if resolved_name != mcall_name {
+                            sp_sig := reg_find_fn(ll.registry, resolved_name)
+                            if sp_sig.name != "" {
+                                mcall_name = resolved_name
+                                msig = sp_sig
+                            } else {
+                                // Register a specialization so _lower_mono_pass
+                                // can emit its body later.
+                                mut sp_ptypes := [0]
+                                mut spi := 1
+                                while spi < msig.param_types.len() {
+                                    mut pt := msig.param_types[spi]
+                                    if spi < marg_types.len() && marg_types[spi] > 0 {
+                                        if pt > 0 && pt < ll.store.types.len() {
+                                            ptik := type_kind_name(store_get(ll.store, pt).kind)
+                                            if ptik == "TypeVar" { pt = marg_types[spi] }
+                                        }
+                                    }
+                                    sp_ptypes = sp_ptypes.append(pt)
+                                    spi = spi + 1
+                                }
+                                // If the generic return type names a struct whose fields are
+                                // TypeVars, preemptively register a specialized struct def
+                                // (Pair_i64_str) so downstream field access uses the correct
+                                // slot layout when the call result is destructured.
+                                mut sp_ret := msig.return_type
+                                if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                                    rti := store_get(ll.store, sp_ret)
+                                    if type_kind_name(rti.kind) == "Named" {
+                                        base_name := rti.name
+                                        ret_sdef := reg_find_struct(ll.registry, base_name)
+                                        if ret_sdef.name != "" && ret_sdef.generic_count > 0 {
+                                            mut cand_ret := base_name
+                                            mut ri := 1
+                                            while ri < marg_types.len() {
+                                                cand_ret = cand_ret + "_" + _type_name_suffix_l(ll.store, ll.registry, marg_types[ri])
+                                                ri = ri + 1
+                                            }
+                                            mut spec_ret_tid := _struct_type_id(ll.registry, cand_ret)
+                                            if spec_ret_tid == 0 {
+                                                // Build specialized StructDef. Field types come from
+                                                // marg_types in struct-def field order.
+                                                mut ret_sp_fields := [FieldInfo{name: "", type_id: 0}]
+                                                mut ret_fi := 1
+                                                while ret_fi < ret_sdef.fields.len() {
+                                                    decl_ft := ret_sdef.fields[ret_fi].type_id
+                                                    mut chosen := decl_ft
+                                                    if ret_fi < marg_types.len() && marg_types[ret_fi] > 0 {
+                                                        if decl_ft > 0 && decl_ft < ll.store.types.len() {
+                                                            dk := type_kind_name(store_get(ll.store, decl_ft).kind)
+                                                            if dk == "TypeVar" { chosen = marg_types[ret_fi] }
+                                                        }
+                                                    }
+                                                    ret_sp_fields = ret_sp_fields.append(FieldInfo{name: ret_sdef.fields[ret_fi].name, type_id: chosen})
+                                                    ret_fi = ret_fi + 1
+                                                }
+                                                ret_sp_def := new_struct_def(cand_ret, ret_sp_fields, false, [""])
+                                                ll = _lset_reg(ll, reg_add_struct(ll.registry, ret_sp_def))
+                                                spec_ret_tid = _struct_type_id(ll.registry, cand_ret)
+                                            }
+                                            if spec_ret_tid > 0 { sp_ret = spec_ret_tid }
+                                        }
+                                    }
+                                }
+                                new_sig := new_fn_sig(resolved_name, msig.param_names, sp_ptypes, sp_ret, msig.error_type)
+                                ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                                first_concrete := 0
+                                spec := MonoSpec{generic_name: mcall_name, specialized_name: resolved_name,
+                                                 type_arg_0: first_concrete, type_arg_1: 0, type_arg_2: 0}
+                                ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
+                                mcall_name = resolved_name
+                                msig = new_sig
+                            }
+                        }
+                    }
                     // Count register args (strings take 2)
                     mut mreg_count := 0
                     mai = 1
@@ -11431,14 +11513,13 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
     mut ll := _ladv(l)  // skip {
     ll = _lskip_nl(ll)
 
-    field_count := _struct_field_count(ll.registry, name)
-    nt := _lnew_temp(ll)
-    ll = nt.l
-    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, field_count, 0, name, 0))
-    // Set struct type on result temp
-    st_id := _struct_type_id(ll.registry, name)
-    if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
-
+    // First pass: collect field name/value/type in source order so we can size
+    // the alloc correctly (generic struct defs still carry TypeVar field
+    // types, so counting declared fields isn't enough — a str value needs 2
+    // slots even when the declared field type is a TypeVar).
+    mut fnames := [""]
+    mut fvals := [0]
+    mut ftypes := [0]
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         if _lk(ll) == "IDENT" {
             fname := _lcur(ll).text
@@ -11454,8 +11535,6 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
                 fval_type = _lget_type(ll, val.temp)
                 have_val = true
             } else {
-                // Shorthand: `{ radius }` treats `radius` as the same-named
-                // local/parameter in the enclosing scope.
                 slot := _lenv_lookup(ll, fname)
                 if slot >= 0 {
                     slot_type := _lget_type(ll, slot)
@@ -11479,16 +11558,9 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
                 }
             }
             if have_val {
-                fidx := _field_index(ll.registry, name, fname)
-                ft := _field_type_id(ll, name, fname)
-                if fval_type == 12 || ft == 12 {
-                    fidx_len := fidx + 1
-                    val_len := fval_temp + 1
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val_len, fidx_len, fname, 0))
-                } else {
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
-                }
+                fnames = fnames.append(fname)
+                fvals = fvals.append(fval_temp)
+                ftypes = ftypes.append(fval_type)
             }
         } else {
             ll = _ladv(ll)
@@ -11500,6 +11572,102 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
         }
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
+
+    // Pick a layout: for generic structs with concrete values, register (or
+    // reuse) a specialized def like `Pair_i64_str` so FieldAccess later uses
+    // the correct slot offsets for str payloads.
+    mut layout_name := name
+    sdef := reg_find_struct(ll.registry, name)
+    if sdef.name != "" && sdef.generic_count > 0 {
+        mut has_concrete := false
+        mut ci := 1
+        while ci < ftypes.len() {
+            mut di := 1
+            while di < sdef.fields.len() {
+                if sdef.fields[di].name == fnames[ci] {
+                    decl_ft := sdef.fields[di].type_id
+                    if decl_ft > 0 && decl_ft < ll.store.types.len() {
+                        dk := type_kind_name(store_get(ll.store, decl_ft).kind)
+                        if dk == "TypeVar" && ftypes[ci] > 0 { has_concrete = true }
+                    }
+                    di = sdef.fields.len()
+                }
+                di = di + 1
+            }
+            ci = ci + 1
+        }
+        if has_concrete {
+            mut spec_name := name
+            mut si := 1
+            while si < sdef.fields.len() {
+                decl_name := sdef.fields[si].name
+                decl_ft := sdef.fields[si].type_id
+                mut chosen := decl_ft
+                mut li := 1
+                while li < fnames.len() {
+                    if fnames[li] == decl_name && ftypes[li] > 0 { chosen = ftypes[li] }
+                    li = li + 1
+                }
+                spec_name = spec_name + "_" + _type_name_suffix_l(ll.store, ll.registry, chosen)
+                si = si + 1
+            }
+            if _struct_type_id(ll.registry, spec_name) == 0 {
+                mut sp_fields := [FieldInfo{name: "", type_id: 0}]
+                mut fi2 := 1
+                while fi2 < sdef.fields.len() {
+                    decl_name := sdef.fields[fi2].name
+                    mut chosen := sdef.fields[fi2].type_id
+                    mut li2 := 1
+                    while li2 < fnames.len() {
+                        if fnames[li2] == decl_name && ftypes[li2] > 0 { chosen = ftypes[li2] }
+                        li2 = li2 + 1
+                    }
+                    sp_fields = sp_fields.append(FieldInfo{name: decl_name, type_id: chosen})
+                    fi2 = fi2 + 1
+                }
+                sp_def := new_struct_def(spec_name, sp_fields, false, [""])
+                ll = _lset_reg(ll, reg_add_struct(ll.registry, sp_def))
+            }
+            layout_name = spec_name
+        }
+    }
+
+    // Allocate: str fields each take 2 slots.
+    layout_def := reg_find_struct(ll.registry, layout_name)
+    mut alloc_sz := 0
+    if layout_def.name != "" {
+        mut asi := 1
+        while asi < layout_def.fields.len() {
+            if layout_def.fields[asi].type_id == 12 { alloc_sz = alloc_sz + 2 } else { alloc_sz = alloc_sz + 1 }
+            asi = asi + 1
+        }
+    } else {
+        alloc_sz = _struct_field_count(ll.registry, name)
+    }
+    nt := _lnew_temp(ll)
+    ll = nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, layout_name, 0))
+    st_id := _struct_type_id(ll.registry, layout_name)
+    if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+
+    // Second pass: emit field writes using the chosen layout's slot offsets.
+    mut wi := 1
+    while wi < fnames.len() {
+        fname := fnames[wi]
+        fval_temp := fvals[wi]
+        fval_type := ftypes[wi]
+        fidx := _field_index(ll.registry, layout_name, fname)
+        ft := _field_type_id(ll, layout_name, fname)
+        if fval_type == 12 || ft == 12 {
+            fidx_len := fidx + 1
+            val_len := fval_temp + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val_len, fidx_len, fname, 0))
+        } else {
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, fval_temp, fidx, fname, 0))
+        }
+        wi = wi + 1
+    }
     LT{l: ll, temp: nt.temp}
 }
 
@@ -16673,12 +16841,20 @@ fn _lower_mono_fn(l: Lowerer, spec: MonoSpec) -> Lowerer {
         if _lk(ll) == ")" { ll = _ladv(ll) }
     }
 
-    // Skip return type annotation
+    // Skip return type annotation. May include nested brackets like
+    // `-> Pair[A, B]`, so we track bracket depth and also accept `,` when
+    // inside them.
     if _lk(ll) == "->" {
         ll = _ladv(ll)
-        // Skip type tokens
-        while _lk(ll) == "IDENT" || _lk(ll) == "[" || _lk(ll) == "]" || _lk(ll) == "!" || _lk(ll) == "?" {
-            ll = _ladv(ll)
+        mut rt_depth := 0
+        mut keep := true
+        while keep {
+            rk := _lk(ll)
+            if rk == "[" { rt_depth = rt_depth + 1; ll = _ladv(ll) }
+            else if rk == "]" { rt_depth = rt_depth - 1; ll = _ladv(ll) }
+            else if rk == "IDENT" || rk == "!" || rk == "?" { ll = _ladv(ll) }
+            else if rk == "," && rt_depth > 0 { ll = _ladv(ll) }
+            else { keep = false }
         }
     }
 
