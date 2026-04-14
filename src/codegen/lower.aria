@@ -493,6 +493,21 @@ fn _lower_struct_eq(l: Lowerer, a: i64, b: i64, sname: str, result_temp: i64) ->
 // True when tid refers to an Option/Result — either the sentinel ids 200/201
 // produced by Ok/Err/Some/None constructors, or a store-based TyOptional /
 // TyResult type. Tags at slot 0 allow structural equality.
+// Memory slot index for element `elem_idx` in a tuple, accounting for str
+// elements occupying 2 slots (ptr + len). Falls back to elem_idx when the
+// tuple type is unknown.
+fn _tuple_slot(store: TypeStore, tuple_id: i64, elem_idx: i64) -> i64 {
+    if tuple_id <= 0 { return elem_idx }
+    mut slot := 0
+    mut i := 0
+    while i < elem_idx {
+        t := tuple_elem_type(store, tuple_id, i)
+        if t == 12 { slot = slot + 2 } else { slot = slot + 1 }
+        i = i + 1
+    }
+    slot
+}
+
 fn _is_option_or_result_type(store: TypeStore, tid: i64) -> bool {
     if tid == 200 || tid == 201 { return true }
     if tid <= 16 { return false }
@@ -2296,6 +2311,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // Look up element type from the receiver's TyTuple, if known.
             ft = tuple_elem_type(ll.store, left_type, fidx)
             if ft <= 0 { ft = 1 }
+            // Adjust to memory slot so str elements (2 slots) are handled.
+            fidx = _tuple_slot(ll.store, left_type, fidx)
         } else if sname != "" {
             fidx = _field_index(ll.registry, sname, field)
             ft = _field_type_id(ll, sname, field)
@@ -2649,17 +2666,46 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Tuple ---
 
     if nk == "Tuple" {
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpAlloc, nt.temp, node.list_count, 0, "_Tuple", 0))
+        // Lower all elements first to learn their types, then allocate the
+        // tuple with proper slot layout: str elements occupy 2 slots
+        // (ptr + len) to match the fat-pointer access pattern used by
+        // tuple field access (.0, .1, ...).
+        mut elem_temps := [0]
+        mut elem_types := [0]
+        mut total_slots := 0
         mut ti := 0
         while ti < node.list_count {
             idx_node := pool_get(ll.pool, node.list_start + ti)
             elem := _lower_expr_node(ll, idx_node.c0)
             ll = elem.l
-            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, elem.temp, ti, "", 0))
+            et := _lget_type(ll, elem.temp)
+            elem_temps = elem_temps.append(elem.temp)
+            elem_types = elem_types.append(et)
+            if et == 12 { total_slots = total_slots + 2 } else { total_slots = total_slots + 1 }
             ti = ti + 1
         }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpAlloc, nt.temp, total_slots, 0, "_Tuple", 0))
+        mut slot := 0
+        mut ei := 1
+        mut ids_csv := ""
+        while ei < elem_temps.len() {
+            et := elem_types[ei]
+            etemp := elem_temps[ei]
+            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, etemp, slot, "", 0))
+            if et == 12 {
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, etemp + 1, slot + 1, "", 0))
+                slot = slot + 2
+            } else {
+                slot = slot + 1
+            }
+            if ei == 1 { ids_csv = i2s(et) } else { ids_csv = ids_csv + "," + i2s(et) }
+            ei = ei + 1
+        }
+        sar := store_add_canonical(ll.store, mk_tuple_type(ids_csv, elem_temps.len() - 1))
+        ll = _lset_store(ll, sar.store)
+        ll = _lset_type(ll, nt.temp, sar.id)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -2716,6 +2762,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // Skip to ( after function name
             if _lk(ll) == "IDENT" { ll = _ladv(ll) }
             if _lk(ll) == "(" {
+                mr := _lower_method_call(ll, left.temp, fname)
+                ll = mr.l
+                return LT{l: ll, temp: mr.temp}
+            }
+            // Zero-arg methods (reverse(), collect(), collect_map()) can
+            // be dispatched without a valid token cursor — _lower_method_call
+            // is tolerant of missing parens in 0-arg branches.
+            if right_node.list_count == 0 {
                 mr := _lower_method_call(ll, left.temp, fname)
                 ll = mr.l
                 return LT{l: ll, temp: mr.temp}
@@ -6211,20 +6265,20 @@ fn _lower_expr(l: Lowerer) -> LT {
                 fidx := _parse_int_literal(field_idx_str)
                 left_tid := _lget_type(ll, left)
                 ft := tuple_elem_type(ll.store, left_tid, fidx)
+                slot := _tuple_slot(ll.store, left_tid, fidx)
                 if ft == 12 {
                     // Tuple element is a string — load both ptr and len.
                     nt := _lnew_str_temp(ll)
                     ll = nt.l
                     nt_len := nt.temp + 1
-                    fidx_len := fidx + 1
-                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
-                    ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field_idx_str, 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, slot, field_idx_str, 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, slot + 1, field_idx_str, 0))
                     ll = _lset_type(ll, nt.temp, 12)
                     left = nt.temp
                 } else {
                     nt := _lnew_temp(ll)
                     ll = nt.l
-                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, slot, field_idx_str, 0))
                     if ft > 0 { ll = _lset_type(ll, nt.temp, ft) }
                     left = nt.temp
                 }
@@ -8809,24 +8863,52 @@ fn _lower_primary(l: Lowerer) -> LT {
         ll = result.l
         // Check for tuple: comma means tuple literal
         if _lk(ll) == "," {
-            // Tuple: allocate struct, store each element
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            mut count := 1
-            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, 8, 0, "_Tuple", 0))
-            ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, result.temp, 0, "0", 0))
+            // Gather all elements + types first so we can allocate a tuple
+            // with the correct total slot count (str = ptr + len = 2 slots).
+            mut t_temps := [result.temp]
+            mut t_types := [_lget_type(ll, result.temp)]
             while _lk(ll) == "," && _lk(ll) != "EOF" {
                 ll = _ladv(ll)
                 ll = _lskip_nl(ll)
                 if _lk(ll) != ")" {
                     elem := _lower_expr(ll)
                     ll = elem.l
-                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, elem.temp, count, i2s(count), 0))
-                    count = count + 1
+                    t_temps = t_temps.append(elem.temp)
+                    t_types = t_types.append(_lget_type(ll, elem.temp))
                 }
                 ll = _lskip_nl(ll)
             }
             if _lk(ll) == ")" { ll = _ladv(ll) }
+            mut total_slots := 0
+            mut ci := 0
+            while ci < t_types.len() {
+                if t_types[ci] == 12 { total_slots = total_slots + 2 } else { total_slots = total_slots + 1 }
+                ci = ci + 1
+            }
+            if total_slots < 1 { total_slots = 1 }
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpAlloc, nt.temp, total_slots, 0, "_Tuple", 0))
+            mut slot := 0
+            mut ei := 0
+            mut ids_csv := ""
+            while ei < t_temps.len() {
+                et := t_types[ei]
+                etemp := t_temps[ei]
+                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, etemp, slot, i2s(slot), 0))
+                if et == 12 {
+                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, etemp + 1, slot + 1, i2s(slot + 1), 0))
+                    slot = slot + 2
+                } else {
+                    slot = slot + 1
+                }
+                if ei == 0 { ids_csv = i2s(et) } else { ids_csv = ids_csv + "," + i2s(et) }
+                ei = ei + 1
+            }
+            // Register a tuple type so .N access knows element layout.
+            sar := store_add_canonical(ll.store, mk_tuple_type(ids_csv, t_temps.len()))
+            ll = _lset_store(ll, sar.store)
+            ll = _lset_type(ll, nt.temp, sar.id)
             return LT{l: ll, temp: nt.temp}
         }
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
@@ -9493,6 +9575,74 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     if method == "collect" {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         return LT{l: ll, temp: obj}
+    }
+
+    // collect_map() — turn [(K, V)] into a {K: V} map.
+    // Assumes K is str (fat ptr slots 0/1) and V is a scalar at slot 2.
+    // Sufficient for the common `pairs |> collect_map()` pattern.
+    if method == "collect_map" {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        obj_type := _lget_type(ll, obj)
+        elem_type := _array_elem_type(ll.store, obj_type)
+        // Determine key slot layout: if tuple[0] is str, key spans slots 0+1 and value is at slot 2.
+        // Otherwise treat key as slot 0, value as slot 1.
+        mut key_is_str := true
+        if elem_type > 0 {
+            ket := tuple_elem_type(ll.store, elem_type, 0)
+            if ket != 12 { key_is_str = false }
+        }
+        map_nt := _lnew_temp(ll)
+        ll = map_nt.l
+        cap_nt := _lnew_temp(ll)
+        ll = cap_nt.l
+        ll = _lemit(ll, new_inst(OpConst, cap_nt.temp, 16, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpMapNew, map_nt.temp, cap_nt.temp, 0, "", 0))
+        ll = _lset_type(ll, map_nt.temp, 300)
+        len_nt := _lnew_temp(ll)
+        ll = len_nt.l
+        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
+        cm_idx := _lnew_temp(ll)
+        ll = cm_idx.l
+        ll = _lemit(ll, new_inst(OpConst, cm_idx.temp, 0, 0, "", 0))
+        cm_loop := _lnew_label(ll)
+        ll = cm_loop.l
+        cm_end := _lnew_label(ll)
+        ll = cm_end.l
+        ll = _lemit(ll, new_inst(OpLabel, 0, cm_loop.temp, 0, "", 0))
+        cm_cmp := _lnew_temp(ll)
+        ll = cm_cmp.l
+        ll = _lemit(ll, new_inst(OpLt, cm_cmp.temp, cm_idx.temp, len_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cm_cmp.temp, cm_end.temp, "", 0))
+        // pair = arr[i]
+        pair_nt := _lnew_temp(ll)
+        ll = pair_nt.l
+        ll = _lemit(ll, new_inst(OpArrayGet, pair_nt.temp, obj, cm_idx.temp, "", 0))
+        // Extract key + value. Fall back to slot 2 when key is str (the
+        // common case) since _tuple_slot returns elem_idx for unknown
+        // tuple types, which would collide with the str len slot.
+        mut val_slot := _tuple_slot(ll.store, elem_type, 1)
+        key_nt := _lnew_temp(ll)
+        ll = key_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, key_nt.temp, pair_nt.temp, 0, "_0", 0))
+        if key_is_str {
+            ll = _lset_type(ll, key_nt.temp, 12)
+            klen_nt := _lnew_temp(ll)
+            ll = klen_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, klen_nt.temp, pair_nt.temp, 1, "_0_len", 0))
+            if val_slot < 2 { val_slot = 2 }
+        }
+        val_nt := _lnew_temp(ll)
+        ll = val_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, pair_nt.temp, val_slot, "_1", 0))
+        ll = _lemit(ll, new_inst(OpMapSet, 0, map_nt.temp, key_nt.temp, "", val_nt.temp))
+        // i = i + 1
+        cm_one := _lnew_temp(ll)
+        ll = cm_one.l
+        ll = _lemit(ll, new_inst(OpConst, cm_one.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpAdd, cm_idx.temp, cm_idx.temp, cm_one.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, cm_loop.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, cm_end.temp, 0, "", 0))
+        return LT{l: ll, temp: map_nt.temp}
     }
 
     // count() — return array length
