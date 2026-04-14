@@ -2274,7 +2274,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         }
         if is_tuple_field {
             fidx = _parse_int_literal(field)
-            ft = 1  // tuple fields default to i64; type system can refine later
+            // Look up element type from the receiver's TyTuple, if known.
+            ft = tuple_elem_type(ll.store, left_type, fidx)
+            if ft <= 0 { ft = 1 }
         } else if sname != "" {
             fidx = _field_index(ll.registry, sname, field)
             ft = _field_type_id(ll, sname, field)
@@ -3668,10 +3670,50 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
                 sp_ptypes = sp_ptypes.append(pt)
                 spi = spi + 1
             }
+            // Compute the actual TypeVar->concrete mapping by unwrapping
+            // the first param type in lockstep with arg_types[1].
+            mut actual_concrete := first_concrete
+            if sig.param_types.len() > 1 {
+                p0 := sig.param_types[1]
+                mut pu := p0
+                mut au := first_concrete
+                mut guard := 0
+                while guard < 4 && pu > 0 && au > 0 && pu < ll.store.types.len() {
+                    puk := type_kind_name(store_get(ll.store, pu).kind)
+                    if puk == "TypeVar" { actual_concrete = au; guard = 4 }
+                    else if puk == "Array" && au == 13 {
+                        pu = store_get(ll.store, pu).type_id
+                        au = 12
+                    } else if puk == "Array" && au > 16 && au < ll.store.types.len() {
+                        auk := type_kind_name(store_get(ll.store, au).kind)
+                        if auk == "Array" {
+                            pu = store_get(ll.store, pu).type_id
+                            au = store_get(ll.store, au).type_id
+                        } else { guard = 4 }
+                    } else { guard = 4 }
+                    guard = guard + 1
+                }
+            }
             mut sp_ret := sig.return_type
             if sp_ret > 0 && sp_ret < ll.store.types.len() {
                 rti := store_get(ll.store, sp_ret)
-                if type_kind_name(rti.kind) == "TypeVar" { sp_ret = first_concrete }
+                rkind := type_kind_name(rti.kind)
+                if rkind == "TypeVar" {
+                    sp_ret = actual_concrete
+                } else if rkind == "Optional" || rkind == "Array" {
+                    inner_id := rti.type_id
+                    if inner_id > 0 && inner_id < ll.store.types.len() {
+                        inner := store_get(ll.store, inner_id)
+                        if type_kind_name(inner.kind) == "TypeVar" {
+                            new_info := TypeInfo{kind: rti.kind, name: rti.name,
+                                                  type_id: actual_concrete, type_id2: rti.type_id2,
+                                                  param_start: 0, param_count: rti.param_count}
+                            sar := store_add_canonical(ll.store, new_info)
+                            ll = _lset_store(ll, sar.store)
+                            sp_ret = sar.id
+                        }
+                    }
+                }
             }
             new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
             ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
@@ -6109,18 +6151,26 @@ fn _lower_expr(l: Lowerer) -> LT {
                 // Numeric tuple field access: .0, .1, .2
                 field_idx_str := _lcur(ll).text
                 ll = _ladv(ll)
-                mut fidx := 0
-                if field_idx_str == "1" { fidx = 1 }
-                if field_idx_str == "2" { fidx = 2 }
-                if field_idx_str == "3" { fidx = 3 }
-                if field_idx_str == "4" { fidx = 4 }
-                if field_idx_str == "5" { fidx = 5 }
-                if field_idx_str == "6" { fidx = 6 }
-                if field_idx_str == "7" { fidx = 7 }
-                nt := _lnew_temp(ll)
-                ll = nt.l
-                ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
-                left = nt.temp
+                fidx := _parse_int_literal(field_idx_str)
+                left_tid := _lget_type(ll, left)
+                ft := tuple_elem_type(ll.store, left_tid, fidx)
+                if ft == 12 {
+                    // Tuple element is a string — load both ptr and len.
+                    nt := _lnew_str_temp(ll)
+                    ll = nt.l
+                    nt_len := nt.temp + 1
+                    fidx_len := fidx + 1
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field_idx_str, 0))
+                    ll = _lset_type(ll, nt.temp, 12)
+                    left = nt.temp
+                } else {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, left, fidx, field_idx_str, 0))
+                    if ft > 0 { ll = _lset_type(ll, nt.temp, ft) }
+                    left = nt.temp
+                }
             } else {
                 running = false
             }
@@ -7108,7 +7158,24 @@ fn _lower_primary(l: Lowerer) -> LT {
                         mut sp_ret := sig.return_type
                         if sp_ret > 0 && sp_ret < ll.store.types.len() {
                             rti := store_get(ll.store, sp_ret)
-                            if type_kind_name(rti.kind) == "TypeVar" { sp_ret = first_concrete }
+                            rkind := type_kind_name(rti.kind)
+                            if rkind == "TypeVar" {
+                                sp_ret = first_concrete
+                            } else if rkind == "Optional" || rkind == "Array" {
+                                // Substitute inner TypeVar with concrete type.
+                                inner_id := rti.type_id
+                                if inner_id > 0 && inner_id < ll.store.types.len() {
+                                    inner := store_get(ll.store, inner_id)
+                                    if type_kind_name(inner.kind) == "TypeVar" {
+                                        new_info := TypeInfo{kind: rti.kind, name: rti.name,
+                                                             type_id: first_concrete, type_id2: rti.type_id2,
+                                                             param_start: 0, param_count: rti.param_count}
+                                        sar := store_add_canonical(ll.store, new_info)
+                                        ll = _lset_store(ll, sar.store)
+                                        sp_ret = sar.id
+                                    }
+                                }
+                            }
                         }
                         new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
                         ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
@@ -13537,27 +13604,47 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                     ll = dcmp_nt.l
                     ll = _lemit(ll, new_inst(OpEq, dcmp_nt.temp, subj_tag, dvtag_nt.temp, "", 0))
                     ll = _lemit(ll, new_inst(OpBranchFalse, 0, dcmp_nt.temp, next_lbl.temp, "", 0))
-                    // Extract value from slot 1
+                    // Extract value from slot 1. Determine the payload type
+                    // from the subject's TyOptional/TyResult so the binding's
+                    // env entry has the right type for interp/string handling.
                     if pat.list_count > 0 {
                         field_node := pool_get(ll.pool, pat.list_start)
                         fname := field_node.s1
                         fkind := expr_kind_name(field_node.kind)
-                        fld_nt := _lnew_temp(ll)
-                        ll = fld_nt.l
-                        ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, 1, fname, 0))
-                        if fkind == "IntLit" {
-                            // Literal pattern: Some(0) — compare extracted value
-                            lit_val := _parse_int_literal(fname)
-                            lit_nt := _lnew_temp(ll)
-                            ll = lit_nt.l
-                            ll = _lemit(ll, new_inst(OpConst, lit_nt.temp, lit_val, 0, "", 0))
-                            lcmp_nt := _lnew_temp(ll)
-                            ll = lcmp_nt.l
-                            ll = _lemit(ll, new_inst(OpEq, lcmp_nt.temp, fld_nt.temp, lit_nt.temp, "", 0))
-                            ll = _lemit(ll, new_inst(OpBranchFalse, 0, lcmp_nt.temp, next_lbl.temp, "", 0))
-                        } else if fname != "_" {
-                            // Binding pattern: Some(n) — bind to name
-                            ll = _lenv_add(ll, fname, fld_nt.temp)
+                        // Look up payload type from subject's container type.
+                        mut payload_type := 0
+                        if subj_type > 16 && subj_type < ll.store.types.len() {
+                            si := store_get(ll.store, subj_type)
+                            sik := type_kind_name(si.kind)
+                            if sik == "Optional" || sik == "Result" { payload_type = si.type_id }
+                        }
+                        if payload_type == 12 {
+                            // String payload: load both ptr (slot 1) and len (slot 2)
+                            sfld_nt := _lnew_str_temp(ll)
+                            ll = sfld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, sfld_nt.temp, subj.temp, 1, fname, 0))
+                            ll = _lemit(ll, new_inst(OpFieldGet, sfld_nt.temp + 1, subj.temp, 2, fname, 0))
+                            ll = _lset_type(ll, sfld_nt.temp, 12)
+                            if fname != "_" && fkind != "IntLit" && fkind != "StringLit" {
+                                ll = _lenv_add(ll, fname, sfld_nt.temp)
+                            }
+                        } else {
+                            fld_nt := _lnew_temp(ll)
+                            ll = fld_nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, fld_nt.temp, subj.temp, 1, fname, 0))
+                            if payload_type > 0 { ll = _lset_type(ll, fld_nt.temp, payload_type) }
+                            if fkind == "IntLit" {
+                                lit_val := _parse_int_literal(fname)
+                                lit_nt := _lnew_temp(ll)
+                                ll = lit_nt.l
+                                ll = _lemit(ll, new_inst(OpConst, lit_nt.temp, lit_val, 0, "", 0))
+                                lcmp_nt := _lnew_temp(ll)
+                                ll = lcmp_nt.l
+                                ll = _lemit(ll, new_inst(OpEq, lcmp_nt.temp, fld_nt.temp, lit_nt.temp, "", 0))
+                                ll = _lemit(ll, new_inst(OpBranchFalse, 0, lcmp_nt.temp, next_lbl.temp, "", 0))
+                            } else if fname != "_" {
+                                ll = _lenv_add(ll, fname, fld_nt.temp)
+                            }
                         }
                     }
                     // Guard check

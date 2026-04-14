@@ -4190,6 +4190,26 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
         if sp_ret == tv_id_0 && tv_id_0 > 0 { sp_ret = concrete_0 }
         if sp_ret == tv_id_1 && tv_id_1 > 0 { sp_ret = concrete_1 }
         if sp_ret == tv_id_2 && tv_id_2 > 0 { sp_ret = concrete_2 }
+        // Unwrap Optional/Array/Result wrappers around a TypeVar return type
+        // so e.g. `T?` substitutes to `concrete?` rather than staying generic.
+        if sp_ret > 16 && sp_ret < cc.store.types.len() {
+            srti := store_get(cc.store, sp_ret)
+            srk := type_kind_name(srti.kind)
+            if srk == "Optional" || srk == "Array" {
+                inner_id := srti.type_id
+                mut new_inner := 0
+                if inner_id == tv_id_0 && tv_id_0 > 0 { new_inner = concrete_0 }
+                if inner_id == tv_id_1 && tv_id_1 > 0 { new_inner = concrete_1 }
+                if inner_id == tv_id_2 && tv_id_2 > 0 { new_inner = concrete_2 }
+                if new_inner > 0 {
+                    new_info := TypeInfo{kind: srti.kind, name: srti.name, type_id: new_inner,
+                                          type_id2: srti.type_id2, param_start: 0, param_count: srti.param_count}
+                    sar := store_add_canonical(cc.store, new_info)
+                    cc = _cset_store(cc, sar.store)
+                    sp_ret = sar.id
+                }
+            }
+        }
         // HKT: resolve TyApplied return type
         ra_ret := _resolve_hkt_applied(cc.store, sp_ret, tv_id_0, concrete_0, tv_id_1, concrete_1, tv_id_2, concrete_2)
         if ra_ret.resolved > 0 {
