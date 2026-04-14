@@ -1602,15 +1602,30 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 ll = _lenv_add(ll, lhs.s1, result.temp)
             } else if lhs_kind == "Tuple" {
                 // Destructure: FieldGet each tuple slot into a fresh env entry.
+                // Use tuple_elem_type + _tuple_slot so str elements (2 slots)
+                // and typed elements (Option, struct) propagate correctly.
+                tuple_tid := _lget_type(ll, result.temp)
                 mut ti := 0
                 while ti < lhs.list_count {
                     holder := pool_get(ll.pool, lhs.list_start + ti)
                     elem := pool_get(ll.pool, holder.c0)
                     nm := elem.s1
-                    et := _lnew_temp(ll)
-                    ll = et.l
-                    ll = _lemit(ll, new_inst(OpFieldGet, et.temp, result.temp, ti, nm, 0))
-                    ll = _lenv_add(ll, nm, et.temp)
+                    elem_t := tuple_elem_type(ll.store, tuple_tid, ti)
+                    slot := _tuple_slot(ll.store, tuple_tid, ti)
+                    if elem_t == 12 {
+                        et := _lnew_str_temp(ll)
+                        ll = et.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, et.temp, result.temp, slot, nm, 0))
+                        ll = _lemit(ll, new_inst(OpFieldGet, et.temp + 1, result.temp, slot + 1, nm, 0))
+                        ll = _lset_type(ll, et.temp, 12)
+                        ll = _lenv_add(ll, nm, et.temp)
+                    } else {
+                        et := _lnew_temp(ll)
+                        ll = et.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, et.temp, result.temp, slot, nm, 0))
+                        if elem_t > 0 { ll = _lset_type(ll, et.temp, elem_t) }
+                        ll = _lenv_add(ll, nm, et.temp)
+                    }
                     ti = ti + 1
                 }
             }
