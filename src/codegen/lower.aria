@@ -314,11 +314,26 @@ fn _lower_array_head(l: Lowerer, obj: i64, want_first: bool) -> LT {
     is_empty := _lnew_temp(ll)
     ll = is_empty.l
     ll = _lemit(ll, new_inst(OpEq, is_empty.temp, len_nt.temp, zero.temp, "", 0))
-    // Allocate Option result (tag + payload).
+    // Allocate Option result (tag + payload). Register a canonical Optional<T>
+    // type where T is the array's element type, so downstream consumers (interp,
+    // match, eq) can format/compare the payload correctly instead of falling
+    // back to "raw pointer" for the generic 201 sentinel.
+    obj_type := _lget_type(ll, obj)
+    elem_type := _array_elem_type(ll.store, obj_type)
+    // Str payloads span 2 slots (ptr + len), so Option<str> wants 3 total.
+    mut opt_slots := 2
+    if elem_type == 12 { opt_slots = 3 }
     opt_nt := _lnew_temp(ll)
     ll = opt_nt.l
-    ll = _lemit(ll, new_inst(OpAlloc, opt_nt.temp, 2, 0, "_Option", 0))
-    ll = _lset_type(ll, opt_nt.temp, 201)
+    ll = _lemit(ll, new_inst(OpAlloc, opt_nt.temp, opt_slots, 0, "_Option", 0))
+    if elem_type > 0 {
+        opt_info := TypeInfo{kind: TyOptional, name: "", type_id: elem_type, type_id2: 0, param_start: 0, param_count: 0}
+        sar := store_add_canonical(ll.store, opt_info)
+        ll = _lset_store(ll, sar.store)
+        ll = _lset_type(ll, opt_nt.temp, sar.id)
+    } else {
+        ll = _lset_type(ll, opt_nt.temp, 201)
+    }
     none_lbl := _lnew_label(ll)
     ll = none_lbl.l
     end_lbl := _lnew_label(ll)
@@ -12297,6 +12312,94 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
 
 // --- Lower interpolated string ---
 
+// Convert an interpolated-position expression temp to a str temp for concat.
+// Dispatches on the temp's static type: str → use as-is; f64 → hint "f64";
+// Option<T> → branch on tag, emit "None" or "Some(<payload_str>)"; other
+// scalars → OpIntToStr with no hint. Shared between the two emit blocks in
+// _lower_interpolated_string (DRY — adding a new formatter is one branch).
+fn _lower_interp_to_str(l: Lowerer, val: i64) -> LT {
+    mut ll := l
+    t := _lget_type(ll, val)
+    if t == 12 { return LT{l: ll, temp: val} }
+    // Option interp: print "None" or "Some(<payload>)". Covers common cases
+    // like println("First: {arr.first()}") where first() returns Option<T>.
+    if _is_option_type(ll.store, t) {
+        payload_t := 1
+        if t > 16 && t < ll.store.types.len() {
+            info := store_get(ll.store, t)
+            if info.type_id > 0 { payload_t = info.type_id }
+        }
+        tag_nt := _lnew_temp(ll)
+        ll = tag_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, val, 0, "_tag", 0))
+        zero_c := _lnew_temp(ll)
+        ll = zero_c.l
+        ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+        is_none := _lnew_temp(ll)
+        ll = is_none.l
+        ll = _lemit(ll, new_inst(OpEq, is_none.temp, tag_nt.temp, zero_c.temp, "", 0))
+        // None text
+        none_text := _lower_string_const(ll, "None")
+        ll = none_text.l
+        // Some branch: payload-to-str wrapped in "Some(...)"
+        some_lbl := _lnew_label(ll)
+        ll = some_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        result_nt := _lnew_str_temp(ll)
+        ll = result_nt.l
+        ll = _lset_type(ll, result_nt.temp, 12)
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_none.temp, some_lbl.temp, "", 0))
+        // None path
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, none_text.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, none_text.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        // Some path. String payloads span two slots (ptr + len); read both.
+        ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+        mut payload_temp := 0
+        if payload_t == 12 {
+            payload := _lnew_str_temp(ll)
+            ll = payload.l
+            ll = _lemit(ll, new_inst(OpFieldGet, payload.temp, val, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, payload.temp + 1, val, 2, "_val_len", 0))
+            ll = _lset_type(ll, payload.temp, 12)
+            payload_temp = payload.temp
+        } else {
+            payload := _lnew_temp(ll)
+            ll = payload.l
+            ll = _lemit(ll, new_inst(OpFieldGet, payload.temp, val, 1, "_val", 0))
+            if payload_t > 0 { ll = _lset_type(ll, payload.temp, payload_t) }
+            payload_temp = payload.temp
+        }
+        // Convert payload to str (recursive via same helper handles nested Options)
+        ps := _lower_interp_to_str(ll, payload_temp)
+        ll = ps.l
+        prefix := _lower_string_const(ll, "Some(")
+        ll = prefix.l
+        suffix := _lower_string_const(ll, ")")
+        ll = suffix.l
+        c1 := _lnew_str_temp(ll)
+        ll = c1.l
+        ll = _lemit(ll, new_inst(OpStrConcat, c1.temp, prefix.temp, ps.temp, "", 0))
+        ll = _lset_type(ll, c1.temp, 12)
+        c2 := _lnew_str_temp(ll)
+        ll = c2.l
+        ll = _lemit(ll, new_inst(OpStrConcat, c2.temp, c1.temp, suffix.temp, "", 0))
+        ll = _lset_type(ll, c2.temp, 12)
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, c2.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, c2.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: result_nt.temp}
+    }
+    conv_nt := _lnew_str_temp(ll)
+    ll = conv_nt.l
+    mut hint := ""
+    if _is_float_type(t) { hint = "f64" }
+    ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, val, 0, hint, 0))
+    ll = _lset_type(ll, conv_nt.temp, 12)
+    LT{l: ll, temp: conv_nt.temp}
+}
+
 fn _lower_interpolated_string(l: Lowerer) -> LT {
     // STRING_START text, expr tokens..., (STRING_MIDDLE text, expr tokens...)*, STRING_END text
     // Build result by concatenating: start_text + toString(expr) + middle_text + toString(expr2) + ... + end_text
@@ -12315,25 +12418,13 @@ fn _lower_interpolated_string(l: Lowerer) -> LT {
         if _lk(ll) == "STRING_END" || _lk(ll) == "STRING_MIDDLE" || _lk(ll) == "EOF" {
             running = false
         } else {
-            // Lower interpolated expression
             expr := _lower_expr(ll)
             ll = expr.l
-            // Convert to string if not already a string
-            expr_type := _lget_type(ll, expr.temp)
-            mut str_temp := expr.temp
-            if expr_type != 12 {
-                conv_nt := _lnew_str_temp(ll)
-                ll = conv_nt.l
-                mut its_hint := ""
-                if _is_float_type(expr_type) { its_hint = "f64" }
-                ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, its_hint, 0))
-                ll = _lset_type(ll, conv_nt.temp, 12)
-                str_temp = conv_nt.temp
-            }
-            // Concatenate with result
+            s := _lower_interp_to_str(ll, expr.temp)
+            ll = s.l
             cat_nt := _lnew_str_temp(ll)
             ll = cat_nt.l
-            ll = _lemit(ll, new_inst(OpStrConcat, cat_nt.temp, result, str_temp, "", 0))
+            ll = _lemit(ll, new_inst(OpStrConcat, cat_nt.temp, result, s.temp, "", 0))
             ll = _lset_type(ll, cat_nt.temp, 12)
             result = cat_nt.temp
         }
@@ -12361,20 +12452,11 @@ fn _lower_interpolated_string(l: Lowerer) -> LT {
             } else {
                 expr := _lower_expr(ll)
                 ll = expr.l
-                expr_type := _lget_type(ll, expr.temp)
-                mut str_temp := expr.temp
-                if expr_type != 12 {
-                    conv_nt := _lnew_str_temp(ll)
-                    ll = conv_nt.l
-                    mut its_hint := ""
-                    if _is_float_type(expr_type) { its_hint = "f64" }
-                    ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, expr.temp, 0, its_hint, 0))
-                    ll = _lset_type(ll, conv_nt.temp, 12)
-                    str_temp = conv_nt.temp
-                }
+                s := _lower_interp_to_str(ll, expr.temp)
+                ll = s.l
                 cat_nt := _lnew_str_temp(ll)
                 ll = cat_nt.l
-                ll = _lemit(ll, new_inst(OpStrConcat, cat_nt.temp, result, str_temp, "", 0))
+                ll = _lemit(ll, new_inst(OpStrConcat, cat_nt.temp, result, s.temp, "", 0))
                 ll = _lset_type(ll, cat_nt.temp, 12)
                 result = cat_nt.temp
             }
