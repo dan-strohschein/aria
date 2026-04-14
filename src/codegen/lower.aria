@@ -7555,13 +7555,58 @@ fn _lower_primary(l: Lowerer) -> LT {
                         // MonoSpec + specialized FnSig so the mono pass emits it.
                         // Mirrors the AST-call path in _lower_call_node.
                         first_concrete := arg_types[1]
+                        // Derive the actual T by walking the first param and arg in
+                        // lockstep. For `items: [T]` with arg of type 13 ([str]),
+                        // first_concrete=13 is the wrapper; actual_concrete=12 (str)
+                        // is what T resolves to.
+                        mut actual_concrete := first_concrete
+                        if sig.param_types.len() > 1 {
+                            p0 := sig.param_types[1]
+                            mut pu := p0
+                            mut au := first_concrete
+                            mut guard := 0
+                            while guard < 4 && pu > 0 && au > 0 && pu < ll.store.types.len() {
+                                puk := type_kind_name(store_get(ll.store, pu).kind)
+                                if puk == "TypeVar" { actual_concrete = au; guard = 4 }
+                                else if puk == "Array" && au == 13 {
+                                    pu = store_get(ll.store, pu).type_id
+                                    au = 12
+                                } else if puk == "Array" && au > 16 && au < ll.store.types.len() {
+                                    auk := type_kind_name(store_get(ll.store, au).kind)
+                                    if auk == "Array" {
+                                        pu = store_get(ll.store, pu).type_id
+                                        au = store_get(ll.store, au).type_id
+                                    } else { guard = 4 }
+                                } else { guard = 4 }
+                                guard = guard + 1
+                            }
+                        }
                         sp_ptypes := [0]
                         mut spi := 1
                         while spi < sig.param_types.len() {
                             mut pt := sig.param_types[spi]
                             if pt > 0 && pt < ll.store.types.len() {
                                 pti := store_get(ll.store, pt)
-                                if type_kind_name(pti.kind) == "TypeVar" { pt = first_concrete }
+                                if type_kind_name(pti.kind) == "TypeVar" { pt = actual_concrete }
+                            }
+                            // Unwrap Array<TypeVar> / Optional<TypeVar> params too.
+                            if pt > 16 && pt < ll.store.types.len() {
+                                pti2 := store_get(ll.store, pt)
+                                pk2 := type_kind_name(pti2.kind)
+                                if pk2 == "Array" || pk2 == "Optional" {
+                                    inner2 := pti2.type_id
+                                    if inner2 > 0 && inner2 < ll.store.types.len() {
+                                        innerti := store_get(ll.store, inner2)
+                                        if type_kind_name(innerti.kind) == "TypeVar" {
+                                            newinfo := TypeInfo{kind: pti2.kind, name: pti2.name,
+                                                                 type_id: actual_concrete, type_id2: pti2.type_id2,
+                                                                 param_start: 0, param_count: pti2.param_count}
+                                            sar2 := store_add_canonical(ll.store, newinfo)
+                                            ll = _lset_store(ll, sar2.store)
+                                            pt = sar2.id
+                                        }
+                                    }
+                                }
                             }
                             sp_ptypes = sp_ptypes.append(pt)
                             spi = spi + 1
@@ -7571,7 +7616,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                             rti := store_get(ll.store, sp_ret)
                             rkind := type_kind_name(rti.kind)
                             if rkind == "TypeVar" {
-                                sp_ret = first_concrete
+                                sp_ret = actual_concrete
                             } else if rkind == "Optional" || rkind == "Array" {
                                 // Substitute inner TypeVar with concrete type.
                                 inner_id := rti.type_id
@@ -7579,7 +7624,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                                     inner := store_get(ll.store, inner_id)
                                     if type_kind_name(inner.kind) == "TypeVar" {
                                         new_info := TypeInfo{kind: rti.kind, name: rti.name,
-                                                             type_id: first_concrete, type_id2: rti.type_id2,
+                                                             type_id: actual_concrete, type_id2: rti.type_id2,
                                                              param_start: 0, param_count: rti.param_count}
                                         sar := store_add_canonical(ll.store, new_info)
                                         ll = _lset_store(ll, sar.store)

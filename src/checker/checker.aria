@@ -4177,6 +4177,27 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
             if pt == tv_id_0 && tv_id_0 > 0 { pt = concrete_0 }
             if pt == tv_id_1 && tv_id_1 > 0 { pt = concrete_1 }
             if pt == tv_id_2 && tv_id_2 > 0 { pt = concrete_2 }
+            // Unwrap Array/Optional around a TypeVar param (e.g. `items: [T]`)
+            // so the specialization sees `[str]` not `[T]`. Mirrors the same
+            // logic used for return types below.
+            if pt > 16 && pt < cc.store.types.len() {
+                pti := store_get(cc.store, pt)
+                pk := type_kind_name(pti.kind)
+                if pk == "Optional" || pk == "Array" {
+                    inner_id := pti.type_id
+                    mut new_inner := 0
+                    if inner_id == tv_id_0 && tv_id_0 > 0 { new_inner = concrete_0 }
+                    if inner_id == tv_id_1 && tv_id_1 > 0 { new_inner = concrete_1 }
+                    if inner_id == tv_id_2 && tv_id_2 > 0 { new_inner = concrete_2 }
+                    if new_inner > 0 {
+                        new_info := TypeInfo{kind: pti.kind, name: pti.name, type_id: new_inner,
+                                              type_id2: pti.type_id2, param_start: 0, param_count: pti.param_count}
+                        sar := store_add_canonical(cc.store, new_info)
+                        cc = _cset_store(cc, sar.store)
+                        pt = sar.id
+                    }
+                }
+            }
             // HKT: resolve TyApplied types (e.g. F[A] -> [i64])
             ra := _resolve_hkt_applied(cc.store, pt, tv_id_0, concrete_0, tv_id_1, concrete_1, tv_id_2, concrete_2)
             if ra.resolved > 0 {
