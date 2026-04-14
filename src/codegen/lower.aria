@@ -10769,7 +10769,10 @@ fn _lower_atom(l: Lowerer) -> LT {
                     ll = mr.l
                     left = mr.temp
                 } else {
-                    // Check for no-data variant: Type.Variant (no parens)
+                    // Check for no-data variant: Type.Variant (no parens).
+                    // For data variants or plain field access, fall through to
+                    // the type-aware field-access path below.
+                    mut handled := false
                     atom_vtag := _variant_tag(ll.registry, field)
                     if atom_vtag > 0 {
                         atom_vparent := _variant_parent(ll.registry, field)
@@ -10793,43 +10796,44 @@ fn _lower_atom(l: Lowerer) -> LT {
                                 ll = _lemit(ll, new_inst(OpConst, vnt.temp, atom_vtag, 0, "", 0))
                                 left = vnt.temp
                             }
+                            handled = true
+                        }
+                    }
+                    if handled == false {
+                        // Type-aware field access
+                        left_type := _lget_type(ll, left)
+                        sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+                        mut fidx := 0
+                        mut ft := 0
+                        if sname != "" {
+                            fidx = _field_index(ll.registry, sname, field)
+                            ft = _field_type_id(ll, sname, field)
                         } else {
-                    // Type-aware field access
-                    left_type := _lget_type(ll, left)
-                    sname := _struct_name_for_type(ll.store, ll.registry, left_type)
-                    mut fidx := 0
-                    mut ft := 0
-                    if sname != "" {
-                        fidx = _field_index(ll.registry, sname, field)
-                        ft = _field_type_id(ll, sname, field)
-                    } else {
-                        fidx = _field_index_any(ll.registry, field)
-                        ft = _field_type_id_any(ll.registry, field)
+                            fidx = _field_index_any(ll.registry, field)
+                            ft = _field_type_id_any(ll.registry, field)
+                        }
+                        mut nt_temp := 0
+                        if ft == 12 {
+                            nt := _lnew_str_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            nt_temp = nt.temp
+                        }
+                        if ft == 12 {
+                            fidx_len := fidx + 1
+                            nt_len := nt_temp + 1
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field, 0))
+                        } else {
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
+                        }
+                        if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
+                        left = nt_temp
                     }
-                    mut nt_temp := 0
-                    if ft == 12 {
-                        nt := _lnew_str_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
-                    } else {
-                        nt := _lnew_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
-                    }
-                    if ft == 12 {
-                        // String field: load both ptr and len from consecutive field slots
-                        fidx_len := fidx + 1
-                        nt_len := nt_temp + 1
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_len, left, fidx_len, field, 0))
-                    } else {
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt_temp, left, fidx, field, 0))
-                    }
-                    if ft > 0 { ll = _lset_type(ll, nt_temp, ft) }
-                    left = nt_temp
                 }
-                } // close else for data variant
-                } // close if atom_vtag > 0
             } else {
                 running = false
             }
