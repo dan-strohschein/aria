@@ -2732,16 +2732,30 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         if sp_ret > 0 && sp_ret < ll.store.types.len() {
                             rti := store_get(ll.store, sp_ret)
                             rk := type_kind_name(rti.kind)
+                            // Derive the struct's concrete type arg from its
+                            // specialized name suffix once, reuse below.
+                            mut concrete_for_subst := 0
+                            if obj_sname != "" {
+                                base := _base_generic_name(obj_sname)
+                                if base != obj_sname {
+                                    suffix := obj_sname.substring(base.len() + 1, obj_sname.len())
+                                    concrete_for_subst = _type_from_suffix(ll.store, ll.registry, suffix)
+                                }
+                            }
                             if rk == "TypeVar" {
-                                // Bare TypeVar return: map to the struct's first type arg if known
-                                // via recv_info param. For Measurement[U] -> U, substitute from
-                                // specialized struct name suffix.
-                                if obj_sname != "" {
-                                    base := _base_generic_name(obj_sname)
-                                    if base != obj_sname {
-                                        suffix := obj_sname.substring(base.len() + 1, obj_sname.len())
-                                        concrete := _type_from_suffix(ll.store, ll.registry, suffix)
-                                        if concrete > 0 { sp_ret = concrete }
+                                if concrete_for_subst > 0 { sp_ret = concrete_for_subst }
+                            } else if rk == "Optional" || rk == "Array" {
+                                inner_id := rti.type_id
+                                if inner_id > 0 && inner_id < ll.store.types.len() {
+                                    if type_kind_name(store_get(ll.store, inner_id).kind) == "TypeVar" {
+                                        if concrete_for_subst > 0 {
+                                            new_info := TypeInfo{kind: rti.kind, name: rti.name,
+                                                                  type_id: concrete_for_subst, type_id2: rti.type_id2,
+                                                                  param_start: 0, param_count: rti.param_count}
+                                            sar := store_add_canonical(ll.store, new_info)
+                                            ll = _lset_store(ll, sar.store)
+                                            sp_ret = sar.id
+                                        }
                                     }
                                 }
                             }
@@ -11156,6 +11170,18 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         qualified_method = obj_sname + "_" + method
     }
     mut method_sig := reg_find_fn(ll.registry, qualified_method)
+    // Specialized receiver (Box_i64) falling back to base method (Box_size).
+    if method_sig.name == "" && obj_sname != "" {
+        base_name := _base_generic_name(obj_sname)
+        if base_name != obj_sname {
+            base_qualified := base_name + "_" + method
+            base_fallback := reg_find_fn(ll.registry, base_qualified)
+            if base_fallback.name != "" {
+                method_sig = base_fallback
+                qualified_method = base_qualified
+            }
+        }
+    }
     if method_sig.name == "" {
         // Fallback to plain method name
         method_sig = reg_find_fn(ll.registry, method)
