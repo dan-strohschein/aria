@@ -10951,6 +10951,14 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt_temp}
     }
 
+    // .clone() on a primitive / generic-unresolved receiver: return the value
+    // as-is. All primitives are 8-byte values with trivial copy semantics, and
+    // generic bodies see .clone() calls before T is known.
+    if method == "clone" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        return LT{l: ll, temp: first_arg}
+    }
     // Unknown method — skip args, return 0
     println("warning: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
     while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
