@@ -473,6 +473,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare void @_aria_append_file(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare void @_aria_write_binary_file(i8*, i64, i64*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_array_int_to_str(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_cmp(i8*, i64, i8*, i64)" + nl)
@@ -766,6 +767,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare void @_aria_append_file(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare void @_aria_write_binary_file(i8*, i64, i64*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_int_to_str(i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_array_int_to_str(i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_concat(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_eq(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_cmp(i8*, i64, i8*, i64)" + nl)
@@ -2069,6 +2071,8 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%its_res_" + i2s(idx)
         if inst.s1 == "f64" {
             gg = _lg_emit(gg, res + " = call " + srt + " @_aria_float_to_str(i64 " + v + ")")
+        } else if inst.s1 == "array_int" {
+            gg = _lg_emit(gg, res + " = call " + srt + " @_aria_array_int_to_str(i64 " + v + ")")
         } else {
             gg = _lg_emit(gg, res + " = call " + srt + " @_aria_int_to_str(i64 " + v + ")")
         }

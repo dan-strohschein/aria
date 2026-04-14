@@ -854,6 +854,35 @@ struct _aria_str _aria_float_to_str(aria_int bits) {
     return s;
 }
 
+// --- Array to string (for interpolation) ---
+
+struct _aria_str _aria_array_int_to_str(aria_int arr_ptr) {
+    if (arr_ptr == 0) {
+        char *r = _str_arena_alloc(2);
+        r[0] = '['; r[1] = ']'; r[2] = 0;
+        struct _aria_str s = {r, 2};
+        return s;
+    }
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+    size_t cap = 2 + (size_t)length * 24 + 1;
+    char *buf = (char *)malloc(cap);
+    int pos = 0;
+    buf[pos++] = '[';
+    for (aria_int i = 0; i < length; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        pos += snprintf(buf + pos, cap - pos, ARIA_FMT, data[i]);
+    }
+    buf[pos++] = ']';
+    char *result = _str_arena_alloc(pos);
+    memcpy(result, buf, (size_t)pos);
+    result[pos] = 0;
+    free(buf);
+    struct _aria_str s = {result, (aria_int)pos};
+    return s;
+}
+
 // --- String arena allocator ---
 // Short-lived string allocations (concat, substring, int_to_str) use a bump
 // allocator. When the arena fills, a new chunk is allocated and the old one

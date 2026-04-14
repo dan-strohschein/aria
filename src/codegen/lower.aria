@@ -12472,6 +12472,13 @@ fn _lower_interp_to_str(l: Lowerer, val: i64) -> LT {
     ll = conv_nt.l
     mut hint := ""
     if _is_float_type(t) { hint = "f64" }
+    // [i64] array interp: dispatch to the runtime array-formatter.
+    if t > 16 && t < ll.store.types.len() {
+        ainfo := store_get(ll.store, t)
+        if type_kind_name(ainfo.kind) == "Array" && ainfo.type_id != 12 {
+            hint = "array_int"
+        }
+    }
     ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, val, 0, hint, 0))
     ll = _lset_type(ll, conv_nt.temp, 12)
     LT{l: ll, temp: conv_nt.temp}
