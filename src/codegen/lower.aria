@@ -3694,6 +3694,37 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
                     guard = guard + 1
                 }
             }
+            // Rebuild sp_ptypes with proper Array/Optional substitution too,
+            // replacing the shallow-TypeVar-only version built above.
+            sp_ptypes2 := [0]
+            mut spi2 := 1
+            mut sp_ptypes_fixed := sp_ptypes2
+            while spi2 < sig.param_types.len() {
+                mut pt2 := sig.param_types[spi2]
+                if pt2 > 0 && pt2 < ll.store.types.len() {
+                    pti2 := store_get(ll.store, pt2)
+                    pk2 := type_kind_name(pti2.kind)
+                    if pk2 == "TypeVar" {
+                        pt2 = actual_concrete
+                    } else if pk2 == "Array" || pk2 == "Optional" {
+                        inner2 := pti2.type_id
+                        if inner2 > 0 && inner2 < ll.store.types.len() {
+                            innerti := store_get(ll.store, inner2)
+                            if type_kind_name(innerti.kind) == "TypeVar" {
+                                newinfo := TypeInfo{kind: pti2.kind, name: pti2.name,
+                                                     type_id: actual_concrete, type_id2: pti2.type_id2,
+                                                     param_start: 0, param_count: pti2.param_count}
+                                sar2 := store_add_canonical(ll.store, newinfo)
+                                ll = _lset_store(ll, sar2.store)
+                                pt2 = sar2.id
+                            }
+                        }
+                    }
+                }
+                sp_ptypes_fixed = sp_ptypes_fixed.append(pt2)
+                spi2 = spi2 + 1
+            }
+            sp_ptypes = sp_ptypes_fixed
             mut sp_ret := sig.return_type
             if sp_ret > 0 && sp_ret < ll.store.types.len() {
                 rti := store_get(ll.store, sp_ret)
