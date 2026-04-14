@@ -274,6 +274,83 @@ fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     return -1
 }
 
+// Array/iterator pipeline ops whose implementations live only in the token-based
+// _lower_method_call. The AST-based dispatch at method call sites seeks to `(`
+// and delegates to _lower_method_call for these, so we don't have to duplicate
+// 15+ method bodies in _lower_method_with_args.
+fn _is_pipeline_method(method: str) -> bool {
+    method == "filter" ||
+    method == "map" ||
+    method == "fold" ||
+    method == "sort" ||
+    method == "sort_by" ||
+    method == "take" ||
+    method == "skip" ||
+    method == "count" ||
+    method == "any" ||
+    method == "all" ||
+    method == "first" ||
+    method == "last" ||
+    method == "reverse" ||
+    method == "collect" ||
+    method == "collect_map" ||
+    method == "flat_map" ||
+    method == "zip" ||
+    method == "unique"
+}
+
+// Shared impl for `.first()` / `.last()`. Returns an Option wrapping the head
+// (want_first=true) or tail (want_first=false) of an array, or None when empty.
+// Allocates a 2-slot Result/Option record: slot 0 is the tag (0=None, 1=Some),
+// slot 1 is the payload. Empty check comes first to avoid OOB ArrayGet.
+fn _lower_array_head(l: Lowerer, obj: i64, want_first: bool) -> LT {
+    mut ll := l
+    len_nt := _lnew_temp(ll)
+    ll = len_nt.l
+    ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
+    zero := _lnew_temp(ll)
+    ll = zero.l
+    ll = _lemit(ll, new_inst(OpConst, zero.temp, 0, 0, "", 0))
+    is_empty := _lnew_temp(ll)
+    ll = is_empty.l
+    ll = _lemit(ll, new_inst(OpEq, is_empty.temp, len_nt.temp, zero.temp, "", 0))
+    // Allocate Option result (tag + payload).
+    opt_nt := _lnew_temp(ll)
+    ll = opt_nt.l
+    ll = _lemit(ll, new_inst(OpAlloc, opt_nt.temp, 2, 0, "_Option", 0))
+    ll = _lset_type(ll, opt_nt.temp, 201)
+    none_lbl := _lnew_label(ll)
+    ll = none_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+    ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_empty.temp, none_lbl.temp, "", 0))
+    // Some path: compute index, read element, tag=1, payload=element.
+    mut idx_temp := zero.temp
+    if !want_first {
+        one_c := _lnew_temp(ll)
+        ll = one_c.l
+        ll = _lemit(ll, new_inst(OpConst, one_c.temp, 1, 0, "", 0))
+        last_idx := _lnew_temp(ll)
+        ll = last_idx.l
+        ll = _lemit(ll, new_inst(OpSub, last_idx.temp, len_nt.temp, one_c.temp, "", 0))
+        idx_temp = last_idx.temp
+    }
+    elem := _lnew_temp(ll)
+    ll = elem.l
+    ll = _lemit(ll, new_inst(OpArrayGet, elem.temp, obj, idx_temp, "", 0))
+    some_tag := _lnew_temp(ll)
+    ll = some_tag.l
+    ll = _lemit(ll, new_inst(OpConst, some_tag.temp, 1, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, opt_nt.temp, some_tag.temp, 0, "_tag", 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, opt_nt.temp, elem.temp, 1, "_val", 0))
+    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+    // None path: tag=0, leave payload 0.
+    ll = _lemit(ll, new_inst(OpLabel, 0, none_lbl.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpFieldSet, opt_nt.temp, zero.temp, 0, "_tag", 0))
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+    LT{l: ll, temp: opt_nt.temp}
+}
+
 // Emit a warning for unresolved lookups during lowering (DRY: single warning format)
 // Suppresses false positives for diagnostic codes (E0100, W0009)
 fn _warn_unresolved(l: Lowerer, kind: str, name: str) {
@@ -1562,6 +1639,97 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             return LT{l: ll, temp: -1}
         }
 
+        // Pipeline `a |> f` / `a |> f(args)` — handled BEFORE the generic right
+        // lowering. If we naively lowered `f(args)` first, it would be emitted
+        // as a free-function call to a name that usually isn't registered,
+        // polluting IR with bogus OpCalls before the method-dispatch could run.
+        if op == "|>" {
+            left := _lower_expr_node(ll, node.c0)
+            ll = left.l
+            left_type := _lget_type(ll, left.temp)
+            right_node := pool_get(ll.pool, node.c1)
+            right_kind := expr_kind_name(right_node.kind)
+            // Bare-ident right: `a |> f` — call f(a).
+            if right_kind == "Ident" {
+                fname := right_node.s1
+                fsig := reg_find_fn(ll.registry, fname)
+                if fsig.name != "" {
+                    mut call_name := fname
+                    mut call_sig := fsig
+                    if fn_is_generic(fsig) {
+                        suffix := _type_name_suffix_l(ll.store, ll.registry, left_type)
+                        if suffix != "unknown" {
+                            cand := fname + "_" + suffix
+                            sp_sig := reg_find_fn(ll.registry, cand)
+                            if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
+                                call_name = cand
+                                call_sig = sp_sig
+                            }
+                        }
+                    }
+                    mut reg_count := 1
+                    if left_type == 12 { reg_count = 2 }
+                    mut nt_temp := 0
+                    if call_sig.return_type == 12 {
+                        nt := _lnew_str_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    } else {
+                        nt := _lnew_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
+                    if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
+                    if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
+                    return LT{l: ll, temp: nt_temp}
+                }
+                _warn_unresolved(ll, "pipe target", fname)
+                return LT{l: ll, temp: left.temp}
+            }
+            // Call right: `a |> f()` or `a |> f(args)` — dispatch as a method.
+            if right_kind == "Call" {
+                fname := right_node.s1
+                // 0-arg: direct method dispatch, cursor wherever.
+                if right_node.list_count == 0 {
+                    mr := _lower_method_call(ll, left.temp, fname)
+                    ll = mr.l
+                    return LT{l: ll, temp: mr.temp}
+                }
+                // Pipeline-family ops (filter/map/fold/...) have token-based
+                // impls only in _lower_method_call. Seek cursor to `(` and
+                // delegate — DRY, no duplicate 15+ method bodies.
+                if _is_pipeline_method(fname) {
+                    // right_node.span.offset is unreliable for pipeline RHS —
+                    // it may point inside a nested closure body rather than the
+                    // method name. Seek from the outer Binary node's offset
+                    // forward to the method ident and then `(`.
+                    mut tp := _find_tok_pos(ll, node.span.offset)
+                    // Walk forward to the matching method ident. The `|>` token
+                    // comes between left and right; stop at the ident after it.
+                    mut seen_pipe := false
+                    while tp < ll.tokens.len() {
+                        nm := ll.tokens[tp].name
+                        if nm == "|>" { seen_pipe = true }
+                        if seen_pipe && nm == "IDENT" && ll.tokens[tp].text == fname { break }
+                        tp = tp + 1
+                    }
+                    ll = _lset_pos(ll, tp)
+                    if _lk(ll) == "IDENT" { ll = _ladv(ll) }
+                    mr := _lower_method_call(ll, left.temp, fname)
+                    ll = mr.l
+                    return LT{l: ll, temp: mr.temp}
+                }
+                // Other arg'd methods (join/take-as-int/send/...) — lower the
+                // arg from AST and route via _lower_method_with_args.
+                arg_holder := pool_get(ll.pool, right_node.list_start)
+                arg := _lower_expr_node(ll, arg_holder.c0)
+                ll = arg.l
+                return _lower_method_with_args(ll, left.temp, fname, arg.temp, 0, right_node.list_count)
+            }
+            return LT{l: ll, temp: left.temp}
+        }
+
         // Arithmetic and comparison
         left := _lower_expr_node(ll, node.c0)
         ll = left.l
@@ -1708,75 +1876,6 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = nt.l
             ll = _lemit(ll, new_inst(OpOr, nt.temp, left.temp, right.temp, "", 0))
             return LT{l: ll, temp: nt.temp}
-        }
-        if op == "|>" {
-            // Pipeline: left |> right where right is a function name
-            right_node := pool_get(ll.pool, node.c1)
-            if expr_kind_name(right_node.kind) == "Ident" {
-                fname := right_node.s1
-                fsig := reg_find_fn(ll.registry, fname)
-                if fsig.name != "" {
-                    // Generic pipe target: resolve specialization from left_type.
-                    mut call_name := fname
-                    mut call_sig := fsig
-                    if fn_is_generic(fsig) {
-                        suffix := _type_name_suffix_l(ll.store, ll.registry, left_type)
-                        if suffix != "unknown" {
-                            cand := fname + "_" + suffix
-                            sp_sig := reg_find_fn(ll.registry, cand)
-                            if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
-                                call_name = cand
-                                call_sig = sp_sig
-                            }
-                        }
-                    }
-                    mut reg_count := 1
-                    if left_type == 12 { reg_count = 2 }
-                    mut nt_temp := 0
-                    if call_sig.return_type == 12 {
-                        nt := _lnew_str_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
-                    } else {
-                        nt := _lnew_temp(ll)
-                        ll = nt.l
-                        nt_temp = nt.temp
-                    }
-                    ll = _lemit(ll, new_inst(OpCall, nt_temp, left.temp, reg_count, call_name, call_sig.return_type))
-                    if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
-                    if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
-                    return LT{l: ll, temp: nt_temp}
-                }
-            }
-            // Pipeline with Call right side: `arr |> reverse()`,
-            // `str |> chars()`, `arr |> join(sep)`, etc. _lower_method_call
-            // dispatches on method name and only consumes tokens when it
-            // has args to parse; for 0-arg or single-literal-arg calls we
-            // can invoke it directly with the cursor wherever it happens
-            // to be.
-            if expr_kind_name(right_node.kind) == "Call" {
-                fname := right_node.s1
-                if right_node.list_count == 0 {
-                    mr := _lower_method_call(ll, left.temp, fname)
-                    ll = mr.l
-                    return LT{l: ll, temp: mr.temp}
-                }
-                // 1-arg case: lower the arg first, then dispatch via
-                // _lower_method_with_args which handles single-arg methods
-                // like `join(sep)`, `take(n)`, `first(pred)` etc.
-                if right_node.list_count >= 1 {
-                    arg_holder := pool_get(ll.pool, right_node.list_start)
-                    arg := _lower_expr_node(ll, arg_holder.c0)
-                    ll = arg.l
-                    return _lower_method_with_args(ll, left.temp, fname, arg.temp, 0, right_node.list_count)
-                }
-                return LT{l: ll, temp: left.temp}
-            }
-            // Pipe target not found
-            if expr_kind_name(right_node.kind) == "Ident" {
-                _warn_unresolved(ll, "pipe target", right_node.s1)
-            }
-            return LT{l: ll, temp: left.temp}
         }
         // Bitwise operators
         if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
@@ -2256,7 +2355,19 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             if method == "parse" { conv_method = "to" }
             return _lower_conversion(ll, recv.temp, conv_method, node.s2)
         }
-        // AST path: lower arguments from pool, then dispatch to method codegen
+        // AST path: lower arguments from pool, then dispatch to method codegen.
+        // List pipeline ops (filter/map/fold/sort_by/take/skip/any/all/count/
+        // first/last/reverse/collect/collect_map/flat_map/zip/unique) only have
+        // implementations in _lower_method_call, which lowers its own arg temps
+        // from tokens. Route through there by seeking to `(` — avoids duplicating
+        // each method body. Without this, _lower_method_with_args falls through
+        // to its warn-and-return-obj fallback and every pipeline op is a no-op.
+        if node.list_count > 0 && _is_pipeline_method(method) {
+            mut tp := _find_tok_pos(ll, node.span.offset)
+            while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
+            ll = _lset_pos(ll, tp)
+            return _lower_method_call(ll, recv.temp, method)
+        }
         if node.list_count > 0 {
             arg1_r := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
             ll = arg1_r.l
@@ -9960,33 +10071,19 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     }
 
     // first() — return first element (index 1 due to sentinel at 0)
+    // first() — return Some(arr[0]) or None for empty array.
+    // Previously wrote arr[1] and returned a raw scalar — crashed on empty and
+    // passed the wrong index on non-empty. `.ok_or(...)` / `.unwrap_or(...)` /
+    // match callers all expect an Option.
     if method == "first" {
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        one := _lnew_temp(ll)
-        ll = one.l
-        ll = _lemit(ll, new_inst(OpConst, one.temp, 1, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, obj, one.temp, "", 0))
-        return LT{l: ll, temp: nt.temp}
+        return _lower_array_head(ll, obj, true)
     }
 
-    // last() — return last element
+    // last() — return Some(arr[len-1]) or None. Same shape as first().
     if method == "last" {
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        len_nt := _lnew_temp(ll)
-        ll = len_nt.l
-        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
-        one := _lnew_temp(ll)
-        ll = one.l
-        ll = _lemit(ll, new_inst(OpConst, one.temp, 1, 0, "", 0))
-        last_idx := _lnew_temp(ll)
-        ll = last_idx.l
-        ll = _lemit(ll, new_inst(OpSub, last_idx.temp, len_nt.temp, one.temp, "", 0))
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpArrayGet, nt.temp, obj, last_idx.temp, "", 0))
-        return LT{l: ll, temp: nt.temp}
+        return _lower_array_head(ll, obj, false)
     }
 
     // fold(init, fn) — accumulator loop: acc = fn(acc, elem) for each element
