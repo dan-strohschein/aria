@@ -10399,6 +10399,16 @@ fn _resolve_generic_call_name(store: TypeStore, reg: TypeRegistry, base_name: st
         // called with [i64]. Walk in lockstep until we hit a TypeVar.
         mut pt := sig.param_types[gi]
         mut at := arg_types[gi]
+        // Special case: type 13 is the [str] sentinel. If pt is an Array
+        // wrapper, unwrap pt and treat the at element as str so `[T]`
+        // parameters match against `[str]` args.
+        if at == 13 && pt > 0 && pt < store.types.len() {
+            ptik0 := type_kind_name(store_get(store, pt).kind)
+            if ptik0 == "Array" {
+                pt = store_get(store, pt).type_id
+                at = 12
+            }
+        }
         mut guard := 0
         while guard < 4 && pt > 0 && at > 0 && pt < store.types.len() && at < store.types.len() {
             ptik := type_kind_name(store_get(store, pt).kind)
