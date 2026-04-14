@@ -9924,23 +9924,37 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     }
 
     if method == "len" {
-        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
-        if _lk(ll) == ")" { ll = _ladv(ll) }
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        // Distinguish string vs array vs map by type tracking
+        // Only handle the built-in .len() meanings: string, map, set, array.
+        // For any other type (structs with user-defined len method), fall
+        // through to the user-method dispatch below — OpArrayLen on a struct
+        // pointer returns garbage.
         obj_type := _lget_type(ll, obj)
-        if obj_type == 12 {
-            ll = _lemit(ll, new_inst(OpStrLen, nt.temp, obj, 0, "", 0))
-        } else if obj_type == 300 {
-            ll = _lemit(ll, new_inst(OpMapLen, nt.temp, obj, 0, "", 0))
-        } else if obj_type == 301 {
-            ll = _lemit(ll, new_inst(OpSetLen, nt.temp, obj, 0, "", 0))
-        } else {
-            ll = _lemit(ll, new_inst(OpArrayLen, nt.temp, obj, 0, "", 0))
+        mut handled := false
+        mut is_arr := false
+        if obj_type == 12 || obj_type == 300 || obj_type == 301 { handled = true }
+        else if obj_type == 13 { handled = true; is_arr = true }
+        else if obj_type > 16 && obj_type < ll.store.types.len() {
+            ti := store_get(ll.store, obj_type)
+            tk := type_kind_name(ti.kind)
+            if tk == "Array" { handled = true; is_arr = true }
         }
-        ll = _lset_type(ll, nt.temp, 1)
-        return LT{l: ll, temp: nt.temp}
+        if handled {
+            while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            if obj_type == 12 {
+                ll = _lemit(ll, new_inst(OpStrLen, nt.temp, obj, 0, "", 0))
+            } else if obj_type == 300 {
+                ll = _lemit(ll, new_inst(OpMapLen, nt.temp, obj, 0, "", 0))
+            } else if obj_type == 301 {
+                ll = _lemit(ll, new_inst(OpSetLen, nt.temp, obj, 0, "", 0))
+            } else {
+                ll = _lemit(ll, new_inst(OpArrayLen, nt.temp, obj, 0, "", 0))
+            }
+            ll = _lset_type(ll, nt.temp, 1)
+            return LT{l: ll, temp: nt.temp}
+        }
     }
 
     // String character access methods
@@ -11317,10 +11331,41 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         if method_sig.return_type == 12 {
             ll = _lset_type(ll, nt_temp, 12)
         } else if method_sig.return_type > 16 {
-            // Struct/named return type — track for method dispatch
-            ret_sname := format_type(ll.store, method_sig.return_type)
-            ret_st_id := _struct_type_id(ll.registry, ret_sname)
-            if ret_st_id > 0 { ll = _lset_type(ll, nt_temp, ret_st_id) }
+            // Use the sig's return type directly. For Optional/Array wrappers
+            // around a TypeVar, rebuild with the receiver's concrete type arg
+            // so the interp formatter sees the payload type.
+            mut ret_ty := method_sig.return_type
+            if ret_ty > 0 && ret_ty < ll.store.types.len() {
+                rti := store_get(ll.store, ret_ty)
+                rk := type_kind_name(rti.kind)
+                if rk == "Optional" || rk == "Array" {
+                    inner_id := rti.type_id
+                    if inner_id > 0 && inner_id < ll.store.types.len() {
+                        if type_kind_name(store_get(ll.store, inner_id).kind) == "TypeVar" {
+                            // Derive concrete from specialized receiver.
+                            if obj_sname != "" {
+                                base := _base_generic_name(obj_sname)
+                                if base != obj_sname {
+                                    suffix := obj_sname.substring(base.len() + 1, obj_sname.len())
+                                    concrete := _type_from_suffix(ll.store, ll.registry, suffix)
+                                    if concrete > 0 {
+                                        new_info := TypeInfo{kind: rti.kind, name: rti.name,
+                                                              type_id: concrete, type_id2: rti.type_id2,
+                                                              param_start: 0, param_count: rti.param_count}
+                                        sar := store_add_canonical(ll.store, new_info)
+                                        ll = _lset_store(ll, sar.store)
+                                        ret_ty = sar.id
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if rk == "Named" {
+                    ret_st_id := _struct_type_id(ll.registry, rti.name)
+                    if ret_st_id > 0 { ret_ty = ret_st_id }
+                }
+            }
+            ll = _lset_type(ll, nt_temp, ret_ty)
         }
         return LT{l: ll, temp: nt_temp}
     }
