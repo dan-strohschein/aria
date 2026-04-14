@@ -1421,6 +1421,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = nt.l
             ll = _lemit(ll, new_inst(OpLoad, nt.temp, slot, 0, "", 0))
             if src_type != 0 { ll = _lset_type(ll, nt.temp, src_type) }
+            if _lis_result(ll, slot) { ll = _lset_is_result(ll, nt.temp) }
             return LT{l: ll, temp: nt.temp}
         }
         // Check integer constants
@@ -3132,8 +3133,10 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         expr := _lower_expr_node(ll, node.c0)
         ll = expr.l
         // If the expression is a known non-Result type, catch is a no-op — return value as-is.
+        // Fallible calls tag the temp with the payload type (e.g. 9 for f64!E) but
+        // also mark _lis_result; those still need unwrapping, so guard on that here.
         expr_type := _lget_type(ll, expr.temp)
-        if expr_type == 12 || expr_type == 9 || expr_type == 8 {
+        if (expr_type == 12 || expr_type == 9 || expr_type == 8) && !_lis_result(ll, expr.temp) {
             return LT{l: ll, temp: expr.temp}
         }
         tag_nt := _lnew_temp(ll)
@@ -3150,6 +3153,12 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // Track the catch-result's type so interp/downstream code handles
         // f64/str/struct payloads correctly.
         mut catch_body_type := 0
+        // Seed from the fallible callee's payload type so the Ok path
+        // (which doesn't lower an arm body) still ends up typed.
+        if _lis_result(ll, expr.temp) {
+            ex_pl := _lget_type(ll, expr.temp)
+            if ex_pl > 0 && ex_pl < 16 { catch_body_type = ex_pl }
+        }
         ok_lbl := _lnew_label(ll)
         ll = ok_lbl.l
         end_lbl := _lnew_label(ll)
@@ -14328,6 +14337,11 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                             si := store_get(ll.store, subj_type)
                             sik := type_kind_name(si.kind)
                             if sik == "Optional" || sik == "Result" { payload_type = si.type_id }
+                        }
+                        // Fallible-call results carry the payload type directly in subj_type
+                        // (e.g. return 9 for f64!E). Fall back to that when no container type.
+                        if payload_type == 0 && subj_type > 0 && subj_type < 16 && _lis_result(ll, subj.temp) {
+                            payload_type = subj_type
                         }
                         if payload_type == 12 {
                             // String payload: load both ptr (slot 1) and len (slot 2)
