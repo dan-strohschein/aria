@@ -1626,7 +1626,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // Option (201) / Result (200) equality: compare tag then payload.
             // Without this, the fallthrough compares raw pointers and fails for
             // values from different allocations (e.g. `zero_div == None`).
-            if (op == "==" || op == "!=") && (_is_option_or_result_type(ll.store, left_type) || _lis_result(ll, left.temp) || _lis_result(ll, right.temp)) {
+            if (op == "==" || op == "!=") && (_is_option_or_result_type(ll.store, left_type) || _is_option_or_result_type(ll.store, right_type) || _lis_result(ll, left.temp) || _lis_result(ll, right.temp)) {
                 a_tag := _lnew_temp(ll)
                 ll = a_tag.l
                 ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left.temp, 0, "_tag", 0))
@@ -5664,6 +5664,7 @@ fn _lower_comparison(l: Lowerer) -> LT {
         nt := _lnew_temp(ll)
         ll = nt.l
         left_type := _lget_type(ll, left)
+        right_type := _lget_type(ll, right.temp)
         if (k == "==" || k == "!=") && left_type == 12 {
             ll = _lemit(ll, new_inst(OpStrEq, nt.temp, left, right.temp, "", 0))
             if k == "!=" {
@@ -5694,7 +5695,58 @@ fn _lower_comparison(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                 left = nt.temp
             }
-        } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
+        } else if (k == "==" || k == "!=") && (_is_option_or_result_type(ll.store, left_type) || _is_option_or_result_type(ll.store, right_type) || _lis_result(ll, left) || _lis_result(ll, right.temp)) {
+            // Option / Result equality — tag + payload compare.
+            // Mirror of the path in _lower_expr_node / _lower_primary eq. Without this
+            // here, comparisons inside logical-op contexts (a && b == c, etc.) that
+            // are routed through _lower_comparison fall through to a raw-pointer
+            // compare and give wrong answers for Result/Option operands.
+            a_tag := _lnew_temp(ll)
+            ll = a_tag.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left, 0, "_tag", 0))
+            b_tag := _lnew_temp(ll)
+            ll = b_tag.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_tag.temp, right.temp, 0, "_tag", 0))
+            tag_eq := _lnew_temp(ll)
+            ll = tag_eq.l
+            ll = _lemit(ll, new_inst(OpEq, tag_eq.temp, a_tag.temp, b_tag.temp, "", 0))
+            ll = _lset_type(ll, tag_eq.temp, 1)
+            a_pay := _lnew_temp(ll)
+            ll = a_pay.l
+            ll = _lemit(ll, new_inst(OpFieldGet, a_pay.temp, left, 1, "_val", 0))
+            b_pay := _lnew_temp(ll)
+            ll = b_pay.l
+            ll = _lemit(ll, new_inst(OpFieldGet, b_pay.temp, right.temp, 1, "_val", 0))
+            pay_eq := _lnew_temp(ll)
+            ll = pay_eq.l
+            ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+            ll = _lset_type(ll, pay_eq.temp, 1)
+            mut combined := pay_eq.temp
+            if _is_option_type(ll.store, left_type) || _is_option_type(ll.store, right_type) {
+                zero_c := _lnew_temp(ll)
+                ll = zero_c.l
+                ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+                is_none := _lnew_temp(ll)
+                ll = is_none.l
+                ll = _lemit(ll, new_inst(OpEq, is_none.temp, a_tag.temp, zero_c.temp, "", 0))
+                ll = _lset_type(ll, is_none.temp, 1)
+                or_nt := _lnew_temp(ll)
+                ll = or_nt.l
+                ll = _lemit(ll, new_inst(OpOr, or_nt.temp, is_none.temp, pay_eq.temp, "", 0))
+                ll = _lset_type(ll, or_nt.temp, 1)
+                combined = or_nt.temp
+            }
+            ll = _lemit(ll, new_inst(OpAnd, nt.temp, tag_eq.temp, combined, "", 0))
+            if k == "!=" {
+                not_nt := _lnew_temp(ll)
+                ll = not_nt.l
+                ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                ll = _lset_type(ll, not_nt.temp, 1)
+                left = not_nt.temp
+            } else {
+                left = nt.temp
+            }
+        } else if _is_float_type(left_type) || _is_float_type(right_type) {
             ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
             left = nt.temp
         } else if left_type == 12 {
@@ -5778,6 +5830,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             nt := _lnew_temp(ll)
             ll = nt.l
             left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
             if (k == "==" || k == "!=") && left_type == 12 {
                 ll = _lemit(ll, new_inst(OpStrEq, nt.temp, left, right.temp, "", 0))
                 if k == "!=" {
@@ -5807,7 +5860,7 @@ fn _lower_expr(l: Lowerer) -> LT {
                     ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "", 0))
                     left = nt.temp
                 }
-            } else if (k == "==" || k == "!=") && (_is_option_or_result_type(ll.store, left_type) || _lis_result(ll, left) || _lis_result(ll, right.temp)) {
+            } else if (k == "==" || k == "!=") && (_is_option_or_result_type(ll.store, left_type) || _is_option_or_result_type(ll.store, right_type) || _lis_result(ll, left) || _lis_result(ll, right.temp)) {
                 // Option / Result equality — tag + payload compare.
                 a_tag := _lnew_temp(ll)
                 ll = a_tag.l
@@ -9156,9 +9209,19 @@ fn _lower_primary(l: Lowerer) -> LT {
             if _lk(ll) == "," { ll = _ladv(ll) }
         }
         if _lk(ll) == "]" { ll = _ladv(ll) }
-        // Track array type: 13 for [str]
+        // Track array type so for-loops and field accesses see the element type.
+        // 13 is a sentinel for [str]; for other element types build/reuse a
+        // store-based TyArray entry. Without this, `cases := [Struct{...}]` leaves
+        // `cases` untyped, the for-loop can't resolve its element struct, and
+        // `c.field` falls back to any-match — wrong when multiple structs share
+        // a field name with different types.
         if arr_elem_tid == 12 {
             ll = _lset_type(ll, nt.temp, 13)
+        } else if arr_elem_tid > 0 {
+            arr_info := TypeInfo{kind: TyArray, name: "", type_id: arr_elem_tid, type_id2: 0, param_start: 0, param_count: 0}
+            sar := store_add_canonical(ll.store, arr_info)
+            ll = _lset_store(ll, sar.store)
+            ll = _lset_type(ll, nt.temp, sar.id)
         }
         return LT{l: ll, temp: nt.temp}
     }
@@ -11480,6 +11543,7 @@ fn _lower_if_cond(l: Lowerer) -> LT {
             nt := _lnew_temp(ll)
             ll = nt.l
             left_type := _lget_type(ll, left)
+            right_type := _lget_type(ll, right.temp)
             if (k == "==" || k == "!=") && left_type == 12 {
                 ll = _lemit(ll, new_inst(OpStrEq, nt.temp, left, right.temp, "", 0))
                 if k == "!=" {
@@ -11490,7 +11554,56 @@ fn _lower_if_cond(l: Lowerer) -> LT {
                 } else {
                     left = nt.temp
                 }
-            } else if _is_float_type(left_type) || _is_float_type(_lget_type(ll, right.temp)) {
+            } else if (k == "==" || k == "!=") && (_is_option_or_result_type(ll.store, left_type) || _is_option_or_result_type(ll.store, right_type) || _lis_result(ll, left) || _lis_result(ll, right.temp)) {
+                // Option / Result equality — tag + payload compare. This path is
+                // reached for `if expr == expr { ... }` conditions; _lower_if_cond
+                // has its own eq handler distinct from _lower_expr / _lower_comparison.
+                a_tag := _lnew_temp(ll)
+                ll = a_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_tag.temp, left, 0, "_tag", 0))
+                b_tag := _lnew_temp(ll)
+                ll = b_tag.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_tag.temp, right.temp, 0, "_tag", 0))
+                tag_eq := _lnew_temp(ll)
+                ll = tag_eq.l
+                ll = _lemit(ll, new_inst(OpEq, tag_eq.temp, a_tag.temp, b_tag.temp, "", 0))
+                ll = _lset_type(ll, tag_eq.temp, 1)
+                a_pay := _lnew_temp(ll)
+                ll = a_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, a_pay.temp, left, 1, "_val", 0))
+                b_pay := _lnew_temp(ll)
+                ll = b_pay.l
+                ll = _lemit(ll, new_inst(OpFieldGet, b_pay.temp, right.temp, 1, "_val", 0))
+                pay_eq := _lnew_temp(ll)
+                ll = pay_eq.l
+                ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+                ll = _lset_type(ll, pay_eq.temp, 1)
+                mut combined := pay_eq.temp
+                if _is_option_type(ll.store, left_type) || _is_option_type(ll.store, right_type) {
+                    zero_c := _lnew_temp(ll)
+                    ll = zero_c.l
+                    ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+                    is_none := _lnew_temp(ll)
+                    ll = is_none.l
+                    ll = _lemit(ll, new_inst(OpEq, is_none.temp, a_tag.temp, zero_c.temp, "", 0))
+                    ll = _lset_type(ll, is_none.temp, 1)
+                    or_nt := _lnew_temp(ll)
+                    ll = or_nt.l
+                    ll = _lemit(ll, new_inst(OpOr, or_nt.temp, is_none.temp, pay_eq.temp, "", 0))
+                    ll = _lset_type(ll, or_nt.temp, 1)
+                    combined = or_nt.temp
+                }
+                ll = _lemit(ll, new_inst(OpAnd, nt.temp, tag_eq.temp, combined, "", 0))
+                if k == "!=" {
+                    not_nt := _lnew_temp(ll)
+                    ll = not_nt.l
+                    ll = _lemit(ll, new_inst(OpNot, not_nt.temp, nt.temp, 0, "", 0))
+                    ll = _lset_type(ll, not_nt.temp, 1)
+                    left = not_nt.temp
+                } else {
+                    left = nt.temp
+                }
+            } else if _is_float_type(left_type) || _is_float_type(right_type) {
                 ll = _lemit(ll, new_inst(_cmp_op(k), nt.temp, left, right.temp, "f64", 0))
                 left = nt.temp
             } else if left_type == 12 {
@@ -11973,6 +12086,12 @@ fn _lower_for(l: Lowerer) -> Lowerer {
             elem_nt := _lnew_temp(ll)
             ll = elem_nt.l
             ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+            // Propagate element type to the loop variable so downstream field
+            // accesses can resolve `c.f` via the correct struct definition. Without
+            // this, `_struct_name_for_type` returns "" and field lookups fall back
+            // to a name-keyed any-match that can pick a wrong same-named field.
+            elem_type := _array_elem_type(ll.store, iter_type)
+            if elem_type > 0 { ll = _lset_type(ll, elem_nt.temp, elem_type) }
             ll = _lenv_add(ll, var_name, elem_nt.temp)
         }
     }
