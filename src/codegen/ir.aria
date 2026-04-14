@@ -66,6 +66,7 @@ type IrOp =
     | OpStrSplit
     | OpIntToStr
     | OpStrToInt
+    | OpFloatToInt
     | OpMapNew
     | OpMapSet
     | OpMapGet
@@ -145,6 +146,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrSplit => "StrSplit"
     OpIntToStr => "IntToStr"
     OpStrToInt => "StrToInt"
+    OpFloatToInt => "FloatToInt"
     OpMapNew => "MapNew"
     OpMapSet => "MapSet"
     OpMapGet => "MapGet"

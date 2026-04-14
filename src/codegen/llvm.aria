@@ -107,6 +107,7 @@ fn _is_definitely_scalar_op(op: str) -> bool =
     op == "StrEq" || op == "StrCmp" || op == "StrContains" || op == "StrStartsWith" ||
     op == "StrEndsWith" || op == "StrIndexOf" || op == "MapContains" ||
     op == "MapLen" || op == "SetContains" || op == "SetLen" ||
+    op == "FloatToInt" ||
     op == "BranchTrue" || op == "BranchFalse" || op == "Label" || op == "Jump"
 
 // Check if a temp is a potential GC root (not definitely scalar)
@@ -2075,6 +2076,17 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return gg
     }
 
+    if op == "FloatToInt" {
+        mut gg := g
+        v := "%f2i_bits_" + i2s(idx)
+        f := "%f2i_f_" + i2s(idx)
+        r := "%f2i_r_" + i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, f + " = bitcast i64 " + v + " to double")
+        gg = _lg_emit(gg, r + " = fptosi double " + f + " to i64")
+        gg = _lg_emit(gg, "store i64 " + r + ", i64* " + _t(inst.dest))
+        return gg
+    }
 
     g
 }

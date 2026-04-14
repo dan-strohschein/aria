@@ -9469,7 +9469,17 @@ fn _lower_conversion(l: Lowerer, obj: i64, method: str, target: str) -> LT {
     }
 
     if method == "trunc" {
-        // Truncating conversion — just pass value through (all ints are i64 in IR)
+        obj_type := _lget_type(ll, obj)
+        // f64 → integer: emit a real fptosi truncation so the stored bits are
+        // the integer value, not the original double's bit pattern.
+        if obj_type == 9 && (target == "i64" || target == "i32" || target == "i16" || target == "i8") {
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpFloatToInt, nt.temp, obj, 0, "", 0))
+            ll = _lset_type(ll, nt.temp, 1)
+            return LT{l: ll, temp: nt.temp}
+        }
+        // Integer-to-integer truncation is a no-op in our i64-uniform IR.
         return LT{l: ll, temp: obj}
     }
 
