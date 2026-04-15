@@ -5892,10 +5892,20 @@ fn _lower_mut_binding(l: Lowerer) -> Lowerer {
 
     // Check for type annotation to infer str type
     mut is_str_type := false
+    mut is_option_type := false
     if _lk(ll) == ":" {
         ll = _ladv(ll)
         if _lk(ll) == "IDENT" && _lcur(ll).text == "str" {
             is_str_type = true
+        }
+        // Detect `IDENT ?` form so `mut last: U? = None` tags the temp as
+        // Optional (sentinel 201). Without this, the unwrap operator can't
+        // tell Option from Result and uses the wrong panic tag.
+        if _lk(ll) == "IDENT" {
+            probe := ll.pos + 1
+            if probe < ll.tokens.len() && ll.tokens[probe].name == "?" {
+                is_option_type = true
+            }
         }
         ll = _skip_type_l(ll)
         if _lk(ll) == "=" { ll = _ladv(ll) }
@@ -5908,6 +5918,9 @@ fn _lower_mut_binding(l: Lowerer) -> Lowerer {
     // Propagate type to binding
     if is_str_type {
         ll = _lset_type(ll, result.temp, 12)
+    }
+    if is_option_type {
+        ll = _lset_type(ll, result.temp, 201)
     }
     ll = _lenv_add(ll, name, result.temp)
     return ll
