@@ -227,6 +227,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "assertNear", SkBuiltin)
     rr = _add_builtin(rr, "dbg", SkBuiltin)
     rr = _add_builtin(rr, "panic", SkBuiltin)
+    rr = _add_builtin(rr, "i2s", SkBuiltin)
     rr = _add_builtin(rr, "_ariaReadFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaWriteFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaAppendFile", SkBuiltin)

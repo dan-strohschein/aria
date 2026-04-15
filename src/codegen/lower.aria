@@ -4232,6 +4232,22 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         }
     }
 
+    if name == "i2s" {
+        if node.list_count > 0 {
+            arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+            ll = arg.l
+            arg_type := _lget_type(ll, arg.temp)
+            if arg_type == 12 { return LT{l: ll, temp: arg.temp} }
+            conv_nt := _lnew_str_temp(ll)
+            ll = conv_nt.l
+            mut i2s_hint := ""
+            if _is_float_type(arg_type) { i2s_hint = "f64" }
+            ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, arg.temp, 0, i2s_hint, 0))
+            ll = _lset_type(ll, conv_nt.temp, 12)
+            return LT{l: ll, temp: conv_nt.temp}
+        }
+    }
+
     if name == "panic" {
         if node.list_count > 0 {
             arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
@@ -8271,6 +8287,21 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_exit", 0))
                 return LT{l: ll, temp: nt.temp}
+            }
+            if name == "i2s" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                arg_type := _lget_type(ll, arg.temp)
+                if arg_type == 12 { return LT{l: ll, temp: arg.temp} }
+                conv_nt := _lnew_str_temp(ll)
+                ll = conv_nt.l
+                mut ti2s_hint := ""
+                if _is_float_type(arg_type) { ti2s_hint = "f64" }
+                ll = _lemit(ll, new_inst(OpIntToStr, conv_nt.temp, arg.temp, 0, ti2s_hint, 0))
+                ll = _lset_type(ll, conv_nt.temp, 12)
+                return LT{l: ll, temp: conv_nt.temp}
             }
             // _ariaReadFile / _ariaWriteBinaryFile builtins
             if name == "_ariaReadFile" {
