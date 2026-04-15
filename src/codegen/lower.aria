@@ -2830,8 +2830,10 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 if msig.return_type > 0 { ll = _lset_type(ll, nt_temp, msig.return_type) }
                 return LT{l: ll, temp: nt_temp}
             }
-            // Fall back to token walker for builtin methods (len, sqrt, etc.)
-            mut tp := _find_tok_pos(ll, node.span.offset)
+            // Fall back to token walker for builtin methods (len, sqrt, etc.).
+            // Uses .span.col for byte offset — see project_span_layout_bug.md
+            // for why `.offset` is unreliable on self-hosted Expr nodes.
+            mut tp := _find_tok_pos(ll, node.span.col)
             while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
             ll = _lset_pos(ll, tp)
             return _lower_method_call(ll, recv.temp, method)
@@ -3155,8 +3157,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = vtag_nt.l
             ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, sv_vtag, 0, "", 0))
             ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, vtag_nt.temp, 0, "_tag", 0))
-            // Fill variant fields by name from the AST list (uses token-walk for names)
-            mut sv_tok := _find_tok_pos(ll, node.span.offset)
+            // Fill variant fields by name from the AST list (uses token-walk for names).
+            // `.span.col` is the reliable byte offset; see project_span_layout_bug.md.
+            mut sv_tok := _find_tok_pos(ll, node.span.col)
             // Advance to { in token stream
             lb2 := "\{"
             while sv_tok < ll.tokens.len() && ll.tokens[sv_tok].name != lb2 { sv_tok = sv_tok + 1 }
@@ -3480,9 +3483,10 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "Yield" {
         // yield expr — used in catch blocks to provide the catch value
-        // Falls back to token-walking for proper catch context integration
+        // Falls back to token-walking for proper catch context integration.
+        // `.span.col` holds the reliable byte offset (see project_span_layout_bug.md).
         if node.b1 {
-            tp := _find_tok_pos(ll, node.span.offset)
+            tp := _find_tok_pos(ll, node.span.col)
             ll = _lset_pos(ll, tp)
             // yield is treated like a return-from-catch: lower the expression
             ll = _ladv(ll)  // skip "yield"
@@ -3796,8 +3800,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Defer / With / Closure / Match — token fallback ---
 
     if nk == "Defer" {
-        // Fall back to token-walking for defer
-        tp := _find_tok_pos(ll, node.span.offset)
+        // Fall back to token-walking for defer. `.span.col` is the reliable
+        // byte offset (see project_span_layout_bug.md).
+        tp := _find_tok_pos(ll, node.span.col)
         ll = _lset_pos(ll, tp)
         ll = _lower_stmt(ll)
         return LT{l: ll, temp: -1}
@@ -13933,8 +13938,9 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
             pi = pi + 1
         }
     }
-    // Try to resolve type annotations from token stream for each param
-    tp := _find_tok_pos(ll, node.span.offset)
+    // Try to resolve type annotations from token stream for each param.
+    // `.span.col` holds the reliable byte offset (project_span_layout_bug.md).
+    tp := _find_tok_pos(ll, node.span.col)
     mut scan := tp
     // Find the correct "fn" keyword for THIS closure (not a nearby function def)
     // Strategy: look for "fn" followed by "(" within a small window
