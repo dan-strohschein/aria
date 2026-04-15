@@ -223,12 +223,18 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
     // Skip mod declaration
     if pos < len && tokens[pos].name == "mod" {
         pos = pos + 1  // skip "mod"
-        // Module names may be keywords that happen to collide (e.g. `mod test`,
-        // `mod bench`, `mod const`) — consume through end-of-line rather than
-        // matching only IDENT, otherwise the leftover keyword token fires a
-        // spurious decl branch below.
-        while pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
-            pos = pos + 1
+        // Consume module name: one token (IDENT or keyword like `test`, `bench`),
+        // optionally followed by `.path` segments. Must NOT scan to NEWLINE because
+        // the lexer sometimes omits NEWLINE between `mod <keyword>` and the next
+        // decl — that would swallow the next function declaration.
+        if pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
+            pos = pos + 1  // consume module name token
+            while pos < len && tokens[pos].name == "." {
+                pos = pos + 1
+                if pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
+                    pos = pos + 1
+                }
+            }
         }
         while pos < len && tokens[pos].name == "NEWLINE" { pos = pos + 1 }
     }
@@ -411,11 +417,19 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             while pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" { pos = pos + 1 }
             idx = decl_index_add(idx, DeclInfo{kind: DkConst, name: name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "mod" {
-            // `mod <name>` — consume through the name so embedded keywords
-            // (e.g. `mod test`) don't fire the test/bench decl branches below.
+            // `mod <name>` — consume mod + name token (optionally dotted path).
+            // Do NOT scan to NEWLINE: the lexer omits NEWLINE between `mod <keyword>`
+            // (e.g. `mod test`) and the next decl, so scanning to NEWLINE eats the
+            // following fn/type/etc. declaration.
             pos = pos + 1  // skip mod
-            while pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
-                pos = pos + 1
+            if pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
+                pos = pos + 1  // consume name token
+                while pos < len && tokens[pos].name == "." {
+                    pos = pos + 1
+                    if pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" {
+                        pos = pos + 1
+                    }
+                }
             }
         } else if k == "use" {
             // Consume a use clause: `use <path>` or `use <prefix>.{ ... }`.
