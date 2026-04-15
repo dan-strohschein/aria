@@ -3433,11 +3433,15 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     if nk == "Propagate" {
         operand := _lower_expr_node(ll, node.c0)
         ll = operand.l
-        // If the operand isn't a Result, pass it through (no propagation needed)
-        prop_type := _lget_type(ll, operand.temp)
-        if prop_type != 200 && prop_type != 0 {
+        // If the operand isn't a Result, pass it through (no propagation needed).
+        // _lis_result is the authoritative signal — call-lowering sets it when
+        // the callee's signature has an error_type. The previous type==200/0
+        // check was wrong: fallible calls tag the temp with the payload type
+        // (e.g. 1 for i64), so this path was always bypassed.
+        if !_lis_result(ll, operand.temp) {
             return LT{l: ll, temp: operand.temp}
         }
+        ll = _emit_result_null_guard(ll, operand.temp)
         tag_nt := _lnew_temp(ll)
         ll = tag_nt.l
         ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, operand.temp, 0, "_tag", 0))
@@ -3455,6 +3459,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ok_val := _lnew_temp(ll)
         ll = ok_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, operand.temp, 1, "_val", 0))
+        payload_t := _lget_type(ll, operand.temp)
+        if payload_t > 0 { ll = _lset_type(ll, ok_val.temp, payload_t) }
         ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, err_lbl.temp, 0, "", 0))
         ll = _emit_defers(ll)
