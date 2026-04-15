@@ -1731,13 +1731,15 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 // impls only in _lower_method_call. Seek cursor to `(` and
                 // delegate — DRY, no duplicate 15+ method bodies.
                 if _is_pipeline_method(fname) {
-                    // The real byte-offset of this Binary's `|>` token is in
-                    // .col (not .offset) due to a Span field-layout skew when
-                    // the `file: str` field is empty — it collapses to one
-                    // slot, so all subsequent i64 fields shift by one and
-                    // `.offset` actually reads `.length`. Using `.col` keeps
-                    // the dispatch anchored at THIS pipeline's `|>` rather
-                    // than whatever short value ends up in `.length`.
+                    // WORKAROUND: use .col instead of .offset for byte position.
+                    // There is a field-access skew where `.span.offset` reads
+                    // `.span.length` on Expr nodes in the self-hosted compiler
+                    // — the skew reproduces only in the compiler compiling
+                    // itself; isolated reproducers with the same struct
+                    // definitions do not trigger it. See memory
+                    // project_span_layout_bug.md for the full investigation.
+                    // Until root-fixed, use `.col` which holds the real
+                    // byte-offset for Binary nodes (via _pspan).
                     mut tp := _find_tok_pos(ll, node.span.col)
                     // Walk forward to the matching method ident. The `|>` token
                     // comes between left and right; stop at the ident after it.
