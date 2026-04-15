@@ -812,6 +812,7 @@ fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
 
     // Struct — iterate EkField children
     mut fields := [FieldInfo{name: "", type_id: 0}]
+    mut defaults := [0]
     mut fi := 0
     while fi < node.list_count {
         idx_node := pool_get(cc.pool, node.list_start + fi)
@@ -819,6 +820,7 @@ fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
         ft := _resolve_type_node(cc, fnode.c0)
         cc = ft.c
         fields = fields.append(FieldInfo{name: fnode.s1, type_id: ft.type_id})
+        defaults = defaults.append(fnode.c1)  // token pos of default expr (0 = none)
         fi = fi + 1
     }
     new_st := store_add(cc.store, mk_named_type(name))
@@ -827,6 +829,13 @@ fn _register_type_decl_ast(c: Checker, node_idx: i64) -> Checker {
     if sgp_count > 0 {
         def = new_generic_struct_def(name, fields, sgp_count, sgp_0, sgp_1, sgp_2)
     }
+    def = StructDef{name: def.name, fields: def.fields, is_sum: def.is_sum,
+                    variant_names: def.variant_names,
+                    variant_field_counts: def.variant_field_counts, variant_field_names: def.variant_field_names,
+                    variant_field_types: def.variant_field_types, variant_field_offsets: def.variant_field_offsets,
+                    generic_count: def.generic_count, generic_name_0: def.generic_name_0,
+                    generic_name_1: def.generic_name_1, generic_name_2: def.generic_name_2,
+                    field_default_tok_pos: defaults}
     cc = _cset_reg(cc, reg_add_struct(cc.registry, def))
     // Handle derives
     cc = _cset_pos(cc, c.pos)

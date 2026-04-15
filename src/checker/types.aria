@@ -546,25 +546,32 @@ struct StructDef {
     generic_name_0: str
     generic_name_1: str
     generic_name_2: str
+    // Per-field default-expression token position (parallel to `fields`).
+    // 0 = no default. Lowerer replays the expression starting at this token
+    // to fill in omitted fields in struct literals.
+    field_default_tok_pos: [i64]
 }
 
 fn _sentinel_struct_def() -> StructDef =
     StructDef{name: "", fields: [FieldInfo{name: "", type_id: 0}], is_sum: false, variant_names: [""],
               variant_field_counts: [0], variant_field_names: [""],
               variant_field_types: [0], variant_field_offsets: [0],
-              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
+              field_default_tok_pos: [0]}
 
 fn new_struct_def(name: str, fields: [FieldInfo], is_sum: bool, variants: [str]) -> StructDef =
     StructDef{name: name, fields: fields, is_sum: is_sum, variant_names: variants,
               variant_field_counts: [0], variant_field_names: [""],
               variant_field_types: [0], variant_field_offsets: [0],
-              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
+              field_default_tok_pos: [0]}
 
 fn new_generic_struct_def(name: str, fields: [FieldInfo], gc: i64, gn0: str, gn1: str, gn2: str) -> StructDef =
     StructDef{name: name, fields: fields, is_sum: false, variant_names: [""],
               variant_field_counts: [0], variant_field_names: [""],
               variant_field_types: [0], variant_field_offsets: [0],
-              generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2}
+              generic_count: gc, generic_name_0: gn0, generic_name_1: gn1, generic_name_2: gn2,
+              field_default_tok_pos: [0]}
 
 fn struct_is_generic(def: StructDef) -> bool = def.generic_count > 0
 
@@ -572,7 +579,8 @@ fn new_sum_def(name: str, variants: [str], vf_counts: [i64], vf_names: [str], vf
     StructDef{name: name, fields: [FieldInfo{name: "", type_id: 0}], is_sum: true, variant_names: variants,
               variant_field_counts: vf_counts, variant_field_names: vf_names,
               variant_field_types: vf_types, variant_field_offsets: vf_offsets,
-              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: ""}
+              generic_count: 0, generic_name_0: "", generic_name_1: "", generic_name_2: "",
+              field_default_tok_pos: [0]}
 
 // Look up the number of data fields for a variant by its 1-based tag
 fn variant_data_count(def: StructDef, tag: i64) -> i64 {

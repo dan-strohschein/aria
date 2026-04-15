@@ -1294,8 +1294,21 @@ fn _parse_type_decl(p: Parser) -> PR {
                     pp = tr.p
                     type_node_idx := _pidx(pp)
                     pp = _padd(pp, tr.e)
+                    // Optional default: `name: Type = <expr>`. Record the
+                    // starting token position of the default expression so
+                    // struct-literal lowering can replay it for omitted fields.
+                    mut default_tok := 0
+                    if _ck(pp) == "=" {
+                        pp = _adv(pp)
+                        default_tok = pp.pos
+                        def_r := _parse_expr(pp, 0)
+                        pp = _padd(def_r.p, def_r.e)
+                    }
                     fidx := _pidx(pp)
-                    pp = _padd(pp, mk_field(fname, type_node_idx, fspan))
+                    field_expr := Expr{kind: EkField, s1: fname, s2: "", b1: false, b2: false,
+                                       c0: type_node_idx, c1: default_tok, c2: 0,
+                                       list_start: 0, list_count: 0, span: fspan}
+                    pp = _padd(pp, field_expr)
                     child_indices = child_indices.append(fidx)
                     child_count = child_count + 1
                 }
