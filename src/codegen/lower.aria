@@ -1842,9 +1842,21 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 b_pay := _lnew_temp(ll)
                 ll = b_pay.l
                 ll = _lemit(ll, new_inst(OpFieldGet, b_pay.temp, right.temp, 1, "_val", 0))
+                // Determine payload type; dispatch to struct-eq when it's a struct
+                // so Some(struct) == Some(struct) compares fields, not pointers.
+                mut payload_t := 0
+                if left_type > 16 && left_type < ll.store.types.len() {
+                    info := store_get(ll.store, left_type)
+                    if info.type_id > 0 { payload_t = info.type_id }
+                }
                 pay_eq := _lnew_temp(ll)
                 ll = pay_eq.l
-                ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+                payload_sname := _struct_name_for_type(ll.store, ll.registry, payload_t)
+                if payload_sname != "" {
+                    ll = _lower_struct_eq(ll, a_pay.temp, b_pay.temp, payload_sname, pay_eq.temp)
+                } else {
+                    ll = _lemit(ll, new_inst(OpEq, pay_eq.temp, a_pay.temp, b_pay.temp, "", 0))
+                }
                 ll = _lset_type(ll, pay_eq.temp, 1)
                 // For Option (201) tag 0 = None (no payload) — skip payload check.
                 // For Result (200) both variants carry a payload — always require it.
@@ -3953,7 +3965,17 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
             } else {
                 ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, val.temp, 1, "_val", 0))
             }
-            ll = _lset_type(ll, nt.temp, 201)
+            // Track Option<T> precisely when T is known so downstream consumers
+            // (equality, interp, match) can compare/format payloads correctly
+            // instead of falling through to pointer compare on generic 201.
+            if val_type > 0 {
+                opt_info := TypeInfo{kind: TyOptional, name: "", type_id: val_type, type_id2: 0, param_start: 0, param_count: 0}
+                sar := store_add_canonical(ll.store, opt_info)
+                ll = _lset_store(ll, sar.store)
+                ll = _lset_type(ll, nt.temp, sar.id)
+            } else {
+                ll = _lset_type(ll, nt.temp, 201)
+            }
             return LT{l: ll, temp: nt.temp}
         }
     }
