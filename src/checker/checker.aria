@@ -557,6 +557,30 @@ fn _skip_type_toks(c: Checker) -> Checker {
 
 fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
     mut cc := c
+    // Pre-pass: pre-register every struct/sum type name in the store so that
+    // any struct whose field references a later-declared type still resolves
+    // correctly. Without this, a struct like `Expr { ...; span: Span }` gets
+    // registered first (when file order puts Expr before Span), resolves its
+    // span field to TY_UNKNOWN (16), and downstream field access on expr.span
+    // falls through to _field_index_any which returns the slot from Token (or
+    // whichever struct happens to win the race). The skew that plagued the
+    // Span workaround in lower.aria traces back here.
+    mut pdi := 1
+    while pdi < decl_index_len(index) {
+        pdecl := decl_index_get(index, pdi)
+        pkname := decl_kind_name(pdecl.kind)
+        if pkname == "type" || pkname == "enum" {
+            pname := pdecl.name
+            if pname.len() > 0 && !pname.startsWith("_alias:") {
+                existing := resolve_type_name(cc.store, pname)
+                if existing == TY_UNKNOWN {
+                    new_st := store_add(cc.store, mk_named_type(pname))
+                    cc = _cset_store(cc, new_st)
+                }
+            }
+        }
+        pdi = pdi + 1
+    }
     mut di := 1
     while di < decl_index_len(index) {
         decl := decl_index_get(index, di)

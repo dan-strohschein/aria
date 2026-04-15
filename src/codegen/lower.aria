@@ -1731,16 +1731,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 // impls only in _lower_method_call. Seek cursor to `(` and
                 // delegate — DRY, no duplicate 15+ method bodies.
                 if _is_pipeline_method(fname) {
-                    // WORKAROUND: use .col instead of .offset for byte position.
-                    // There is a field-access skew where `.span.offset` reads
-                    // `.span.length` on Expr nodes in the self-hosted compiler
-                    // — the skew reproduces only in the compiler compiling
-                    // itself; isolated reproducers with the same struct
-                    // definitions do not trigger it. See memory
-                    // project_span_layout_bug.md for the full investigation.
-                    // Until root-fixed, use `.col` which holds the real
-                    // byte-offset for Binary nodes (via _pspan).
-                    mut tp := _find_tok_pos(ll, node.span.col)
+                    mut tp := _find_tok_pos(ll, node.span.offset)
                     // Walk forward to the matching method ident. The `|>` token
                     // comes between left and right; stop at the ident after it.
                     mut seen_pipe := false
@@ -2707,7 +2698,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             // `.col` (which actually holds the byte offset) to locate the
             // method call site reliably instead of `.offset` (which holds
             // the length due to `file: str` empty-slot collapse).
-            mut tp := _find_tok_pos(ll, node.span.col)
+            mut tp := _find_tok_pos(ll, node.span.offset)
             while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
             ll = _lset_pos(ll, tp)
             return _lower_method_call(ll, recv.temp, method)
@@ -2831,9 +2822,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 return LT{l: ll, temp: nt_temp}
             }
             // Fall back to token walker for builtin methods (len, sqrt, etc.).
-            // Uses .span.col for byte offset — see project_span_layout_bug.md
-            // for why `.offset` is unreliable on self-hosted Expr nodes.
-            mut tp := _find_tok_pos(ll, node.span.col)
+            mut tp := _find_tok_pos(ll, node.span.offset)
             while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
             ll = _lset_pos(ll, tp)
             return _lower_method_call(ll, recv.temp, method)
@@ -3157,9 +3146,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = vtag_nt.l
             ll = _lemit(ll, new_inst(OpConst, vtag_nt.temp, sv_vtag, 0, "", 0))
             ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, vtag_nt.temp, 0, "_tag", 0))
-            // Fill variant fields by name from the AST list (uses token-walk for names).
-            // `.span.col` is the reliable byte offset; see project_span_layout_bug.md.
-            mut sv_tok := _find_tok_pos(ll, node.span.col)
+            // Fill variant fields by name from the AST list (uses token-walk for names)
+            mut sv_tok := _find_tok_pos(ll, node.span.offset)
             // Advance to { in token stream
             lb2 := "\{"
             while sv_tok < ll.tokens.len() && ll.tokens[sv_tok].name != lb2 { sv_tok = sv_tok + 1 }
@@ -3375,7 +3363,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // Position to the function name token and use token-based method dispatch
         if right_kind == "Call" {
             fname := right_node.s1
-            tp := _find_tok_pos(ll, right_node.span.col)
+            tp := _find_tok_pos(ll, right_node.span.offset)
             ll = _lset_pos(ll, tp)
             // Skip to ( after function name
             if _lk(ll) == "IDENT" { ll = _ladv(ll) }
@@ -3483,10 +3471,9 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "Yield" {
         // yield expr — used in catch blocks to provide the catch value
-        // Falls back to token-walking for proper catch context integration.
-        // `.span.col` holds the reliable byte offset (see project_span_layout_bug.md).
+        // Falls back to token-walking for proper catch context integration
         if node.b1 {
-            tp := _find_tok_pos(ll, node.span.col)
+            tp := _find_tok_pos(ll, node.span.offset)
             ll = _lset_pos(ll, tp)
             // yield is treated like a return-from-catch: lower the expression
             ll = _ladv(ll)  // skip "yield"
@@ -3800,9 +3787,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Defer / With / Closure / Match — token fallback ---
 
     if nk == "Defer" {
-        // Fall back to token-walking for defer. `.span.col` is the reliable
-        // byte offset (see project_span_layout_bug.md).
-        tp := _find_tok_pos(ll, node.span.col)
+        // Fall back to token-walking for defer
+        tp := _find_tok_pos(ll, node.span.offset)
         ll = _lset_pos(ll, tp)
         ll = _lower_stmt(ll)
         return LT{l: ll, temp: -1}
@@ -13938,9 +13924,8 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
             pi = pi + 1
         }
     }
-    // Try to resolve type annotations from token stream for each param.
-    // `.span.col` holds the reliable byte offset (project_span_layout_bug.md).
-    tp := _find_tok_pos(ll, node.span.col)
+    // Try to resolve type annotations from token stream for each param
+    tp := _find_tok_pos(ll, node.span.offset)
     mut scan := tp
     // Find the correct "fn" keyword for THIS closure (not a nearby function def)
     // Strategy: look for "fn" followed by "(" within a small window
