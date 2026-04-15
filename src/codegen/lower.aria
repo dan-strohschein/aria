@@ -11074,7 +11074,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    if method == "startsWith" {
+    if method == "startsWith" || method == "starts_with" {
         arg := _lower_expr(ll)
         ll = arg.l
         if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -11084,7 +11084,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
-    if method == "endsWith" {
+    if method == "endsWith" || method == "ends_with" {
         arg := _lower_expr(ll)
         ll = arg.l
         if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -11156,6 +11156,33 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpStrSplit, nt.temp, obj, arg.temp, "", 0))
+        ll = _lset_type(ll, nt.temp, 13)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // `lines()` — split on newline. Equivalent to `split("\n")`.
+    if method == "lines" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        sep := _lower_string_const(ll, "\n")
+        ll = sep.l
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSplit, nt.temp, obj, sep.temp, "", 0))
+        ll = _lset_type(ll, nt.temp, 13)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // `split_whitespace()` — split on single space (simple approximation).
+    // Good enough for word-count style usage in examples.
+    if method == "split_whitespace" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        sep := _lower_string_const(ll, " ")
+        ll = sep.l
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrSplit, nt.temp, obj, sep.temp, "", 0))
         ll = _lset_type(ll, nt.temp, 13)
         return LT{l: ll, temp: nt.temp}
     }
@@ -11938,13 +11965,13 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         ll = _lset_type(ll, nt.temp, 12)
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "startsWith" {
+    if method == "startsWith" || method == "starts_with" {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpStrStartsWith, nt.temp, obj, arg1, "", 0))
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "endsWith" {
+    if method == "endsWith" || method == "ends_with" {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpStrEndsWith, nt.temp, obj, arg1, "", 0))

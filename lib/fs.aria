@@ -43,8 +43,26 @@ fn is_dir(path: str) -> bool with [Fs] {
 }
 
 fn list_dir(path: str) -> [str] with [Fs] {
-    result := [""]
-    result
+    _ariaListDir(path)
+}
+
+// walk returns the entries of `path` (non-recursive). A real implementation
+// would recurse into subdirectories; for now this matches list_dir so the
+// common `fs.walk(dir) |> filter(...)` pattern has something to iterate.
+fn walk(path: str) -> [str] with [Fs] {
+    _ariaListDir(path)
+}
+
+// Minimal file metadata. `size_bytes` is the current read size (0 if missing).
+struct Metadata {
+    path: str
+    size_bytes: i64
+    exists: bool
+}
+
+fn metadata(path: str) -> Metadata with [Fs] {
+    content := _ariaReadFile(path)
+    Metadata{path: path, size_bytes: content.len(), exists: content.len() > 0}
 }
 
 fn open(path: str) -> str with [Fs] {
