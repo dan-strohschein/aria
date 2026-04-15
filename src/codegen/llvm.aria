@@ -472,6 +472,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare double @_aria_abs(double)" + nl)
     p = p.append("declare void @_aria_exit(i64)" + nl)
     p = p.append("declare i64 @_aria_get_time_ns()" + nl)
+    p = p.append("declare " + si64 + " @_aria_sha256_hex(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     p = p.append("declare void @_aria_println_str(i8*, i64)" + nl)
     p = p.append("declare void @_aria_print_str(i8*, i64)" + nl)
@@ -767,6 +768,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare double @_aria_abs(double)" + nl)
     h = h.append("declare void @_aria_exit(i64)" + nl)
     h = h.append("declare i64 @_aria_get_time_ns()" + nl)
+    h = h.append("declare " + si64 + " @_aria_sha256_hex(i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     h = h.append("declare void @_aria_println_str(i8*, i64)" + nl)
     h = h.append("declare void @_aria_print_str(i8*, i64)" + nl)
@@ -2272,6 +2274,20 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%call_tn_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call i64 @_aria_get_time_ns()")
         gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_sha256_hex" {
+        ptr_v := "%call_sh_p_" + i2s(idx)
+        len_v := "%call_sh_l_" + i2s(idx)
+        gg = _lg_emit(gg, ptr_v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, len_v + " = load i64, i64* " + _t(inst.arg1 + 1))
+        ptr_cast := "%call_sh_pc_" + i2s(idx)
+        gg = _lg_emit(gg, ptr_cast + " = inttoptr i64 " + ptr_v + " to i8*")
+        srt := _str_ret_type()
+        res := "%call_sh_r_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_sha256_hex(i8* " + ptr_cast + ", i64 " + len_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "call_sh")
         return gg
     }
 

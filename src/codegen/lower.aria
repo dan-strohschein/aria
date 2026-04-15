@@ -4609,6 +4609,7 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaExit" { return "_aria_exit" }
     if name == "_ariaTimeNow" { return "_aria_get_time_ns" }
     if name == "_ariaSleep" { return "_aria_sleep" }
+    if name == "_ariaSha256Hex" { return "_aria_sha256_hex" }
     if name == "_ariaArgs" { return "_aria_args" }
     if name == "_ariaListDir" { return "_aria_list_dir" }
     if name == "_ariaIsDir" { return "_aria_is_dir" }
@@ -4652,7 +4653,8 @@ fn _builtin_runtime_name(name: str) -> str {
 fn _builtin_return_type(name: str) -> i64 {
     if name == "_ariaReadFile" || name == "_ariaGetenv" || name == "_ariaTcpRead" ||
        name == "_ariaTcpPeerAddr" || name == "_ariaPgError" || name == "_ariaPgResultError" ||
-       name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" {
+       name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" ||
+       name == "_ariaSha256Hex" {
         return 12
     }
     if name == "_ariaArgs" || name == "_ariaListDir" {
@@ -8413,6 +8415,18 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = nt.l
                 // One i64 arg (ms), does not return
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sleep", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSha256Hex" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                // str arg = 2 regs, returns 64-char hex str
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_sha256_hex", 12))
+                ll = _lset_type(ll, nt.temp, 12)
                 return LT{l: ll, temp: nt.temp}
             }
             if name == "_ariaArgs" {

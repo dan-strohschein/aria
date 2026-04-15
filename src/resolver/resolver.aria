@@ -237,6 +237,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaExit", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTimeNow", SkBuiltin)
     rr = _add_builtin(rr, "_ariaSleep", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSha256Hex", SkBuiltin)
     // Filesystem
     rr = _add_builtin(rr, "_ariaListDir", SkBuiltin)
     rr = _add_builtin(rr, "_ariaIsDir", SkBuiltin)
