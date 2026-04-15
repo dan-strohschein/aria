@@ -1044,7 +1044,7 @@ fn _parse_type(p: Parser) -> PR {
         return PR{p: pp, e: Expr{kind: EkTypeTuple, s1: "", s2: "", b1: false, b2: false,
                                   c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
-    // Function type: fn(A, B) -> C
+    // Function type: fn(A, B) -> C [! E]
     if k == "fn" {
         pp = _adv(pp)
         if _ck(pp) == "IDENT" && _cur(pp).text == "once" { pp = _adv(pp) }
@@ -1065,8 +1065,17 @@ fn _parse_type(p: Parser) -> PR {
             ret_idx = _pidx(ret.p)
             pp = _padd(ret.p, ret.e)
         }
+        // Optional error type after `!`. Stored in c1 so the checker can
+        // construct a fallible fn type (TypeInfo.type_id2 != 0).
+        mut err_idx := 0
+        if _ck(pp) == "!" {
+            pp = _adv(pp)
+            et := _parse_type(pp)
+            err_idx = _pidx(et.p)
+            pp = _padd(et.p, et.e)
+        }
         return PR{p: pp, e: Expr{kind: EkTypeFn, s1: "", s2: "", b1: false, b2: false,
-                                  c0: ret_idx, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+                                  c0: ret_idx, c1: err_idx, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
     // Unknown — return empty and don't advance
     PR{p: pp, e: Expr{kind: EkTypeRef, s1: "", s2: "", b1: false, b2: false,

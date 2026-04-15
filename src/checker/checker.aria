@@ -281,9 +281,31 @@ fn _resolve_type_node(c: Checker, node_idx: i64) -> CE {
         return CE{c: cc, type_id: res_st.id}
     }
     if nk == "TypeFn" {
-        // Function types: fn(A, B) -> C
-        // For now, use the generic function type
-        return CE{c: c, type_id: TY_UNKNOWN}
+        // Function types: fn(A, B) -> C [! E]
+        // c0: return-type node, c1: error-type node (0 if infallible).
+        // Construct TypeInfo with type_id2 = err_id so the lowerer can
+        // flag indirect-call results as already-Result.
+        ret_id := TY_UNKNOWN
+        err_id := 0
+        mut cc := c
+        if node.c0 > 0 {
+            rr := _resolve_type_node(cc, node.c0)
+            cc = rr.c
+            if rr.type_id != TY_UNKNOWN {
+                fn_ti := TypeInfo{kind: TyFunction, name: "", type_id: rr.type_id, type_id2: 0, param_start: 0, param_count: 0}
+                if node.c1 > 0 {
+                    er := _resolve_type_node(cc, node.c1)
+                    cc = er.c
+                    if er.type_id != TY_UNKNOWN {
+                        fn_ti = TypeInfo{kind: TyFunction, name: "", type_id: rr.type_id, type_id2: er.type_id, param_start: 0, param_count: 0}
+                    }
+                }
+                new_st := store_add(cc.store, fn_ti)
+                cc = _cset_store(cc, new_st)
+                return CE{c: cc, type_id: store_last_id(cc.store)}
+            }
+        }
+        return CE{c: cc, type_id: TY_UNKNOWN}
     }
     if nk == "TypeTuple" {
         // Tuple types: (A, B, C)
@@ -452,7 +474,18 @@ fn _parse_type_ann(c: Checker) -> CE {
             cc = rr.c
             ret = rr.type_id
         }
-        new_st := store_add(cc.store, mk_fn_type(ret, 0, 0))
+        // Optional error type `! E` marks the fn as fallible. Store error
+        // type id in TypeInfo.type_id2 so the lowerer can mark indirect-call
+        // results as Result-typed (avoids double-wrapping in Ok).
+        mut err_id := 0
+        if _ck2(cc) == "!" {
+            cc = _cadv(cc)
+            er := _parse_type_ann(cc)
+            cc = er.c
+            err_id = er.type_id
+        }
+        fn_ti := TypeInfo{kind: TyFunction, name: "", type_id: ret, type_id2: err_id, param_start: 0, param_count: 0}
+        new_st := store_add(cc.store, fn_ti)
         cc = _cset_store(cc, new_st)
         return CE{c: cc, type_id: store_last_id(cc.store)}
     }

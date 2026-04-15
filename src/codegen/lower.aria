@@ -4679,12 +4679,26 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         }
         mut ret_hint := ""
         mut ic_ret_type := 0
+        mut ic_is_result := false
         fn_tid_ic := _lget_type(ll, fn_slot)
         if fn_tid_ic > 16 {
             ti_ic := store_get(ll.store, fn_tid_ic)
             if type_kind_name(ti_ic.kind) == "Function" {
                 ic_ret_type = type_info_type_id(ti_ic)
                 if ic_ret_type == 12 { ret_hint = "str" }
+                // The callee is fallible if (a) TypeInfo.type_id2 holds an
+                // error type, or (b) the return type itself is a Result
+                // (when the parser folded `T ! E` into `Result<T, E>`).
+                if ti_ic.type_id2 > 0 { ic_is_result = true }
+                if ic_ret_type > 16 {
+                    ret_ti := store_get(ll.store, ic_ret_type)
+                    if type_kind_name(ret_ti.kind) == "Result" {
+                        ic_is_result = true
+                        // Peel the Result so codegen sees the payload type.
+                        ic_ret_type = type_info_type_id(ret_ti)
+                        if ic_ret_type == 12 { ret_hint = "str" }
+                    }
+                }
             }
         }
         if ic_ret_type == 12 {
@@ -4692,12 +4706,14 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
             ll = ic_nt_s.l
             ll = _lemit(ll, new_inst(OpCallIndirect, ic_nt_s.temp, fn_ptr_nt.temp, total_reg_count, ret_hint, pack_start.temp))
             ll = _lset_type(ll, ic_nt_s.temp, 12)
+            if ic_is_result { ll = _lset_is_result(ll, ic_nt_s.temp) }
             return LT{l: ll, temp: ic_nt_s.temp}
         }
         ic_nt_r := _lnew_temp(ll)
         ll = ic_nt_r.l
         ll = _lemit(ll, new_inst(OpCallIndirect, ic_nt_r.temp, fn_ptr_nt.temp, total_reg_count, "", pack_start.temp))
         if ic_ret_type > 0 { ll = _lset_type(ll, ic_nt_r.temp, ic_ret_type) }
+        if ic_is_result { ll = _lset_is_result(ll, ic_nt_r.temp) }
         return LT{l: ll, temp: ic_nt_r.temp}
     }
 
@@ -9629,6 +9645,7 @@ fn _lower_primary(l: Lowerer) -> LT {
                 // If fn_slot's type is TyFunction, propagate its return type hint.
                 // A str-returning closure needs s1="str" so LLVM extracts {ptr,len}.
                 mut ret_hint := ""
+                mut ic_is_result := false
                 fn_tid := _lget_type(ll, fn_slot)
                 if fn_tid > 0 {
                     ti := store_get(ll.store, fn_tid)
@@ -9636,9 +9653,15 @@ fn _lower_primary(l: Lowerer) -> LT {
                         ret_type := type_info_type_id(ti)
                         if ret_type == 12 { ret_hint = "str" }
                         ll = _lset_type(ll, nt_temp, ret_type)
+                        // TypeInfo.type_id2 holds the fn's error type (0 for
+                        // infallible). If set, the callee returns a Result
+                        // pointer — mark the icall result so outer wrappers
+                        // (fn body Ok-wrap, catch) treat it correctly.
+                        if ti.type_id2 > 0 { ic_is_result = true }
                     }
                 }
                 ll = _lemit(ll, new_inst(OpCallIndirect, nt_temp, fn_ptr_nt.temp, total_args, ret_hint, pack_start.temp))
+                if ic_is_result { ll = _lset_is_result(ll, nt_temp) }
                 return LT{l: ll, temp: nt_temp}
             }
             // Truly unknown — skip args
@@ -14147,8 +14170,48 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
         }
     }
 
-    // Determine return type (default i64)
+    // Determine return type (default i64) and error type if present.
+    // After the closing `)` of params, look for `->` Type `!` ErrorType.
     mut ret_type := 1
+    mut err_type := 0
+    if fn_found {
+        // scan is somewhere past params. Advance to ')'.
+        mut rscan := scan
+        mut depth := 1
+        while rscan < ll.tokens.len() && depth > 0 {
+            rn := ll.tokens[rscan].name
+            if rn == "(" { depth = depth + 1 }
+            if rn == ")" { depth = depth - 1 }
+            if depth > 0 { rscan = rscan + 1 }
+        }
+        if rscan < ll.tokens.len() && ll.tokens[rscan].name == ")" { rscan = rscan + 1 }
+        if rscan < ll.tokens.len() && ll.tokens[rscan].name == "->" {
+            rscan = rscan + 1
+            if rscan < ll.tokens.len() && ll.tokens[rscan].name == "IDENT" {
+                rt_name := ll.tokens[rscan].text
+                rt_resolved := resolve_type_name(ll.store, rt_name)
+                if rt_resolved != TY_UNKNOWN { ret_type = rt_resolved }
+                if rt_resolved == TY_UNKNOWN {
+                    rt_sid := _struct_type_id(ll.registry, rt_name)
+                    if rt_sid > 0 { ret_type = rt_sid }
+                }
+                rscan = rscan + 1
+                if rscan < ll.tokens.len() && ll.tokens[rscan].name == "!" {
+                    rscan = rscan + 1
+                    if rscan < ll.tokens.len() && ll.tokens[rscan].name == "IDENT" {
+                        et_name := ll.tokens[rscan].text
+                        et_sid := _struct_type_id(ll.registry, et_name)
+                        if et_sid > 0 {
+                            err_type = et_sid
+                        } else {
+                            // Sentinel non-zero so body lowering knows we're fallible
+                            err_type = 0 - 1
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Scan for captured variables using AST walk
     raw_caps := _scan_captures_ast(ll, ll.pool, node.c0, param_names)
@@ -14185,6 +14248,9 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     saved_is_result := ll.is_result
 
     ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
+    // Activate fallible-closure mode so `?`/`catch`/body-result wrapping work
+    // like a regular fn with `fn foo() -> T!E`.
+    if err_type != 0 { ll = _lset_error_type(ll, err_type) }
 
     // First param is env_ptr
     env_param := _lnew_temp(ll)
@@ -14222,12 +14288,34 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
         }
     }
 
-    // Lower body from AST
+    // Lower body from AST. For fallible closures (`-> T!E`), wrap the body
+    // value in Ok Result before returning — callers expect a Result pointer.
     if node.c0 > 0 {
         body := _lower_expr_node(ll, node.c0)
         ll = body.l
         if body.temp >= 0 {
-            ll = _lemit(ll, new_inst(OpRet, 0, body.temp, 0, "", 0))
+            if ll.fn_error_type != 0 && _lget_type(ll, body.temp) != 200 && !_lis_result(ll, body.temp) {
+                body_rt := _lget_type(ll, body.temp)
+                mut ok_slots := 2
+                if body_rt == 12 { ok_slots = 3 }
+                ok_nt := _lnew_temp(ll)
+                ll = ok_nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, ok_nt.temp, ok_slots, 0, "_Result", 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, tag_nt.temp, 0, "_tag", 0))
+                if body_rt == 12 {
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, body.temp, 1, "_val", 0))
+                    body_len := body.temp + 1
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, body_len, 2, "_val_len", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, body.temp, 1, "_val", 0))
+                }
+                ll = _lemit(ll, new_inst(OpRet, 0, ok_nt.temp, 0, "", 0))
+            } else {
+                ll = _lemit(ll, new_inst(OpRet, 0, body.temp, 0, "", 0))
+            }
         }
     }
 
