@@ -4861,6 +4861,12 @@ fn _lower_test(l: Lowerer) -> Lowerer {
         ll = _ladv(ll)
     }
 
+    // Register the test label in module BEFORE lowering the body so asserts
+    // inside can look it up via current_func.name → test_names[N+1].
+    mut new_mod := mod_add_test(ll.module, test_label)
+    new_mod = mod_add_string(new_mod, test_label)
+    ll = _lset_mod(ll, new_mod)
+
     // Create IR function for this test
     ll = _lset_func(ll, new_ir_func(test_name, 0, 0))
 
@@ -4872,12 +4878,7 @@ fn _lower_test(l: Lowerer) -> Lowerer {
     // Return void at end
     ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
     ll = _lfinish_func(ll)
-
-    // Register test in module
-    mut new_mod := mod_add_test(ll.module, test_label)
-    // Also add the string constant for the test name for printing
-    new_mod = mod_add_string(new_mod, test_label)
-    _lset_mod(ll, new_mod)
+    ll
 }
 
 // --- Lower extern declaration ---
@@ -16424,19 +16425,36 @@ fn _lower_assert(l: Lowerer) -> Lowerer {
     // If false, print a FAIL: marker then call exit(1). Without the print, a
     // failing assert is silent — test runners can't report which test died,
     // and callers see an exit code with no indication of why.
+    // When inside a test body (current_func.name matches "_test_N"), include
+    // the test label so the failing test is identifiable in output.
     ok_lbl := _lnew_label(ll)
     ll = ok_lbl.l
     ll = _lemit(ll, new_inst(OpBranchTrue, 0, result.temp, ok_lbl.temp, "", 0))
-    // Assertion failed — print FAIL marker then exit
-    mut fail_idx := mod_find_string(ll.module, "FAIL: assertion failed")
+
+    // Build "FAIL: <test label>: assertion failed" when in a test, else
+    // fall back to the generic "FAIL: assertion failed".
+    fn_name := ll.current_func.name
+    mut test_idx := -1
+    if fn_name.len() > 6 && fn_name.substring(0, 6) == "_test_" {
+        suffix := fn_name.substring(6, fn_name.len())
+        test_idx = _parse_int_literal(suffix)
+    }
+    mut fail_msg := "FAIL: assertion failed"
+    if test_idx >= 0 {
+        label_idx := test_idx + 1  // test_names is 1-indexed, sentinel at 0
+        if label_idx < ll.module.test_names.len() {
+            fail_msg = "FAIL: " + ll.module.test_names[label_idx] + ": assertion failed"
+        }
+    }
+    mut fail_idx := mod_find_string(ll.module, fail_msg)
     if fail_idx == 0 {
-        new_mod := mod_add_string(ll.module, "FAIL: assertion failed")
+        new_mod := mod_add_string(ll.module, fail_msg)
         fail_idx = new_mod.string_constants.len() - 1
         ll = _lset_mod(ll, new_mod)
     }
     fail_nt := _lnew_str_temp(ll)
     ll = fail_nt.l
-    ll = _lemit(ll, new_inst(OpConstStr, fail_nt.temp, fail_idx, 22, "", 0))
+    ll = _lemit(ll, new_inst(OpConstStr, fail_nt.temp, fail_idx, fail_msg.len(), "", 0))
     ll = _lemit(ll, new_inst(OpCall, 0, fail_nt.temp, 2, "_aria_println_str", 0))
     nt := _lnew_temp(ll)
     ll = nt.l
