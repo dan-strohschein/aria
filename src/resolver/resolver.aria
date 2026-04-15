@@ -233,6 +233,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaWriteBinaryFile", SkBuiltin)
     rr = _add_builtin(rr, "_ariaArgs", SkBuiltin)
     rr = _add_builtin(rr, "_ariaExec", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaExit", SkBuiltin)
     // Filesystem
     rr = _add_builtin(rr, "_ariaListDir", SkBuiltin)
     rr = _add_builtin(rr, "_ariaIsDir", SkBuiltin)

@@ -1,17 +1,27 @@
 mod os
 
 // ============================================================
-// OS utilities for Aria (stub)
+// OS utilities for Aria
 // ============================================================
 
-fn signal(name: str) -> i64 {
-    0
+fn args() -> [str] {
+    _ariaArgs()
 }
 
-fn getenv(name: str) -> str {
-    ""
+fn getenv(name: str) -> str with [Io] {
+    _ariaGetenv(name)
 }
 
-fn exit(code: i64) -> i64 {
+fn exit(code: i64) -> i64 with [Io] {
+    _ariaExit(code)
     code
+}
+
+fn signal(name: str) -> i64 {
+    if name == "SIGHUP" { return 1 }
+    if name == "SIGINT" { return 2 }
+    if name == "SIGQUIT" { return 3 }
+    if name == "SIGKILL" { return 9 }
+    if name == "SIGTERM" { return 15 }
+    0
 }

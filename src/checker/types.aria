@@ -725,7 +725,7 @@ fn _builtin_effect(name: str) -> str {
     // File system operations
     if name == "_ariaReadFile" || name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" || name == "_ariaListDir" || name == "_ariaIsDir" { return "Fs" }
     // I/O operations
-    if name == "_ariaExec" || name == "_ariaGetenv" { return "Io" }
+    if name == "_ariaExec" || name == "_ariaGetenv" || name == "_ariaExit" { return "Io" }
     // Network operations
     if name == "_ariaTcpConnect" || name == "_ariaTcpListen" || name == "_ariaTcpAccept" || name == "_ariaTcpRead" || name == "_ariaTcpWrite" || name == "_ariaTcpClose" { return "Net" }
     if name == "_ariaPgConnect" || name == "_ariaPgQuery" || name == "_ariaPgExec" || name == "_ariaPgClose" { return "Net" }

@@ -365,6 +365,18 @@ fn _fall(n: i64) -> str = "Lfall" + i2s(n)
 
 fn _struct_i64_i64() -> str = _lb() + " i64, i64 " + _rb()
 
+// Mangle user function names to avoid colliding with libc/dyld symbols
+// (e.g. getenv, exit, read, write). Runtime names already start with _aria_
+// and trampolines with _tramp_/_bound_tramp_, so those pass through.
+fn _mangle_user_fn(name: str) -> str {
+    if name == "main" { return "_aria_main" }
+    if name.startsWith("_aria_") { return name }
+    if name.startsWith("_tramp_") { return name }
+    if name.startsWith("_bound_tramp_") { return name }
+    if name.startsWith("llvm.") { return name }
+    return "_aria_u_" + name
+}
+
 // Collect all function names called by OpCall instructions
 fn _collect_called_names(m: IrModule) -> [str] {
     mut names := [""]
@@ -677,8 +689,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
                 exi = exi + 1
             }
             if cname.startsWith("_aria_") == false && is_extern == false {
-                // Declare as varargs i64 return
-                p = p.append("declare i64 @" + cname + "(...)" + nl)
+                // Declare as varargs i64 return (mangle to match call sites)
+                p = p.append("declare i64 @" + _mangle_user_fn(cname) + "(...)" + nl)
             }
         }
         ci = ci + 1
@@ -688,8 +700,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     lb := _lb()
     rb := _rb()
     if m.entry_func != "" {
-        mut entry_call := m.entry_func
-        if entry_call == "main" { entry_call = "_aria_main" }
+        mut entry_call := _mangle_user_fn(m.entry_func)
         p = p.append("; Entry wrapper" + nl)
         p = p.append("define void @_aria_entry() " + lb + nl)
         p = p.append("entry:" + nl)
@@ -957,7 +968,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
                 exi = exi + 1
             }
             if cname.startsWith("_aria_") == false && is_extern == false {
-                tail = tail.append("declare i64 @" + cname + "(...)" + nl)
+                tail = tail.append("declare i64 @" + _mangle_user_fn(cname) + "(...)" + nl)
             }
         }
         ci = ci + 1
@@ -966,8 +977,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     lb := _lb()
     rb := _rb()
     if m.entry_func != "" {
-        mut entry_call := m.entry_func
-        if entry_call == "main" { entry_call = "_aria_main" }
+        mut entry_call := _mangle_user_fn(m.entry_func)
         tail = tail.append("; Entry wrapper" + nl)
         tail = tail.append("define void @_aria_entry() " + lb + nl)
         tail = tail.append("entry:" + nl)
@@ -1049,9 +1059,8 @@ fn _gen_function(m: IrModule, f: IrFunc) -> [str] {
         cni = cni + 1
     }
     // For now, cold is a no-op in LLVM (would need: #0 attributes = { cold })
-    // Rename "main" to "_aria_main" to avoid conflict with runtime's main()
-    mut emit_name := f.name
-    if f.name == "main" { emit_name = "_aria_main" }
+    // Mangle user fn names to avoid shadowing libc/dyld symbols.
+    mut emit_name := _mangle_user_fn(f.name)
     p = p.append("define " + ret_type + " @" + emit_name + "(" + params + ") " + lb + nl)
     p = p.append("entry:" + nl)
 
@@ -1426,7 +1435,7 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         // Use bitcast to i8* first for type-agnostic ptrtoint
         mut gg := g
         raw := "%fnref_raw_" + i2s(idx)
-        gg = _lg_emit(gg, raw + " = bitcast i64 (i64)* @" + inst.s1 + " to i8*")
+        gg = _lg_emit(gg, raw + " = bitcast i64 (i64)* @" + _mangle_user_fn(inst.s1) + " to i8*")
         ptr := "%fnref_ptr_" + i2s(idx)
         gg = _lg_emit(gg, ptr + " = ptrtoint i8* " + raw + " to i64")
         gg = _lg_emit(gg, "store i64 " + ptr + ", i64* " + _t(inst.dest))
@@ -2232,8 +2241,7 @@ fn _gen_str_eq_inline(g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen {
 
 fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen {
     orig_name := inst.s1
-    mut name := orig_name
-    if name == "main" { name = "_aria_main" }
+    mut name := _mangle_user_fn(orig_name)
     // GC root stores happen only at OpAlloc points, not at every call site.
     // This keeps the generated .ll file small (~25MB vs ~200MB).
     // The frame chain + conservative C stack scan handle cross-call roots.

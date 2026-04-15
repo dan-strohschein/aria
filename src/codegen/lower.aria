@@ -4583,6 +4583,7 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaAppendFile" { return "_aria_append_file" }
     if name == "_ariaWriteBinaryFile" { return "_aria_write_binary_file" }
     if name == "_ariaExec" { return "_aria_exec" }
+    if name == "_ariaExit" { return "_aria_exit" }
     if name == "_ariaArgs" { return "_aria_args" }
     if name == "_ariaListDir" { return "_aria_list_dir" }
     if name == "_ariaIsDir" { return "_aria_is_dir" }
@@ -4633,6 +4634,7 @@ fn _builtin_return_type(name: str) -> i64 {
         return 13  // returns [str] array
     }
     if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" ||
+       name == "_ariaExit" ||
        name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
        name == "_ariaMutexUnlock" {
@@ -8337,6 +8339,17 @@ fn _lower_primary(l: Lowerer) -> LT {
                 // String arg = 2 regs (ptr + len), returns i64 exit code
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 2, "_aria_exec", 1))
                 ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaExit" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // One i64 arg, does not return
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_exit", 0))
                 return LT{l: ll, temp: nt.temp}
             }
             if name == "_ariaArgs" {
