@@ -2874,14 +2874,32 @@ fn _parse_brace_expr(p: Parser) -> PR {
         return PR{p: pp, e: Expr{kind: EkSetLit, s1: "", s2: "", b1: false, b2: false,
                                   c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
     }
-    // { expr } → block with single expression (not set literal)
+    // { expr [NEWLINE stmt]* } → multi-statement block.
+    // The first expression has already been parsed; continue parsing further
+    // statements until the closing `}`. Previously this path produced a block
+    // with exactly one statement, silently dropping the rest.
     pp = _skip_nl(pp)
+    mut stmt_indices := [0]
+    stmt_indices = stmt_indices.append(first_idx)
+    mut count := 1
+    while _ck(pp) != rb && _ck(pp) != "EOF" {
+        sr := _parse_stmt(pp)
+        si_idx := _pidx(sr.p)
+        pp = _padd(sr.p, sr.e)
+        stmt_indices = stmt_indices.append(si_idx)
+        count = count + 1
+        pp = _skip_nl(pp)
+    }
     if _ck(pp) == rb { pp = _adv(pp) }
     list_start := _pidx(pp)
-    pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
-                         c0: first_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+    mut bsi := 0
+    while bsi < count {
+        pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                             c0: stmt_indices[bsi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+        bsi = bsi + 1
+    }
     PR{p: pp, e: Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
-                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: 1, span: span}}
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
 }
 
 fn _parse_array(p: Parser) -> PR {
