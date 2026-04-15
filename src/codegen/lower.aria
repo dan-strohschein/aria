@@ -11914,52 +11914,11 @@ fn _resolve_generic_call_name(store: TypeStore, reg: TypeRegistry, base_name: st
     mut resolved_tys := [""]
     mut gi := 1
     while gi < arg_types.len() && gi < sig.param_types.len() {
-        // Unwrap container types (Array, Optional, Result) on both sides so
-        // generic fns like `fn largest[T](items: [T])` match T→i64 when
-        // called with [i64]. Walk in lockstep until we hit a TypeVar.
-        mut pt := sig.param_types[gi]
-        mut at := arg_types[gi]
-        // Special case: type 13 is the [str] sentinel. If pt is an Array
-        // wrapper, unwrap pt and treat the at element as str so `[T]`
-        // parameters match against `[str]` args.
-        if at == 13 && pt > 0 && pt < store.types.len() {
-            ptik0 := type_kind_name(store_get(store, pt).kind)
-            if ptik0 == "Array" {
-                pt = store_get(store, pt).type_id
-                at = 12
-            }
-        }
-        mut guard := 0
-        while guard < 4 && pt > 0 && at > 0 && pt < store.types.len() && at < store.types.len() {
-            ptik := type_kind_name(store_get(store, pt).kind)
-            atik := type_kind_name(store_get(store, at).kind)
-            if ptik == "TypeVar" { guard = 4 }
-            else if ptik == atik && (ptik == "Array" || ptik == "Optional") {
-                pt = store_get(store, pt).type_id
-                at = store_get(store, at).type_id
-            } else if ptik == atik && ptik == "Result" {
-                pt = store_get(store, pt).type_id
-                at = store_get(store, at).type_id
-            } else { guard = 4 }
-            guard = guard + 1
-        }
-        if pt > 0 && pt < store.types.len() {
-            ptinfo := store_get(store, pt)
-            if type_kind_name(ptinfo.kind) == "TypeVar" {
-                tv_name := ptinfo.name
-                mut already := false
-                mut ri := 1
-                while ri < resolved_tvs.len() {
-                    if resolved_tvs[ri] == tv_name { already = true }
-                    ri = ri + 1
-                }
-                if already == false {
-                    suffix := _type_name_suffix_l(store, reg, at)
-                    resolved_tvs = resolved_tvs.append(tv_name)
-                    resolved_tys = resolved_tys.append(suffix)
-                }
-            }
-        }
+        pt := sig.param_types[gi]
+        at := arg_types[gi]
+        pair := _extract_typevar_bindings(store, reg, pt, at, resolved_tvs, resolved_tys)
+        resolved_tvs = pair.names
+        resolved_tys = pair.tys
         gi = gi + 1
     }
     // Build specialized name: base_type1_type2_...
@@ -11974,6 +11933,75 @@ fn _resolve_generic_call_name(store: TypeStore, reg: TypeRegistry, base_name: st
         si = si + 1
     }
     result
+}
+
+struct _TvPair {
+    names: [str]
+    tys: [str]
+}
+
+// Walk pt and at in lockstep, pulling out TypeVar → concrete-type pairs.
+// Handles Array / Optional / Result / Function containers by recursing on
+// type_id (and type_id2 for Result/Function), so `fn() -> T!U` matched
+// against `fn() -> str!DbError` resolves both T=str and U=DbError.
+fn _extract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i64, tvs: [str], tys: [str]) -> _TvPair {
+    mut out_tvs := tvs
+    mut out_tys := tys
+    // [str] sentinel accommodation: unwrap [T] param against at=13 ([str]).
+    mut ppt := pt
+    mut aat := at
+    if aat == 13 && ppt > 0 && ppt < store.types.len() {
+        ptik0 := type_kind_name(store_get(store, ppt).kind)
+        if ptik0 == "Array" {
+            ppt = store_get(store, ppt).type_id
+            aat = 12
+        }
+    }
+    if ppt <= 0 || ppt >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys} }
+    pti := store_get(store, ppt)
+    pk := type_kind_name(pti.kind)
+    if pk == "TypeVar" {
+        tv_name := pti.name
+        mut already := false
+        mut ri := 1
+        while ri < out_tvs.len() {
+            if out_tvs[ri] == tv_name { already = true }
+            ri = ri + 1
+        }
+        if already == false && aat > 0 {
+            suffix := _type_name_suffix_l(store, reg, aat)
+            out_tvs = out_tvs.append(tv_name)
+            out_tys = out_tys.append(suffix)
+        }
+        return _TvPair{names: out_tvs, tys: out_tys}
+    }
+    // Need to descend into ppt's children. Find the matching at shape.
+    if aat <= 0 || aat >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys} }
+    ati := store_get(store, aat)
+    ak := type_kind_name(ati.kind)
+    if pk == "Array" && ak == "Array" {
+        inner := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
+        return inner
+    }
+    if pk == "Optional" && ak == "Optional" {
+        inner := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
+        return inner
+    }
+    if pk == "Result" && ak == "Result" {
+        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
+        return _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, left.names, left.tys)
+    }
+    if pk == "Function" && ak == "Function" {
+        // type_id = return type, type_id2 = error type (0 if infallible).
+        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
+        mut after_ret := left
+        if pti.type_id2 > 0 && ati.type_id2 > 0 {
+            next := _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, after_ret.names, after_ret.tys)
+            after_ret = next
+        }
+        return after_ret
+    }
+    _TvPair{names: out_tvs, tys: out_tys}
 }
 
 // Lowerer-side type-name suffix: handles TY_STRUCT_BASE+N registry ids
