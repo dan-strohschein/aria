@@ -73,6 +73,21 @@ void _aria_exit(aria_int code) {
     exit((int)code);
 }
 
+// --- Time ---
+
+#include <time.h>
+
+aria_int _aria_get_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (aria_int)ts.tv_sec * 1000000000 + (aria_int)ts.tv_nsec;
+}
+
+void _aria_sleep(aria_int ms) {
+    if (ms <= 0) return;
+    usleep((useconds_t)(ms * 1000));
+}
+
 // --- I/O ---
 
 // Avoid name collision with generated Aria stdlib functions (@write, @read, etc.).
@@ -692,7 +707,10 @@ struct _aria_str _aria_read_file(char *path_ptr, aria_int path_len) {
     int fd = _posix_open(path, O_RDONLY, 0);
     free(path);
     if (fd < 0) {
-        struct _aria_str result = {NULL, 0};
+        // Empty but non-null so callers can safely do .len() == 0 / strcmp.
+        char *empty = (char *)malloc(1);
+        empty[0] = '\0';
+        struct _aria_str result = {empty, 0};
         return result;
     }
 

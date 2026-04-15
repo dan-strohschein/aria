@@ -471,6 +471,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare double @_aria_sqrt(double)" + nl)
     p = p.append("declare double @_aria_abs(double)" + nl)
     p = p.append("declare void @_aria_exit(i64)" + nl)
+    p = p.append("declare i64 @_aria_get_time_ns()" + nl)
     p = p.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     p = p.append("declare void @_aria_println_str(i8*, i64)" + nl)
     p = p.append("declare void @_aria_print_str(i8*, i64)" + nl)
@@ -563,6 +564,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare i64 @_aria_mutex_new()" + nl)
     p = p.append("declare void @_aria_mutex_lock(i64)" + nl)
     p = p.append("declare void @_aria_mutex_unlock(i64)" + nl)
+    p = p.append("declare void @_aria_sleep(i64)" + nl)
     // RWMutex, WaitGroup, Once
     p = p.append("declare i64 @_aria_rwmutex_new()" + nl)
     p = p.append("declare void @_aria_rwmutex_rlock(i64)" + nl)
@@ -764,6 +766,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare double @_aria_sqrt(double)" + nl)
     h = h.append("declare double @_aria_abs(double)" + nl)
     h = h.append("declare void @_aria_exit(i64)" + nl)
+    h = h.append("declare i64 @_aria_get_time_ns()" + nl)
     h = h.append("declare i64 @_aria_write(i64, i8*, i64)" + nl)
     h = h.append("declare void @_aria_println_str(i8*, i64)" + nl)
     h = h.append("declare void @_aria_print_str(i8*, i64)" + nl)
@@ -2262,6 +2265,20 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%call_exit_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_exit(i64 " + v + ")")
+        return gg
+    }
+
+    if name == "_aria_get_time_ns" {
+        res := "%call_tn_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_get_time_ns()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_sleep" {
+        v := "%call_sl_" + i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "call void @_aria_sleep(i64 " + v + ")")
         return gg
     }
 

@@ -16,10 +16,11 @@ type Error =
     | PermissionDenied
     | IoFailed(str)
 
-// NOTE: read currently returns the raw string (empty for missing files).
-// The error type annotation enables catch at call sites, but the error
-// path through `if { return err(...) }` requires AST lowering in lib code
-// which is not yet supported. For now, callers should check for empty results.
+// read returns an empty string when the file is missing or unreadable.
+// Empty-file and missing-file both produce "" — callers that need to
+// distinguish should call fs.exists first. The returned string is always
+// a valid allocation (never a null pointer), so .len() and string ops
+// are safe on the result.
 fn read(path: str) -> str with [Fs] {
     _ariaReadFile(path)
 }

@@ -4600,6 +4600,8 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaWriteBinaryFile" { return "_aria_write_binary_file" }
     if name == "_ariaExec" { return "_aria_exec" }
     if name == "_ariaExit" { return "_aria_exit" }
+    if name == "_ariaTimeNow" { return "_aria_get_time_ns" }
+    if name == "_ariaSleep" { return "_aria_sleep" }
     if name == "_ariaArgs" { return "_aria_args" }
     if name == "_ariaListDir" { return "_aria_list_dir" }
     if name == "_ariaIsDir" { return "_aria_is_dir" }
@@ -4650,7 +4652,7 @@ fn _builtin_return_type(name: str) -> i64 {
         return 13  // returns [str] array
     }
     if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" ||
-       name == "_ariaExit" ||
+       name == "_ariaExit" || name == "_ariaSleep" ||
        name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
        name == "_ariaMutexUnlock" {
@@ -8381,6 +8383,28 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = nt.l
                 // One i64 arg, does not return
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_exit", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaTimeNow" {
+                ll = _ladv(ll)  // skip (
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // No args, returns i64 nanoseconds
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_get_time_ns", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSleep" {
+                ll = _ladv(ll)  // skip (
+                arg := _lower_expr(ll)
+                ll = arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                // One i64 arg (ms), does not return
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_sleep", 0))
                 return LT{l: ll, temp: nt.temp}
             }
             if name == "_ariaArgs" {
