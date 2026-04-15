@@ -3628,19 +3628,44 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
         if node.b1 {
             // Multi-arm catch: dispatch on error variant tags
-            // Only extract tag if the first arm isn't a wildcard (avoids null deref on generic errors)
+            // Extract the error-variant tag. For an error type whose variants
+            // all have data payloads, err_val is a struct pointer and the tag
+            // lives in slot 0. For a tag-only error type (e.g. `type E = | A |
+            // B`) err_val is the scalar tag itself — a FieldGet would deref a
+            // near-null pointer. Decide based on the first arm's variant
+            // parent.
+            //
+            // We also skip the tag extraction entirely if every arm is a
+            // generic binding (e.g. `e => ...`, `_ => ...`) — no tag needed.
             err_tag_nt := _lnew_temp(ll)
             ll = err_tag_nt.l
-            mut needs_tag := true
-            if node.list_count == 1 {
-                first_arm := pool_get(ll.pool, node.list_start)
-                first_pat := pool_get(ll.pool, first_arm.c0)
-                if expr_kind_name(first_pat.kind) == "Ident" && first_pat.s1 == "_" {
-                    needs_tag = false
+            mut needs_tag := false
+            mut any_tag_only := false
+            mut nti := 0
+            while nti < node.list_count {
+                nt_arm := pool_get(ll.pool, node.list_start + nti)
+                nt_pat := pool_get(ll.pool, nt_arm.c0)
+                nt_kind := expr_kind_name(nt_pat.kind)
+                nt_vtag := _variant_tag(ll.registry, nt_pat.s1)
+                is_variant_arm := nt_kind == "FieldAccess" || nt_kind == "MethodCall" || nt_kind == "Call" || (nt_kind == "Ident" && nt_vtag > 0)
+                if is_variant_arm {
+                    needs_tag = true
+                    if nt_vtag > 0 {
+                        vp := _variant_parent(ll.registry, nt_pat.s1)
+                        if vp.name != "" && sum_has_data(vp) == false {
+                            any_tag_only = true
+                        }
+                    }
                 }
+                nti = nti + 1
             }
             if needs_tag {
-                ll = _lemit(ll, new_inst(OpFieldGet, err_tag_nt.temp, err_val.temp, 0, "_tag", 0))
+                if any_tag_only {
+                    // Tag-only error: err_val is already the tag.
+                    ll = _lemit(ll, new_inst(OpStore, err_tag_nt.temp, err_val.temp, 0, "", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(OpFieldGet, err_tag_nt.temp, err_val.temp, 0, "_tag", 0))
+                }
             }
             catch_end := _lnew_label(ll)
             ll = catch_end.l
