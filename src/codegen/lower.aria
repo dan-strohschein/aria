@@ -4464,106 +4464,45 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
 
     // Generic function specialization
     if sig.name != "" && fn_is_generic(sig) {
-        call_name = _resolve_generic_call_name(ll.store, ll.registry, name, sig, arg_types)
+        // Resolve TypeVar bindings from argument types by walking each
+        // param/arg pair recursively through Array/Optional/Result/Function.
+        bindings := _resolve_generic_bindings(ll.store, ll.registry, sig, arg_types)
+        call_name = name
+        mut bsi := 1
+        while bsi < bindings.tys.len() {
+            call_name = call_name + "_" + bindings.tys[bsi]
+            bsi = bsi + 1
+        }
         sp_sig := reg_find_fn(ll.registry, call_name)
         if sp_sig.name != "" && call_name != name {
             call_sig = sp_sig
-        } else if call_name != name && arg_types.len() > 1 {
-            // Specialized name resolved but no FnSig registered yet.
-            // Create MonoSpec + specialized FnSig so the mono pass can lower it.
-            first_concrete := arg_types[1]
-            // Build specialized param types by substituting TypeVars with concrete types
+        } else if call_name != name && bindings.names.len() > 1 {
+            // Substitute every TypeVar in the generic sig using the full
+            // bindings list, producing a proper specialized FnSig.
             sp_ptypes := [0]
-            mut spi := 1
-            while spi < sig.param_types.len() {
-                mut pt := sig.param_types[spi]
-                if pt > 0 && pt < ll.store.types.len() {
-                    pti := store_get(ll.store, pt)
-                    if type_kind_name(pti.kind) == "TypeVar" { pt = first_concrete }
-                }
-                sp_ptypes = sp_ptypes.append(pt)
-                spi = spi + 1
-            }
-            // Compute the actual TypeVar->concrete mapping by unwrapping
-            // the first param type in lockstep with arg_types[1].
-            mut actual_concrete := first_concrete
-            if sig.param_types.len() > 1 {
-                p0 := sig.param_types[1]
-                mut pu := p0
-                mut au := first_concrete
-                mut guard := 0
-                while guard < 4 && pu > 0 && au > 0 && pu < ll.store.types.len() {
-                    puk := type_kind_name(store_get(ll.store, pu).kind)
-                    if puk == "TypeVar" { actual_concrete = au; guard = 4 }
-                    else if puk == "Array" && au == 13 {
-                        pu = store_get(ll.store, pu).type_id
-                        au = 12
-                    } else if puk == "Array" && au > 16 && au < ll.store.types.len() {
-                        auk := type_kind_name(store_get(ll.store, au).kind)
-                        if auk == "Array" {
-                            pu = store_get(ll.store, pu).type_id
-                            au = store_get(ll.store, au).type_id
-                        } else { guard = 4 }
-                    } else { guard = 4 }
-                    guard = guard + 1
-                }
-            }
-            // Rebuild sp_ptypes with proper Array/Optional substitution too,
-            // replacing the shallow-TypeVar-only version built above.
-            sp_ptypes2 := [0]
+            mut sp_ptypes_fixed := sp_ptypes
             mut spi2 := 1
-            mut sp_ptypes_fixed := sp_ptypes2
             while spi2 < sig.param_types.len() {
-                mut pt2 := sig.param_types[spi2]
-                if pt2 > 0 && pt2 < ll.store.types.len() {
-                    pti2 := store_get(ll.store, pt2)
-                    pk2 := type_kind_name(pti2.kind)
-                    if pk2 == "TypeVar" {
-                        pt2 = actual_concrete
-                    } else if pk2 == "Array" || pk2 == "Optional" {
-                        inner2 := pti2.type_id
-                        if inner2 > 0 && inner2 < ll.store.types.len() {
-                            innerti := store_get(ll.store, inner2)
-                            if type_kind_name(innerti.kind) == "TypeVar" {
-                                newinfo := TypeInfo{kind: pti2.kind, name: pti2.name,
-                                                     type_id: actual_concrete, type_id2: pti2.type_id2,
-                                                     param_start: 0, param_count: pti2.param_count}
-                                sar2 := store_add_canonical(ll.store, newinfo)
-                                ll = _lset_store(ll, sar2.store)
-                                pt2 = sar2.id
-                            }
-                        }
-                    }
-                }
-                sp_ptypes_fixed = sp_ptypes_fixed.append(pt2)
+                pt2 := sig.param_types[spi2]
+                sr := _substitute_typevars(ll, pt2, bindings.names, bindings.tids)
+                ll = sr.l
+                sp_ptypes_fixed = sp_ptypes_fixed.append(sr.temp)
                 spi2 = spi2 + 1
             }
-            sp_ptypes = sp_ptypes_fixed
-            mut sp_ret := sig.return_type
-            if sp_ret > 0 && sp_ret < ll.store.types.len() {
-                rti := store_get(ll.store, sp_ret)
-                rkind := type_kind_name(rti.kind)
-                if rkind == "TypeVar" {
-                    sp_ret = actual_concrete
-                } else if rkind == "Optional" || rkind == "Array" {
-                    inner_id := rti.type_id
-                    if inner_id > 0 && inner_id < ll.store.types.len() {
-                        inner := store_get(ll.store, inner_id)
-                        if type_kind_name(inner.kind) == "TypeVar" {
-                            new_info := TypeInfo{kind: rti.kind, name: rti.name,
-                                                  type_id: actual_concrete, type_id2: rti.type_id2,
-                                                  param_start: 0, param_count: rti.param_count}
-                            sar := store_add_canonical(ll.store, new_info)
-                            ll = _lset_store(ll, sar.store)
-                            sp_ret = sar.id
-                        }
-                    }
-                }
-            }
-            new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
+            rr := _substitute_typevars(ll, sig.return_type, bindings.names, bindings.tids)
+            ll = rr.l
+            err_sub := _substitute_typevars(ll, sig.error_type, bindings.names, bindings.tids)
+            ll = err_sub.l
+            new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes_fixed, rr.temp, err_sub.temp)
             ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+            mut ta0 := 0
+            mut ta1 := 0
+            mut ta2 := 0
+            if bindings.tids.len() > 1 { ta0 = bindings.tids[1] }
+            if bindings.tids.len() > 2 { ta1 = bindings.tids[2] }
+            if bindings.tids.len() > 3 { ta2 = bindings.tids[3] }
             spec := MonoSpec{generic_name: name, specialized_name: call_name,
-                             type_arg_0: first_concrete, type_arg_1: 0, type_arg_2: 0}
+                             type_arg_0: ta0, type_arg_1: ta1, type_arg_2: ta2}
             ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
             call_sig = new_sig
         } else if arg_types.len() > 1 {
@@ -8176,98 +8115,44 @@ fn _lower_primary(l: Lowerer) -> LT {
 
                 // For generic functions, infer specialization from argument types
                 if fn_is_generic(sig) {
-                    call_name = _resolve_generic_call_name(ll.store, ll.registry, name, sig, arg_types)
-                    // Look up the specialized sig (must be different from the generic)
+                    // Recursive TypeVar extraction handles multi-param generics
+                    // like `fn wrap[T, U](f: fn() -> T!U)` where T and U come
+                    // from nested Function/Result positions.
+                    bindings := _resolve_generic_bindings(ll.store, ll.registry, sig, arg_types)
+                    call_name = name
+                    mut bsi := 1
+                    while bsi < bindings.tys.len() {
+                        call_name = call_name + "_" + bindings.tys[bsi]
+                        bsi = bsi + 1
+                    }
                     sp_sig := reg_find_fn(ll.registry, call_name)
                     if sp_sig.name != "" && fn_is_generic(sp_sig) == false {
                         call_sig = sp_sig
-                    } else if call_name != name && arg_types.len() > 1 {
-                        // Specialization named but not yet registered — create
-                        // MonoSpec + specialized FnSig so the mono pass emits it.
-                        // Mirrors the AST-call path in _lower_call_node.
-                        first_concrete := arg_types[1]
-                        // Derive the actual T by walking the first param and arg in
-                        // lockstep. For `items: [T]` with arg of type 13 ([str]),
-                        // first_concrete=13 is the wrapper; actual_concrete=12 (str)
-                        // is what T resolves to.
-                        mut actual_concrete := first_concrete
-                        if sig.param_types.len() > 1 {
-                            p0 := sig.param_types[1]
-                            mut pu := p0
-                            mut au := first_concrete
-                            mut guard := 0
-                            while guard < 4 && pu > 0 && au > 0 && pu < ll.store.types.len() {
-                                puk := type_kind_name(store_get(ll.store, pu).kind)
-                                if puk == "TypeVar" { actual_concrete = au; guard = 4 }
-                                else if puk == "Array" && au == 13 {
-                                    pu = store_get(ll.store, pu).type_id
-                                    au = 12
-                                } else if puk == "Array" && au > 16 && au < ll.store.types.len() {
-                                    auk := type_kind_name(store_get(ll.store, au).kind)
-                                    if auk == "Array" {
-                                        pu = store_get(ll.store, pu).type_id
-                                        au = store_get(ll.store, au).type_id
-                                    } else { guard = 4 }
-                                } else { guard = 4 }
-                                guard = guard + 1
-                            }
-                        }
+                    } else if call_name != name && bindings.names.len() > 1 {
                         sp_ptypes := [0]
-                        mut spi := 1
-                        while spi < sig.param_types.len() {
-                            mut pt := sig.param_types[spi]
-                            if pt > 0 && pt < ll.store.types.len() {
-                                pti := store_get(ll.store, pt)
-                                if type_kind_name(pti.kind) == "TypeVar" { pt = actual_concrete }
-                            }
-                            // Unwrap Array<TypeVar> / Optional<TypeVar> params too.
-                            if pt > 16 && pt < ll.store.types.len() {
-                                pti2 := store_get(ll.store, pt)
-                                pk2 := type_kind_name(pti2.kind)
-                                if pk2 == "Array" || pk2 == "Optional" {
-                                    inner2 := pti2.type_id
-                                    if inner2 > 0 && inner2 < ll.store.types.len() {
-                                        innerti := store_get(ll.store, inner2)
-                                        if type_kind_name(innerti.kind) == "TypeVar" {
-                                            newinfo := TypeInfo{kind: pti2.kind, name: pti2.name,
-                                                                 type_id: actual_concrete, type_id2: pti2.type_id2,
-                                                                 param_start: 0, param_count: pti2.param_count}
-                                            sar2 := store_add_canonical(ll.store, newinfo)
-                                            ll = _lset_store(ll, sar2.store)
-                                            pt = sar2.id
-                                        }
-                                    }
-                                }
-                            }
-                            sp_ptypes = sp_ptypes.append(pt)
-                            spi = spi + 1
+                        mut sp_ptypes_fixed := sp_ptypes
+                        mut spi2 := 1
+                        while spi2 < sig.param_types.len() {
+                            pt2 := sig.param_types[spi2]
+                            sr := _substitute_typevars(ll, pt2, bindings.names, bindings.tids)
+                            ll = sr.l
+                            sp_ptypes_fixed = sp_ptypes_fixed.append(sr.temp)
+                            spi2 = spi2 + 1
                         }
-                        mut sp_ret := sig.return_type
-                        if sp_ret > 0 && sp_ret < ll.store.types.len() {
-                            rti := store_get(ll.store, sp_ret)
-                            rkind := type_kind_name(rti.kind)
-                            if rkind == "TypeVar" {
-                                sp_ret = actual_concrete
-                            } else if rkind == "Optional" || rkind == "Array" {
-                                // Substitute inner TypeVar with concrete type.
-                                inner_id := rti.type_id
-                                if inner_id > 0 && inner_id < ll.store.types.len() {
-                                    inner := store_get(ll.store, inner_id)
-                                    if type_kind_name(inner.kind) == "TypeVar" {
-                                        new_info := TypeInfo{kind: rti.kind, name: rti.name,
-                                                             type_id: actual_concrete, type_id2: rti.type_id2,
-                                                             param_start: 0, param_count: rti.param_count}
-                                        sar := store_add_canonical(ll.store, new_info)
-                                        ll = _lset_store(ll, sar.store)
-                                        sp_ret = sar.id
-                                    }
-                                }
-                            }
-                        }
-                        new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes, sp_ret, sig.error_type)
+                        rr := _substitute_typevars(ll, sig.return_type, bindings.names, bindings.tids)
+                        ll = rr.l
+                        err_sub := _substitute_typevars(ll, sig.error_type, bindings.names, bindings.tids)
+                        ll = err_sub.l
+                        new_sig := new_fn_sig(call_name, sig.param_names, sp_ptypes_fixed, rr.temp, err_sub.temp)
                         ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                        mut ta0 := 0
+                        mut ta1 := 0
+                        mut ta2 := 0
+                        if bindings.tids.len() > 1 { ta0 = bindings.tids[1] }
+                        if bindings.tids.len() > 2 { ta1 = bindings.tids[2] }
+                        if bindings.tids.len() > 3 { ta2 = bindings.tids[3] }
                         spec := MonoSpec{generic_name: name, specialized_name: call_name,
-                                         type_arg_0: first_concrete, type_arg_1: 0, type_arg_2: 0}
+                                         type_arg_0: ta0, type_arg_1: ta1, type_arg_2: ta2}
                         ll = _lset_reg(ll, reg_add_mono(ll.registry, spec))
                         call_sig = new_sig
                     } else if arg_types.len() > 1 {
@@ -11910,44 +11795,99 @@ fn _struct_name_from_type(reg: TypeRegistry, type_id: i64) -> str {
 // Resolve generic call name by matching argument types to TypeVar params.
 // Returns the specialized function name (e.g., "map_i64_str").
 fn _resolve_generic_call_name(store: TypeStore, reg: TypeRegistry, base_name: str, sig: FnSig, arg_types: [i64]) -> str {
-    mut resolved_tvs := [""]
-    mut resolved_tys := [""]
-    mut gi := 1
-    while gi < arg_types.len() && gi < sig.param_types.len() {
-        pt := sig.param_types[gi]
-        at := arg_types[gi]
-        pair := _extract_typevar_bindings(store, reg, pt, at, resolved_tvs, resolved_tys)
-        resolved_tvs = pair.names
-        resolved_tys = pair.tys
-        gi = gi + 1
-    }
-    // Build specialized name: base_type1_type2_...
+    p := _resolve_generic_bindings(store, reg, sig, arg_types)
     mut result := base_name
     mut si := 1
-    while si < resolved_tys.len() {
-        if si == 1 {
-            result = result + "_" + resolved_tys[si]
-        } else {
-            result = result + "_" + resolved_tys[si]
-        }
+    while si < p.tys.len() {
+        result = result + "_" + p.tys[si]
         si = si + 1
     }
     result
 }
 
+// Resolve the (TvName, concrete suffix, concrete tid) bindings for every
+// TypeVar found by walking sig.param_types in lockstep with arg_types.
+fn _resolve_generic_bindings(store: TypeStore, reg: TypeRegistry, sig: FnSig, arg_types: [i64]) -> _TvPair {
+    mut resolved_tvs := [""]
+    mut resolved_tys := [""]
+    mut resolved_tids := [0]
+    mut gi := 1
+    while gi < arg_types.len() && gi < sig.param_types.len() {
+        pt := sig.param_types[gi]
+        at := arg_types[gi]
+        pair := _extract_typevar_bindings(store, reg, pt, at, resolved_tvs, resolved_tys, resolved_tids)
+        resolved_tvs = pair.names
+        resolved_tys = pair.tys
+        resolved_tids = pair.tids
+        gi = gi + 1
+    }
+    _TvPair{names: resolved_tvs, tys: resolved_tys, tids: resolved_tids}
+}
+
 struct _TvPair {
     names: [str]
     tys: [str]
+    tids: [i64]
+}
+
+// Recursively substitute TypeVars in `tid` with the concrete tids from
+// `bindings` (parallel `names`/`tids` arrays). Returns the substituted tid;
+// adds any newly-constructed type to the store via the Lowerer.
+fn _substitute_typevars(l: Lowerer, tid: i64, names: [str], tids: [i64]) -> LT {
+    mut ll := l
+    if tid <= 0 || tid >= ll.store.types.len() { return LT{l: ll, temp: tid} }
+    ti := store_get(ll.store, tid)
+    k := type_kind_name(ti.kind)
+    if k == "TypeVar" {
+        mut i := 1
+        while i < names.len() {
+            if names[i] == ti.name { return LT{l: ll, temp: tids[i]} }
+            i = i + 1
+        }
+        return LT{l: ll, temp: tid}
+    }
+    if k == "Array" || k == "Optional" {
+        inner := _substitute_typevars(ll, ti.type_id, names, tids)
+        ll = inner.l
+        if inner.temp == ti.type_id { return LT{l: ll, temp: tid} }
+        new_ti := TypeInfo{kind: ti.kind, name: ti.name, type_id: inner.temp, type_id2: ti.type_id2, param_start: 0, param_count: ti.param_count}
+        sar := store_add_canonical(ll.store, new_ti)
+        ll = _lset_store(ll, sar.store)
+        return LT{l: ll, temp: sar.id}
+    }
+    if k == "Result" {
+        okr := _substitute_typevars(ll, ti.type_id, names, tids)
+        ll = okr.l
+        errr := _substitute_typevars(ll, ti.type_id2, names, tids)
+        ll = errr.l
+        if okr.temp == ti.type_id && errr.temp == ti.type_id2 { return LT{l: ll, temp: tid} }
+        new_ti := TypeInfo{kind: ti.kind, name: ti.name, type_id: okr.temp, type_id2: errr.temp, param_start: 0, param_count: ti.param_count}
+        sar := store_add_canonical(ll.store, new_ti)
+        ll = _lset_store(ll, sar.store)
+        return LT{l: ll, temp: sar.id}
+    }
+    if k == "Function" {
+        retr := _substitute_typevars(ll, ti.type_id, names, tids)
+        ll = retr.l
+        errr := _substitute_typevars(ll, ti.type_id2, names, tids)
+        ll = errr.l
+        if retr.temp == ti.type_id && errr.temp == ti.type_id2 { return LT{l: ll, temp: tid} }
+        new_ti := TypeInfo{kind: ti.kind, name: ti.name, type_id: retr.temp, type_id2: errr.temp, param_start: 0, param_count: ti.param_count}
+        sar := store_add_canonical(ll.store, new_ti)
+        ll = _lset_store(ll, sar.store)
+        return LT{l: ll, temp: sar.id}
+    }
+    LT{l: ll, temp: tid}
 }
 
 // Walk pt and at in lockstep, pulling out TypeVar → concrete-type pairs.
 // Handles Array / Optional / Result / Function containers by recursing on
 // type_id (and type_id2 for Result/Function), so `fn() -> T!U` matched
 // against `fn() -> str!DbError` resolves both T=str and U=DbError.
-fn _extract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i64, tvs: [str], tys: [str]) -> _TvPair {
+fn _extract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i64, tvs: [str], tys: [str], tids: [i64]) -> _TvPair {
     mut out_tvs := tvs
     mut out_tys := tys
-    // [str] sentinel accommodation: unwrap [T] param against at=13 ([str]).
+    mut out_tids := tids
     mut ppt := pt
     mut aat := at
     if aat == 13 && ppt > 0 && ppt < store.types.len() {
@@ -11957,7 +11897,7 @@ fn _extract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i
             aat = 12
         }
     }
-    if ppt <= 0 || ppt >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys} }
+    if ppt <= 0 || ppt >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys, tids: out_tids} }
     pti := store_get(store, ppt)
     pk := type_kind_name(pti.kind)
     if pk == "TypeVar" {
@@ -11972,36 +11912,33 @@ fn _extract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i
             suffix := _type_name_suffix_l(store, reg, aat)
             out_tvs = out_tvs.append(tv_name)
             out_tys = out_tys.append(suffix)
+            out_tids = out_tids.append(aat)
         }
-        return _TvPair{names: out_tvs, tys: out_tys}
+        return _TvPair{names: out_tvs, tys: out_tys, tids: out_tids}
     }
-    // Need to descend into ppt's children. Find the matching at shape.
-    if aat <= 0 || aat >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys} }
+    if aat <= 0 || aat >= store.types.len() { return _TvPair{names: out_tvs, tys: out_tys, tids: out_tids} }
     ati := store_get(store, aat)
     ak := type_kind_name(ati.kind)
     if pk == "Array" && ak == "Array" {
-        inner := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
-        return inner
+        return _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
     }
     if pk == "Optional" && ak == "Optional" {
-        inner := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
-        return inner
+        return _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
     }
     if pk == "Result" && ak == "Result" {
-        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
-        return _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, left.names, left.tys)
+        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
+        return _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, left.names, left.tys, left.tids)
     }
     if pk == "Function" && ak == "Function" {
-        // type_id = return type, type_id2 = error type (0 if infallible).
-        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys)
+        left := _extract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
         mut after_ret := left
         if pti.type_id2 > 0 && ati.type_id2 > 0 {
-            next := _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, after_ret.names, after_ret.tys)
+            next := _extract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, after_ret.names, after_ret.tys, after_ret.tids)
             after_ret = next
         }
         return after_ret
     }
-    _TvPair{names: out_tvs, tys: out_tys}
+    _TvPair{names: out_tvs, tys: out_tys, tids: out_tids}
 }
 
 // Lowerer-side type-name suffix: handles TY_STRUCT_BASE+N registry ids
@@ -14086,8 +14023,26 @@ fn _lower_closure(l: Lowerer) -> LT {
         ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
     }
 
-    // Mark closure result with sentinel type 600 so call sites can detect it
-    ll = _lset_type(ll, fat_nt.temp, 600)
+    // Tag the fat-pointer temp with a TyFunction TypeInfo whose type_id
+    // holds the closure's return type (or Result(ret, err) when fallible).
+    // This lets generic-call TypeVar extraction see a real Function shape
+    // and resolve T/U from `fn() -> T!U` parameters. Falls back to the
+    // 600 sentinel if we couldn't resolve any annotations.
+    if ret_type > 0 {
+        mut fn_ret := ret_type
+        if err_type > 0 {
+            rti := TypeInfo{kind: TyResult, name: "", type_id: ret_type, type_id2: err_type, param_start: 0, param_count: 0}
+            rsar := store_add_canonical(ll.store, rti)
+            ll = _lset_store(ll, rsar.store)
+            fn_ret = rsar.id
+        }
+        fti := TypeInfo{kind: TyFunction, name: "", type_id: fn_ret, type_id2: 0, param_start: 0, param_count: 0}
+        fsar := store_add_canonical(ll.store, fti)
+        ll = _lset_store(ll, fsar.store)
+        ll = _lset_type(ll, fat_nt.temp, fsar.id)
+    } else {
+        ll = _lset_type(ll, fat_nt.temp, 600)
+    }
     LT{l: ll, temp: fat_nt.temp}
 }
 
@@ -14437,8 +14392,23 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
         ll = _lemit(ll, new_inst(OpFieldSet, fat_nt.temp, null_nt.temp, 1, "_env", 0))
     }
 
-    // Mark closure result with sentinel type 600 so call sites can detect it
-    ll = _lset_type(ll, fat_nt.temp, 600)
+    // Tag the closure temp with a real TyFunction type where possible so
+    // generic TypeVar extraction can resolve `fn() -> T!U` params.
+    if ret_type > 0 {
+        mut fn_ret := ret_type
+        if err_type > 0 {
+            rti := TypeInfo{kind: TyResult, name: "", type_id: ret_type, type_id2: err_type, param_start: 0, param_count: 0}
+            rsar := store_add_canonical(ll.store, rti)
+            ll = _lset_store(ll, rsar.store)
+            fn_ret = rsar.id
+        }
+        fti := TypeInfo{kind: TyFunction, name: "", type_id: fn_ret, type_id2: 0, param_start: 0, param_count: 0}
+        fsar := store_add_canonical(ll.store, fti)
+        ll = _lset_store(ll, fsar.store)
+        ll = _lset_type(ll, fat_nt.temp, fsar.id)
+    } else {
+        ll = _lset_type(ll, fat_nt.temp, 600)
+    }
     LT{l: ll, temp: fat_nt.temp}
 }
 
