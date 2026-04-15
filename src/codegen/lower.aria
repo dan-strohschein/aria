@@ -3516,6 +3516,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if (expr_type == 12 || expr_type == 9 || expr_type == 8) && !_lis_result(ll, expr.temp) {
             return LT{l: ll, temp: expr.temp}
         }
+        ll = _emit_result_null_guard(ll, expr.temp)
         tag_nt := _lnew_temp(ll)
         ll = tag_nt.l
         ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, expr.temp, 0, "_tag", 0))
@@ -7351,6 +7352,7 @@ fn _lower_expr(l: Lowerer) -> LT {
         } else if k == "?" {
             // Error propagation — with optional |e| transform
             ll = _ladv(ll)
+            ll = _emit_result_null_guard(ll, left)
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
             ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
@@ -12339,6 +12341,7 @@ fn _lower_atom(l: Lowerer) -> LT {
         } else if k == "?" {
             // Error propagation: unwrap Ok or early-return Err
             ll = _ladv(ll)
+            ll = _emit_result_null_guard(ll, left)
             // Extract tag from slot 0
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
@@ -13283,6 +13286,35 @@ fn _lappend_defer(l: Lowerer, start: i64, end: i64) -> Lowerer =
             fn_error_type: l.fn_error_type, defer_starts: l.defer_starts.append(start), defer_ends: l.defer_ends.append(end)}
 
 // Emit deferred expressions in reverse order (LIFO)
+// Emit a null-pointer guard before unwrapping a Result value. If `val`
+// is 0 (e.g. a stub returned no Result), panic with a clear message
+// rather than segfaulting on the downstream FieldGet("_tag").
+fn _emit_result_null_guard(l: Lowerer, val: i64) -> Lowerer {
+    mut ll := l
+    zero_nt := _lnew_temp(ll)
+    ll = zero_nt.l
+    ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+    is_null := _lnew_temp(ll)
+    ll = is_null.l
+    ll = _lemit(ll, new_inst(OpEq, is_null.temp, val, zero_nt.temp, "", 0))
+    skip_lbl := _lnew_label(ll)
+    ll = skip_lbl.l
+    ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_null.temp, skip_lbl.temp, "", 0))
+    msg := "internal error: null Result"
+    mut msg_idx := mod_find_string(ll.module, msg)
+    if msg_idx == 0 {
+        new_mod := mod_add_string(ll.module, msg)
+        msg_idx = new_mod.string_constants.len() - 1
+        ll = _lset_mod(ll, new_mod)
+    }
+    panic_ptr := _lnew_str_temp(ll)
+    ll = panic_ptr.l
+    ll = _lemit(ll, new_inst(OpConstStr, panic_ptr.temp, msg_idx, 27, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, panic_ptr.temp, 2, "_aria_panic", 0))
+    ll = _lemit(ll, new_inst(OpLabel, 0, skip_lbl.temp, 0, "", 0))
+    ll
+}
+
 fn _emit_defers(l: Lowerer) -> Lowerer {
     mut ll := l
     // Emit drop calls for bindings whose types implement Drop (reverse order)
