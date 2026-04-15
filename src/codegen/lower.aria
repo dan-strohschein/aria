@@ -11115,6 +11115,63 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    // `is_alphanum()` — true iff every char is [A-Za-z0-9_]; empty str → false.
+    if method == "is_alphanum" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpStrIsAlphanum, nt.temp, obj, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    // Option.ok_or(err) — convert Option<T> to Result<T, E>.
+    // Some(v) -> Ok(v); None -> Err(err_arg).
+    if method == "ok_or" {
+        err_arg := _lower_expr(ll)
+        ll = err_arg.l
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        // Read tag of the Option (slot 0)
+        tag_nt := _lnew_temp(ll)
+        ll = tag_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, obj, 0, "_tag", 0))
+        // Constants
+        zero_nt := _lnew_temp(ll)
+        ll = zero_nt.l
+        ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+        one_nt := _lnew_temp(ll)
+        ll = one_nt.l
+        ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+        // Check tag == 1 (Some)
+        is_some := _lnew_temp(ll)
+        ll = is_some.l
+        ll = _lemit(ll, new_inst(OpEq, is_some.temp, tag_nt.temp, one_nt.temp, "", 0))
+        // Allocate Result (2 slots)
+        result := _lnew_temp(ll)
+        ll = result.l
+        ll = _lemit(ll, new_inst(OpAlloc, result.temp, 2, 0, "_Result", 0))
+        some_lbl := _lnew_label(ll)
+        ll = some_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_some.temp, some_lbl.temp, "", 0))
+        // None path: Err(err_arg)
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, one_nt.temp, 0, "_tag", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, err_arg.temp, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        // Some path: Ok(obj.val)
+        ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+        val_nt := _lnew_temp(ll)
+        ll = val_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        ll = _lset_is_result(ll, result.temp)
+        return LT{l: ll, temp: result.temp}
+    }
+
     if method == "replace" {
         old_arg := _lower_expr(ll)
         ll = old_arg.l
@@ -11893,6 +11950,43 @@ fn _struct_field_count(reg: TypeRegistry, struct_name: str) -> i64 {
 fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i64, arg_count: i64) -> LT {
     mut ll := l
     obj_type := _lget_type(ll, obj)
+
+    // Option.ok_or(err) — Some(v) -> Ok(v); None -> Err(err_arg).
+    // Mirror of the token-walker path in _lower_method_call.
+    if method == "ok_or" {
+        tag_nt := _lnew_temp(ll)
+        ll = tag_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, obj, 0, "_tag", 0))
+        zero_nt := _lnew_temp(ll)
+        ll = zero_nt.l
+        ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+        one_nt := _lnew_temp(ll)
+        ll = one_nt.l
+        ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+        is_some := _lnew_temp(ll)
+        ll = is_some.l
+        ll = _lemit(ll, new_inst(OpEq, is_some.temp, tag_nt.temp, one_nt.temp, "", 0))
+        result := _lnew_temp(ll)
+        ll = result.l
+        ll = _lemit(ll, new_inst(OpAlloc, result.temp, 2, 0, "_Result", 0))
+        some_lbl := _lnew_label(ll)
+        ll = some_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_some.temp, some_lbl.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, one_nt.temp, 0, "_tag", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, arg1, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+        val_nt := _lnew_temp(ll)
+        ll = val_nt.l
+        ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        ll = _lset_is_result(ll, result.temp)
+        return LT{l: ll, temp: result.temp}
+    }
 
     // --- Array join(sep) — concat each str element with separator ---
     if method == "join" {

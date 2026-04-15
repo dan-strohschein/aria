@@ -105,7 +105,7 @@ fn _is_definitely_scalar_op(op: str) -> bool =
     op == "Not" || op == "BitAnd" || op == "BitOr" || op == "BitXor" ||
     op == "Shl" || op == "Shr" || op == "ArrayLen" || op == "ArrayContains" || op == "StrLen" ||
     op == "StrEq" || op == "StrCmp" || op == "StrContains" || op == "StrStartsWith" ||
-    op == "StrEndsWith" || op == "StrIndexOf" || op == "MapContains" ||
+    op == "StrEndsWith" || op == "StrIndexOf" || op == "StrIsAlphanum" || op == "MapContains" ||
     op == "MapLen" || op == "SetContains" || op == "SetLen" ||
     op == "FloatToInt" ||
     op == "BranchTrue" || op == "BranchFalse" || op == "Label" || op == "Jump"
@@ -494,6 +494,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
     p = p.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
+    p = p.append("declare i64 @_aria_str_is_alphanum(i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_startsWith(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_endsWith(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_indexOf(i8*, i64, i8*, i64)" + nl)
@@ -790,6 +791,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare " + si64 + " @_aria_str_charAt(i8*, i64, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_substring(i8*, i64, i64, i64)" + nl)
     h = h.append("declare i64 @_aria_str_contains(i8*, i64, i8*, i64)" + nl)
+    h = h.append("declare i64 @_aria_str_is_alphanum(i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_startsWith(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_endsWith(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_indexOf(i8*, i64, i8*, i64)" + nl)
@@ -1798,6 +1800,20 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
     if op == "StrStartsWith" { return _gen_str_binop_returning_i64(g, "@_aria_str_startsWith", inst, idx) }
     if op == "StrEndsWith" { return _gen_str_binop_returning_i64(g, "@_aria_str_endsWith", inst, idx) }
     if op == "StrIndexOf" { return _gen_str_binop_returning_i64(g, "@_aria_str_indexOf", inst, idx) }
+
+    if op == "StrIsAlphanum" {
+        mut gg := g
+        s_ptr := "%sian_sp_" + i2s(idx)
+        s_len := "%sian_sl_" + i2s(idx)
+        gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+        s_p := "%sian_spi_" + i2s(idx)
+        gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
+        res := "%sian_r_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_str_is_alphanum(i8* " + s_p + ", i64 " + s_len + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
 
     if op == "StrTrim" {
         mut gg := g

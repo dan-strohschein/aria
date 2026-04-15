@@ -1110,6 +1110,21 @@ struct _aria_str _aria_str_substring(char *ptr, aria_int len, aria_int start, ar
     return s;
 }
 
+aria_int _aria_str_is_alphanum(char *str_ptr, aria_int str_len) {
+    // Returns 1 iff every char is [A-Za-z0-9_]; empty str → 0 (matches
+    // most callers expectation that "" isn't a valid identifier/name).
+    if (str_len == 0) return 0;
+    for (aria_int i = 0; i < str_len; i++) {
+        char c = str_ptr[i];
+        int ok = (c >= 'a' && c <= 'z') ||
+                 (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') ||
+                 c == '_';
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
 aria_int _aria_str_contains(char *haystack_ptr, aria_int haystack_len,
                         char *needle_ptr, aria_int needle_len) {
     if (needle_len == 0) return 1;

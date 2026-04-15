@@ -21,3 +21,12 @@ fn error(msg: str) with [Io] {
 fn debug(msg: str) with [Io] {
     println("[DEBUG] " + msg)
 }
+
+// Stub: level filtering isnt implemented; accepts any i64 and returns it
+// unchanged so calls like `log.set_level(0)` compile and run as a no-op.
+// We intentionally dont declare log-level constants (log.Info, log.Debug,
+// etc.) here: they would collide with user-defined `Info`/`Error`/`Debug`
+// types common in error-handling examples.
+fn set_level(level: i64) -> i64 {
+    level
+}
