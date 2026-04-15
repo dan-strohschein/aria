@@ -1386,6 +1386,24 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    if nk == "DurationLit" {
+        num := _parse_duration(node.s1)
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConst, nt.temp, num, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
+    if nk == "SizeLit" {
+        num := _parse_size(node.s1)
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConst, nt.temp, num, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+
     if nk == "None" {
         // None — allocate Optional with tag=0
         nt := _lnew_temp(ll)
@@ -4712,6 +4730,13 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaMutexNew" { return "_aria_mutex_new" }
     if name == "_ariaMutexLock" { return "_aria_mutex_lock" }
     if name == "_ariaMutexUnlock" { return "_aria_mutex_unlock" }
+    if name == "_ariaSbNew" { return "_aria_sb_new" }
+    if name == "_ariaSbWithCapacity" { return "_aria_sb_with_capacity" }
+    if name == "_ariaSbAppend" { return "_aria_sb_append" }
+    if name == "_ariaSbAppendChar" { return "_aria_sb_append_char" }
+    if name == "_ariaSbLen" { return "_aria_sb_len" }
+    if name == "_ariaSbBuild" { return "_aria_sb_build" }
+    if name == "_ariaSbClear" { return "_aria_sb_clear" }
     if name == "i2s" { return "i2s" }
     return name
 }
@@ -4720,8 +4745,11 @@ fn _builtin_return_type(name: str) -> i64 {
     if name == "_ariaReadFile" || name == "_ariaGetenv" || name == "_ariaTcpRead" ||
        name == "_ariaTcpPeerAddr" || name == "_ariaPgError" || name == "_ariaPgResultError" ||
        name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" ||
-       name == "_ariaSha256Hex" {
+       name == "_ariaSha256Hex" || name == "_ariaSbBuild" {
         return 12
+    }
+    if name == "_ariaSbAppend" || name == "_ariaSbAppendChar" || name == "_ariaSbClear" {
+        return 0
     }
     if name == "_ariaArgs" || name == "_ariaListDir" {
         return 13  // returns [str] array
@@ -15152,11 +15180,17 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
             // Default/wildcard: no comparison needed
             // Still need to bind/destructure if pattern requires it
             if pat_kind == "Ident" && pat_name != "_" {
-                // Binding pattern: bind subject to name
-                bind_nt := _lnew_temp(ll)
-                ll = bind_nt.l
-                ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
-                ll = _lenv_add(ll, pat_name, bind_nt.temp)
+                // Variant-name idents (None, Red, etc.) are tag-only variant patterns,
+                // not bindings. Adding them to env would shadow the variant in later
+                // expressions — `val2 := None` would resolve to the subject binding
+                // instead of allocating a fresh None.
+                is_variant_name := _variant_tag(ll.registry, pat_name) > 0 || (pat_name == "None" && has_result_arms) || (pat_name == "Ok" && has_result_arms) || (pat_name == "Err" && has_result_arms) || (pat_name == "Some" && has_result_arms)
+                if is_variant_name == false {
+                    bind_nt := _lnew_temp(ll)
+                    ll = bind_nt.l
+                    ll = _lemit(ll, new_inst(OpLoad, bind_nt.temp, subj.temp, 0, "", 0))
+                    ll = _lenv_add(ll, pat_name, bind_nt.temp)
+                }
             } else if pat_kind == "Call" {
                 // Variant destructuring: extract fields without comparison
                 wvname := pat.s1
@@ -15637,6 +15671,28 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 cmp_nt := _lnew_temp(ll)
                 ll = cmp_nt.l
                 ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj_tag, cval.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
+                body := _lower_expr_node(ll, body_idx)
+                ll = body.l
+                if body.temp >= 0 {
+                    body_type := _lget_type(ll, body.temp)
+                    if arm_body_type == 0 && body_type > 0 { arm_body_type = body_type }
+                    if body_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, body.temp + 1, 0, "", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, body.temp, 0, "", 0))
+                    }
+                }
+                ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
+            } else if pat_kind == "FloatLit" {
+                // Float literal pattern — lower literal via FloatLit path, compare f64
+                flt := _lower_expr_node(ll, pat_idx_node.c0)
+                ll = flt.l
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, subj.temp, flt.temp, "f64", 0))
                 ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, next_lbl.temp, "", 0))
                 body := _lower_expr_node(ll, body_idx)
                 ll = body.l

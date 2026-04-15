@@ -3125,8 +3125,11 @@ fn _parse_assert(p: Parser) -> PR {
     expr := _parse_expr(pp, 0)
     arg_idx := _pidx(expr.p)
     pp = _padd(expr.p, expr.e)
+    list_start := _pidx(pp)
+    pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                         c0: arg_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
     PR{p: pp, e: Expr{kind: EkCall, s1: "assert", s2: "", b1: false, b2: false,
-                       c0: 0, c1: 0, c2: 0, list_start: arg_idx, list_count: 1, span: span}}
+                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: 1, span: span}}
 }
 
 // --- Parse select expression ---
