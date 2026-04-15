@@ -3548,34 +3548,51 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     if nk == "AssertOk" {
         operand := _lower_expr_node(ll, node.c0)
         ll = operand.l
+        // The `!` postfix unwraps both Result and Option. Panic tag differs:
+        //   Result: tag 1 is Err (panic tag), tag 0 is Ok (value)
+        //   Option: tag 0 is None (panic tag), tag 1 is Some (value)
+        op_type := _lget_type(ll, operand.temp)
+        mut is_option := false
+        if op_type == 201 {
+            is_option = true
+        } else if op_type > 16 && op_type < ll.store.types.len() {
+            op_ti := store_get(ll.store, op_type)
+            if type_kind_name(op_ti.kind) == "Optional" { is_option = true }
+        }
+        mut panic_tag := 1
+        mut panic_msg := "unwrap failed on Err value"
+        if is_option {
+            panic_tag = 0
+            panic_msg = "unwrap failed on None"
+        }
         tag_nt := _lnew_temp(ll)
         ll = tag_nt.l
         ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, operand.temp, 0, "_tag", 0))
-        const_one := _lnew_temp(ll)
-        ll = const_one.l
-        ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
-        is_err := _lnew_temp(ll)
-        ll = is_err.l
-        ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+        const_pt := _lnew_temp(ll)
+        ll = const_pt.l
+        ll = _lemit(ll, new_inst(OpConst, const_pt.temp, panic_tag, 0, "", 0))
+        is_bad := _lnew_temp(ll)
+        ll = is_bad.l
+        ll = _lemit(ll, new_inst(OpEq, is_bad.temp, tag_nt.temp, const_pt.temp, "", 0))
         panic_lbl := _lnew_label(ll)
         ll = panic_lbl.l
         ok_lbl := _lnew_label(ll)
         ll = ok_lbl.l
-        ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, panic_lbl.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_bad.temp, panic_lbl.temp, "", 0))
         ok_val := _lnew_temp(ll)
         ll = ok_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, operand.temp, 1, "_val", 0))
         ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, panic_lbl.temp, 0, "", 0))
-        mut panic_str_idx := mod_find_string(ll.module, "unwrap failed on Err value")
+        mut panic_str_idx := mod_find_string(ll.module, panic_msg)
         if panic_str_idx == 0 {
-            new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
+            new_mod := mod_add_string(ll.module, panic_msg)
             panic_str_idx = new_mod.string_constants.len() - 1
             ll = _lset_mod(ll, new_mod)
         }
         panic_ptr := _lnew_str_temp(ll)
         ll = panic_ptr.l
-        ll = _lemit(ll, new_inst(OpConstStr, panic_ptr.temp, panic_str_idx, 25, "", 0))
+        ll = _lemit(ll, new_inst(OpConstStr, panic_ptr.temp, panic_str_idx, panic_msg.len(), "", 0))
         ll = _lemit(ll, new_inst(OpCall, 0, panic_ptr.temp, 2, "_aria_panic", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
         return LT{l: ll, temp: ok_val.temp}

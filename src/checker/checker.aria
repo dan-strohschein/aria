@@ -3829,7 +3829,9 @@ fn _check_primary(c: Checker) -> CE {
     }
 
     if k == "fn" {
-        // Closure — skip and return Unknown for now
+        // Closure — parse the header, record the return type, then consume
+        // the body so the caller's cursor lands past the whole closure.
+        // Supports both `=> expr` and `= expr` body forms and `{ ... }` blocks.
         mut cc := _cadv(c)
         // Optional `once` keyword
         if _ck2(cc) == "IDENT" && _ccur(cc).text == "once" { cc = _cadv(cc) }
@@ -3838,16 +3840,46 @@ fn _check_primary(c: Checker) -> CE {
             while _ck2(cc) != ")" && _ck2(cc) != "EOF" { cc = _cadv(cc) }
             if _ck2(cc) == ")" { cc = _cadv(cc) }
         }
+        mut ret_ty := TY_UNIT
+        mut err_ty := 0
         if _ck2(cc) == "->" {
             cc = _cadv(cc)
-            cc = _skip_type_toks(cc)
+            pt := _parse_type_ann(cc)
+            cc = pt.c
+            // `_parse_type_ann` folds `T ! E` into a Result type — peel it so
+            // we can synthesize a proper fn type with type_id2 = err_id.
+            if pt.type_id != TY_UNKNOWN {
+                rti := store_get(cc.store, pt.type_id)
+                if type_kind_name(rti.kind) == "Result" {
+                    ret_ty = rti.type_id
+                    err_ty = rti.type_id2
+                } else {
+                    ret_ty = pt.type_id
+                }
+            }
         }
-        if _ck2(cc) == "=>" {
+        lb := "\{"
+        if _ck2(cc) == "=>" || _ck2(cc) == "=" {
             cc = _cadv(cc)
             result := _check_expr_full(cc)
             cc = result.c
+        } else if _ck2(cc) == lb {
+            // Block body — skip balanced braces
+            cc = _cadv(cc)
+            mut d := 1
+            while d > 0 && _ck2(cc) != "EOF" {
+                if _ck2(cc) == lb { d = d + 1 }
+                if _ck2(cc) == "\}" { d = d - 1 }
+                if d > 0 { cc = _cadv(cc) }
+            }
+            if _ck2(cc) == "\}" { cc = _cadv(cc) }
         }
-        return CE{c: cc, type_id: TY_UNKNOWN}
+        // Synthesize a fn type so argument-type-checks against `fn(...) -> T [!E]`
+        // parameter types see a compatible Function type instead of Unknown.
+        fn_ti := TypeInfo{kind: TyFunction, name: "", type_id: ret_ty, type_id2: err_ty, param_start: 0, param_count: 0}
+        new_st := store_add(cc.store, fn_ti)
+        cc = _cset_store(cc, new_st)
+        return CE{c: cc, type_id: store_last_id(cc.store)}
     }
 
     // Unknown
