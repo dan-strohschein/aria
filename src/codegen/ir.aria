@@ -87,6 +87,8 @@ type IrOp =
     | OpTraitObject
     | OpVtableCall
     | OpArraySlice
+    | OpGlobalLoad
+    | OpGlobalStore
     | OpNop
 
 fn ir_op_name(op: IrOp) -> str = match op {
@@ -168,6 +170,8 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpTraitObject => "TraitObject"
     OpVtableCall => "VtableCall"
     OpArraySlice => "ArraySlice"
+    OpGlobalLoad => "GlobalLoad"
+    OpGlobalStore => "GlobalStore"
     OpNop => "Nop"
 }
 
@@ -248,13 +252,19 @@ struct IrModule {
     // fn_index_keys[i]. Both arrays use a sentinel "" entry at index 0.
     fn_index_keys: [str]
     fn_index_vals: [i64]
+    // Module-level mut bindings (`mut foo := 0` at top level). Emitted as
+    // LLVM globals; reads/writes use OpGlobalLoad/OpGlobalStore with the
+    // name stored in inst.s1.
+    global_names: [str]
+    global_inits: [i64]
 }
 
 fn new_ir_module() -> IrModule =
     IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""],
              extern_names: [""], extern_param_counts: [0], extern_ret_types: [""], extern_libs: [""],
              closure_count: 0,
-             fn_index_keys: [""], fn_index_vals: [0]}
+             fn_index_keys: [""], fn_index_vals: [0],
+             global_names: [""], global_inits: [0]}
 
 // Insert (name, val) into the parallel sorted arrays at the correct position.
 // O(N) per call, called once per function added (so total work is O(N²)).
@@ -286,7 +296,8 @@ fn _fn_index_insert(keys: [str], vals: [i64], name: str, val: i64) -> IrModule {
     IrModule{funcs: [_sentinel_func()], string_constants: [""], entry_func: "", test_count: 0, test_names: [""],
              extern_names: [""], extern_param_counts: [0], extern_ret_types: [""], extern_libs: [""],
              closure_count: 0,
-             fn_index_keys: new_keys, fn_index_vals: new_vals}
+             fn_index_keys: new_keys, fn_index_vals: new_vals,
+             global_names: [""], global_inits: [0]}
 }
 
 fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule {
@@ -296,39 +307,61 @@ fn mod_add_func(m: IrModule, f: IrFunc) -> IrModule {
     IrModule{funcs: new_funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
              closure_count: m.closure_count,
-             fn_index_keys: idx_only.fn_index_keys, fn_index_vals: idx_only.fn_index_vals}
+             fn_index_keys: idx_only.fn_index_keys, fn_index_vals: idx_only.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
 }
 
 fn mod_add_string(m: IrModule, s: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants.append(s), entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
              closure_count: m.closure_count,
-             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
 
 fn mod_add_extern(m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names.append(name), extern_param_counts: m.extern_param_counts.append(param_count),
              extern_ret_types: m.extern_ret_types.append(ret_type), extern_libs: m.extern_libs.append(lib),
              closure_count: m.closure_count,
-             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
 
 fn mod_set_entry(m: IrModule, name: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: name, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
              closure_count: m.closure_count,
-             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
 
 fn mod_add_test(m: IrModule, name: str) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count + 1, test_names: m.test_names.append(name),
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
              closure_count: m.closure_count,
-             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
 
 fn mod_next_closure(m: IrModule) -> IrModule =
     IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
              extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
              closure_count: m.closure_count + 1,
-             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals}
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names, global_inits: m.global_inits}
+
+fn mod_add_global(m: IrModule, name: str, init: i64) -> IrModule =
+    IrModule{funcs: m.funcs, string_constants: m.string_constants, entry_func: m.entry_func, test_count: m.test_count, test_names: m.test_names,
+             extern_names: m.extern_names, extern_param_counts: m.extern_param_counts, extern_ret_types: m.extern_ret_types, extern_libs: m.extern_libs,
+             closure_count: m.closure_count,
+             fn_index_keys: m.fn_index_keys, fn_index_vals: m.fn_index_vals,
+             global_names: m.global_names.append(name), global_inits: m.global_inits.append(init)}
+
+fn mod_find_global(m: IrModule, name: str) -> i64 {
+    mut i := 1
+    while i < m.global_names.len() {
+        if m.global_names[i] == name { return i }
+        i = i + 1
+    }
+    return 0
+}
 
 fn mod_find_string(m: IrModule, s: str) -> i64 {
     mut i := 1

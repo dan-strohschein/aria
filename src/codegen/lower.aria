@@ -811,16 +811,25 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
         if kname == "const" {
             ll = _lset_pos(ll, decl.token_start)
             ll = _lskip_pub(ll)
-            ll = _ladv(ll)  // skip const
+            // Module-level `mut NAME := <literal>` is recorded with a "_mut:"
+            // prefix on decl.name by the DeclIndex. Scan the initializer just
+            // like a const but emit a module global instead.
+            mut is_module_mut := false
+            if decl.name.len() > 5 && decl.name.substring(0, 5) == "_mut:" {
+                is_module_mut = true
+            }
+            // Skip either `const` or `mut` header keyword
+            ll = _ladv(ll)
             if _lk(ll) == "IDENT" {
-                cname := _lcur(ll).text
+                mut cname := _lcur(ll).text
+                if is_module_mut { cname = decl.name.substring(5, decl.name.len()) }
                 ll = _ladv(ll)  // skip name
                 // Skip : TYPE if present
                 if _lk(ll) == ":" {
                     ll = _ladv(ll)
                     ll = _skip_type_l(ll)
                 }
-                if _lk(ll) == "=" {
+                if _lk(ll) == "=" || _lk(ll) == ":=" {
                     ll = _ladv(ll)
                     ll = _lskip_nl(ll)
                     if _lk(ll) == "INT" {
@@ -843,7 +852,11 @@ fn _scan_consts(l: Lowerer, index: DeclIndex) -> Lowerer {
                             ci = ci + 1
                         }
                         if neg { num = 0 - num }
-                        ll = _ladd_const(ll, cname, num)
+                        if is_module_mut {
+                            ll = _lset_mod(ll, mod_add_global(ll.module, cname, num))
+                        } else {
+                            ll = _ladd_const(ll, cname, num)
+                        }
                         ll = _ladv(ll)
                     } else if _lk(ll) == "STRING" {
                         sval := _lcur(ll).text
@@ -1441,6 +1454,16 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             if src_type != 0 { ll = _lset_type(ll, nt.temp, src_type) }
             if _lis_result(ll, slot) { ll = _lset_is_result(ll, nt.temp) }
             return LT{l: ll, temp: nt.temp}
+        }
+        // Check module-level globals (`mut NAME := <int>` at module scope).
+        // GlobalLoad reads the LLVM global into a fresh temp. This must come
+        // before the const-lookup so a shadowing const doesn't hide the mut.
+        if mod_find_global(ll.module, name) > 0 {
+            g_nt := _lnew_temp(ll)
+            ll = g_nt.l
+            ll = _lemit(ll, new_inst(OpGlobalLoad, g_nt.temp, 0, 0, name, 0))
+            ll = _lset_type(ll, g_nt.temp, 1)
+            return LT{l: ll, temp: g_nt.temp}
         }
         // Check integer constants
         cv := _lconst_lookup(ll, name)
@@ -3978,6 +4001,9 @@ fn _lower_assign_node(l: Lowerer, node: Expr) -> LT {
             // Propagate type from RHS to the variable slot
             rhs_type := _lget_type(ll, result.temp)
             if rhs_type > 0 { ll = _lset_type(ll, slot, rhs_type) }
+        } else if mod_find_global(ll.module, lhs.s1) > 0 {
+            // Module-level mut binding: store to LLVM global.
+            ll = _lemit(ll, new_inst(OpGlobalStore, 0, result.temp, 0, lhs.s1, 0))
         }
     } else if lhs_nk == "FieldAccess" {
         recv := _lower_expr_node(ll, lhs.c0)

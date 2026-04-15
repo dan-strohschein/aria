@@ -466,6 +466,17 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     }
     p = p.append(nl)
 
+    // Module-level mut globals (`mut NAME := <int>` at top level).
+    // One LLVM global per entry, initialized at load time.
+    mut gi := 1
+    while gi < m.global_names.len() {
+        gname := m.global_names[gi]
+        ginit := m.global_inits[gi]
+        p = p.append("@_aria_g_" + gname + " = global i64 " + i2s(ginit) + nl)
+        gi = gi + 1
+    }
+    if m.global_names.len() > 1 { p = p.append(nl) }
+
     // Runtime declarations
     p = p.append("; Runtime declarations" + nl)
     p = p.append("declare double @_aria_sqrt(double)" + nl)
@@ -762,6 +773,16 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
         si = si + 1
     }
     h = h.append(nl)
+
+    // Module-level mut globals.
+    mut gi := 1
+    while gi < m.global_names.len() {
+        gname := m.global_names[gi]
+        ginit := m.global_inits[gi]
+        h = h.append("@_aria_g_" + gname + " = global i64 " + i2s(ginit) + nl)
+        gi = gi + 1
+    }
+    if m.global_names.len() > 1 { h = h.append(nl) }
 
     // Runtime declarations (same as non-streaming version)
     h = h.append("; Runtime declarations" + nl)
@@ -1425,6 +1446,24 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
         gg = _gc_frame_update(gg, f, inst.dest, v, idx)
+        return gg
+    }
+
+    if op == "GlobalLoad" {
+        // inst.s1 = global name; reads module global into inst.dest temp.
+        mut gg := g
+        v := "%gload_v_" + i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* @_aria_g_" + inst.s1)
+        gg = _lg_emit(gg, "store i64 " + v + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if op == "GlobalStore" {
+        // inst.arg1 = source temp; inst.s1 = global name.
+        mut gg := g
+        v := "%gstore_v_" + i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, "store i64 " + v + ", i64* @_aria_g_" + inst.s1)
         return gg
     }
 

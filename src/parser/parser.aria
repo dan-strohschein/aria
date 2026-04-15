@@ -416,6 +416,25 @@ fn build_decl_index(tokens: [Token]) -> ParseResult {
             // Skip to end of line (const values are single-expression)
             while pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" { pos = pos + 1 }
             idx = decl_index_add(idx, DeclInfo{kind: DkConst, name: name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub, node_idx: 0})
+        } else if k == "mut" {
+            // Module-level mut binding: `mut NAME := expr`. Register with a
+            // "_mut:" name prefix so the lowerer can distinguish it from
+            // `const`. Codegen allocates an LLVM global and emits GlobalLoad
+            // / GlobalStore for reads/writes.
+            decl_start := pos
+            pos = pos + 1  // skip mut
+            mut name := ""
+            if pos < len && tokens[pos].name == "IDENT" {
+                name = tokens[pos].text
+                pos = pos + 1
+            }
+            // Skip optional `: Type`
+            if pos < len && tokens[pos].name == ":" {
+                while pos < len && tokens[pos].name != ":=" && tokens[pos].name != "=" && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" { pos = pos + 1 }
+            }
+            // Skip to end of line (mut values are single-expression)
+            while pos < len && tokens[pos].name != "NEWLINE" && tokens[pos].name != "EOF" { pos = pos + 1 }
+            idx = decl_index_add(idx, DeclInfo{kind: DkConst, name: "_mut:" + name, token_start: decl_start, body_start: decl_start, body_end: pos, is_pub: is_pub, node_idx: 0})
         } else if k == "mod" {
             // `mod <name>` — consume mod + name token (optionally dotted path).
             // Do NOT scan to NEWLINE: the lexer omits NEWLINE between `mod <keyword>`
