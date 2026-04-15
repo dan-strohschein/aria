@@ -1071,8 +1071,15 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
     ll = _lset_func(ll, new_ir_func(name, actual_param_count, sig.return_type))
 
     // Track error type for Ok wrapping and ? operator
-    if sig.error_type > 0 {
-        ll = _lset_error_type(ll, sig.error_type)
+    mut eff_err_type := sig.error_type
+    if eff_err_type == 0 && sig.return_type > 0 {
+        rt_info := store_get(ll.store, sig.return_type)
+        if type_kind_name(rt_info.kind) == "Result" {
+            eff_err_type = rt_info.type_id2
+        }
+    }
+    if eff_err_type > 0 {
+        ll = _lset_error_type(ll, eff_err_type)
     }
 
     // Allocate temps for parameters
@@ -1101,17 +1108,26 @@ fn _lower_fn_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
         pi = pi + 1
     }
 
+    // Derive effective sig.return_type (unwrap Result for AST body lowering)
+    mut eff_sig := sig
+    if eff_err_type > 0 && sig.return_type > 0 {
+        rt_info2 := store_get(ll.store, sig.return_type)
+        if type_kind_name(rt_info2.kind) == "Result" {
+            eff_sig = new_fn_sig(sig.name, sig.param_names, sig.param_types, rt_info2.type_id, eff_err_type)
+        }
+    }
+
     // Position token cursor to function body (needed for string interpolation fallback)
     ll = _lset_pos(ll, decl.body_start)
     // Try AST path if FnDecl has body in pool
     if decl.node_idx > 0 {
         fn_node := pool_get(ll.pool, decl.node_idx)
         if fn_node.c0 > 0 {
-            return _lower_fn_body_ast(ll, fn_node.c0, sig)
+            return _lower_fn_body_ast(ll, fn_node.c0, eff_sig)
         }
     }
     // Legacy: token-walking path
-    _lower_fn_body_d(ll, sig)
+    _lower_fn_body_d(ll, eff_sig)
 }
 
 // Shared body-lowering logic for _lower_fn_d — dispatches to = expr or { block } forms
@@ -5630,8 +5646,30 @@ fn _lower_fn_body(l: Lowerer, return_type: i64) -> Lowerer {
         }
         if already_returned == false {
             ll = _emit_defers(ll)
-            ret_type := _lget_type(ll, last_temp)
-            ll = _lemit(ll, new_inst(OpRet, 0, last_temp, 0, "", ret_type))
+            // Implicit Ok wrapping for fallible functions (skip if already Result)
+            if ll.fn_error_type > 0 && _lget_type(ll, last_temp) != 200 && !_lis_result(ll, last_temp) {
+                ret_type := _lget_type(ll, last_temp)
+                mut ok_slots := 2
+                if ret_type == 12 { ok_slots = 3 }
+                ok_nt := _lnew_temp(ll)
+                ll = ok_nt.l
+                ll = _lemit(ll, new_inst(OpAlloc, ok_nt.temp, ok_slots, 0, "_Result", 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, tag_nt.temp, 0, "_tag", 0))
+                if ret_type == 12 {
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, last_temp, 1, "_val", 0))
+                    val_len := last_temp + 1
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, val_len, 2, "_val_len", 0))
+                } else {
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, last_temp, 1, "_val", 0))
+                }
+                ll = _lemit(ll, new_inst(OpRet, 0, ok_nt.temp, 0, "", 0))
+            } else {
+                ret_type := _lget_type(ll, last_temp)
+                ll = _lemit(ll, new_inst(OpRet, 0, last_temp, 0, "", ret_type))
+            }
         }
     }
     return ll
@@ -7902,7 +7940,9 @@ fn _lower_primary(l: Lowerer) -> LT {
             if name == "Ok" || name == "Err" || name == "err" {
                 ll = _ladv(ll)  // skip (
                 ll = _lskip_nl(ll)
-                val := _lower_atom(ll)  // use _lower_atom to handle Type.Variant (field access)
+                // _lower_expr handles postfix `!` so patterns like
+                // `err(last!)` consume the unwrap before building the Result.
+                val := _lower_expr(ll)
                 ll = val.l
                 ll = _lskip_nl(ll)
                 if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -13900,6 +13940,7 @@ fn _lower_closure(l: Lowerer) -> LT {
     saved_env_slots := ll.env_slots
     saved_types := ll.temp_types
     saved_is_result := ll.is_result
+    saved_err_type := ll.fn_error_type
 
     // Scan for captured variables: identifiers in body that exist in outer env
     // but are NOT closure parameters
@@ -14013,7 +14054,7 @@ fn _lower_closure(l: Lowerer) -> LT {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: saved_types, is_result: saved_is_result,
-                 fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
+                 fn_error_type: saved_err_type, defer_starts: [0], defer_ends: [0]}
 
     // Build fat pointer: {fn_ptr, env_ptr}
     // Allocate 2-slot struct
@@ -14300,6 +14341,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     saved_env_slots := ll.env_slots
     saved_types := ll.temp_types
     saved_is_result := ll.is_result
+    saved_err_type := ll.fn_error_type
 
     ll = _lset_func(ll, new_ir_func(closure_name, actual_params, ret_type))
     // Activate fallible-closure mode so `?`/`catch`/body-result wrapping work
@@ -14386,7 +14428,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                  const_names: ll.const_names, const_vals: ll.const_vals,
                  const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
                  temp_types: saved_types, is_result: saved_is_result,
-                 fn_error_type: 0, defer_starts: [0], defer_ends: [0]}
+                 fn_error_type: saved_err_type, defer_starts: [0], defer_ends: [0]}
 
     // Build fat pointer: {fn_ptr, env_ptr}
     fat_nt := _lnew_temp(ll)
@@ -16090,9 +16132,17 @@ fn _lower_match(l: Lowerer) -> LT {
         }
         if first_pat != "_" {
             pat_parent := _variant_parent(ll.registry, first_pat)
+            mut needs_tag_extract := false
             if pat_parent.name != "" && sum_has_data(pat_parent) {
+                needs_tag_extract = true
+            }
+            // Built-in Ok/Err/Some/None patterns always indicate a
+            // struct-allocated Result/Option subject; extract tag from slot 0.
+            if first_pat == "Ok" || first_pat == "Err" || first_pat == "Some" || first_pat == "None" {
+                needs_tag_extract = true
+            }
+            if needs_tag_extract {
                 is_data_sum = true
-                // Extract tag from slot 0 of the struct
                 tag_ext := _lnew_temp(ll)
                 ll = tag_ext.l
                 ll = _lemit(ll, new_inst(OpFieldGet, tag_ext.temp, subj.temp, 0, "_tag", 0))
@@ -16131,6 +16181,11 @@ fn _lower_match(l: Lowerer) -> LT {
             vtag_check := _variant_tag(ll.registry, pattern)
             if vtag_check > 0 {
                 is_variant = true
+            } else if pattern == "Ok" || pattern == "Err" || pattern == "Some" || pattern == "None" {
+                // Built-in Result/Option variants — treat as variants so the
+                // arm dispatch compares tags instead of binding the whole
+                // subject to the pattern name.
+                is_variant = true
             } else {
                 // Check for named pattern: name @ Pattern
                 at_pos := ll.pos + 1
@@ -16148,6 +16203,8 @@ fn _lower_match(l: Lowerer) -> LT {
                     } else if pattern_kind == "IDENT" && is_wildcard == false {
                         vtag2 := _variant_tag(ll.registry, pattern)
                         if vtag2 > 0 {
+                            is_variant = true
+                        } else if pattern == "Ok" || pattern == "Err" || pattern == "Some" || pattern == "None" {
                             is_variant = true
                         } else {
                             is_binding = true
@@ -16718,8 +16775,16 @@ fn _lower_match(l: Lowerer) -> LT {
             ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
             ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
         } else {
-            // Variant pattern: compare subject tag with variant tag
-            tag := _variant_tag(ll.registry, pattern)
+            // Variant pattern: compare subject tag with variant tag.
+            // Built-in Result/Option patterns aren't in the variant registry;
+            // hard-code their tags (Ok=0, Err=1, Some=1, None=0).
+            mut tag := _variant_tag(ll.registry, pattern)
+            if tag == 0 && _variant_parent(ll.registry, pattern).name == "" {
+                if pattern == "Ok" { tag = 0 }
+                if pattern == "Err" { tag = 1 }
+                if pattern == "Some" { tag = 1 }
+                if pattern == "None" { tag = 0 }
+            }
             next_lbl := _lnew_label(ll)
             ll = next_lbl.l
 
@@ -16947,9 +17012,43 @@ fn _lower_match(l: Lowerer) -> LT {
             }
 
             // Lower arm body
+            mut arm_ends_in_return := false
             if _lk(ll) == lb {
                 ll = _lower_block(ll)
                 ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
+            } else if _lk(ll) == "return" {
+                // `return <expr>` arm body — emit OpRet (wrapped in Ok Result
+                // when the enclosing fn is fallible), skip the trailing
+                // OpJump to end_lbl so the block doesn't have two terminators
+                // and the next arm's label is reachable.
+                ll = _ladv(ll)  // skip return
+                rexpr := _lower_expr(ll)
+                ll = rexpr.l
+                ll = _emit_defers(ll)
+                if ll.fn_error_type != 0 && _lget_type(ll, rexpr.temp) != 200 && !_lis_result(ll, rexpr.temp) {
+                    r_rt := _lget_type(ll, rexpr.temp)
+                    mut ok_slots := 2
+                    if r_rt == 12 { ok_slots = 3 }
+                    ok_nt := _lnew_temp(ll)
+                    ll = ok_nt.l
+                    ll = _lemit(ll, new_inst(OpAlloc, ok_nt.temp, ok_slots, 0, "_Result", 0))
+                    tag_nt := _lnew_temp(ll)
+                    ll = tag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, tag_nt.temp, 0, "_tag", 0))
+                    if r_rt == 12 {
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, rexpr.temp, 1, "_val", 0))
+                        r_len := rexpr.temp + 1
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, r_len, 2, "_val_len", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, rexpr.temp, 1, "_val", 0))
+                    }
+                    ll = _lemit(ll, new_inst(OpRet, 0, ok_nt.temp, 0, "", 0))
+                } else {
+                    r_rt := _lget_type(ll, rexpr.temp)
+                    ll = _lemit(ll, new_inst(OpRet, 0, rexpr.temp, 0, "", r_rt))
+                }
+                arm_ends_in_return = true
             } else {
                 arm_result := _lower_expr(ll)
                 ll = arm_result.l
@@ -16959,7 +17058,9 @@ fn _lower_match(l: Lowerer) -> LT {
                 ll = _lemit(ll, new_inst(OpStore, result_len, arm_len, 0, "", 0))
             }
 
-            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            if arm_ends_in_return == false {
+                ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            }
             ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
         }
 
