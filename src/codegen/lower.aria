@@ -7579,36 +7579,51 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
             left = ok_val.temp
         } else if k == "!" {
-            // Assert-unwrap in expression context
+            // Assert-unwrap in expression context. Handles both Result
+            // (panic when tag==1/Err) and Option (panic when tag==0/None).
             ll = _ladv(ll)
+            left_type := _lget_type(ll, left)
+            mut is_option := false
+            if left_type == 201 {
+                is_option = true
+            } else if left_type > 16 && left_type < ll.store.types.len() {
+                lti := store_get(ll.store, left_type)
+                if type_kind_name(lti.kind) == "Optional" { is_option = true }
+            }
+            mut panic_tag := 1
+            mut panic_msg := "unwrap failed on Err value"
+            if is_option {
+                panic_tag = 0
+                panic_msg = "unwrap failed on None"
+            }
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
             ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left, 0, "_tag", 0))
-            const_one := _lnew_temp(ll)
-            ll = const_one.l
-            ll = _lemit(ll, new_inst(OpConst, const_one.temp, 1, 0, "", 0))
-            is_err := _lnew_temp(ll)
-            ll = is_err.l
-            ll = _lemit(ll, new_inst(OpEq, is_err.temp, tag_nt.temp, const_one.temp, "", 0))
+            const_pt := _lnew_temp(ll)
+            ll = const_pt.l
+            ll = _lemit(ll, new_inst(OpConst, const_pt.temp, panic_tag, 0, "", 0))
+            is_bad := _lnew_temp(ll)
+            ll = is_bad.l
+            ll = _lemit(ll, new_inst(OpEq, is_bad.temp, tag_nt.temp, const_pt.temp, "", 0))
             panic_lbl := _lnew_label(ll)
             ll = panic_lbl.l
             ok_lbl := _lnew_label(ll)
             ll = ok_lbl.l
-            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_err.temp, panic_lbl.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_bad.temp, panic_lbl.temp, "", 0))
             ok_val := _lnew_temp(ll)
             ll = ok_val.l
             ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, left, 1, "_val", 0))
             ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
             ll = _lemit(ll, new_inst(OpLabel, 0, panic_lbl.temp, 0, "", 0))
-            mut panic_str_idx := mod_find_string(ll.module, "unwrap failed on Err value")
+            mut panic_str_idx := mod_find_string(ll.module, panic_msg)
             if panic_str_idx == 0 {
-                new_mod := mod_add_string(ll.module, "unwrap failed on Err value")
+                new_mod := mod_add_string(ll.module, panic_msg)
                 panic_str_idx = new_mod.string_constants.len() - 1
                 ll = _lset_mod(ll, new_mod)
             }
             panic_ptr := _lnew_str_temp(ll)
             ll = panic_ptr.l
-            ll = _lemit(ll, new_inst(OpConstStr, panic_ptr.temp, panic_str_idx, 25, "", 0))
+            ll = _lemit(ll, new_inst(OpConstStr, panic_ptr.temp, panic_str_idx, panic_msg.len(), "", 0))
             ll = _lemit(ll, new_inst(OpCall, 0, panic_ptr.temp, 2, "_aria_panic", 0))
             ll = _lemit(ll, new_inst(OpLabel, 0, ok_lbl.temp, 0, "", 0))
             left = ok_val.temp
@@ -14751,6 +14766,77 @@ fn _lower_match_subject(l: Lowerer) -> LT {
                 if first_arg >= 0 { fa = first_arg }
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, fa, arg_count, name, 0))
                 return LT{l: ll, temp: nt.temp}
+            }
+            // Not a registered fn — if env has a closure-typed binding, do
+            // an indirect call. Without this, `match f() { ... }` with `f`
+            // as a closure parameter falls through to the variable-load
+            // path and the match subject is f itself, not its return.
+            fslot := _lenv_lookup(ll, name)
+            if fslot >= 0 {
+                closure_nt := _lnew_temp(ll)
+                ll = closure_nt.l
+                ll = _lemit(ll, new_inst(OpLoad, closure_nt.temp, fslot, 0, "", 0))
+                fn_ptr_nt := _lnew_temp(ll)
+                ll = fn_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, closure_nt.temp, 0, "_fn", 0))
+                env_ptr_nt := _lnew_temp(ll)
+                ll = env_ptr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, closure_nt.temp, 1, "_env", 0))
+                ll = _ladv(ll)  // skip (
+                ll = _lskip_nl(ll)
+                pack_start := _lnew_temp(ll)
+                ll = pack_start.l
+                ll = _lemit(ll, new_inst(OpStore, pack_start.temp, env_ptr_nt.temp, 0, "", 0))
+                mut pack_idx := 1
+                mut total_regs := 1
+                while _lk(ll) != ")" && _lk(ll) != "EOF" {
+                    ll = _lskip_nl(ll)
+                    arg := _lower_expr(ll)
+                    ll = arg.l
+                    arg_tid := _lget_type(ll, arg.temp)
+                    if arg_tid == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg.temp, 0, "", 0))
+                        pack_idx = pack_idx + 1
+                        total_regs = total_regs + 1
+                        ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg.temp + 1, 0, "", 0))
+                        pack_idx = pack_idx + 1
+                        total_regs = total_regs + 1
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, pack_start.temp + pack_idx, arg.temp, 0, "", 0))
+                        pack_idx = pack_idx + 1
+                        total_regs = total_regs + 1
+                    }
+                    ll = _lskip_nl(ll)
+                    if _lk(ll) == "," { ll = _ladv(ll) }
+                }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                // Resolve callee's return shape from its TyFunction type.
+                mut ret_hint := ""
+                mut ic_is_result := false
+                mut ic_ret_type := 0
+                fn_tid_ic := _lget_type(ll, fslot)
+                if fn_tid_ic > 16 && fn_tid_ic < ll.store.types.len() {
+                    ti_ic := store_get(ll.store, fn_tid_ic)
+                    if type_kind_name(ti_ic.kind) == "Function" {
+                        ic_ret_type = type_info_type_id(ti_ic)
+                        if ic_ret_type == 12 { ret_hint = "str" }
+                        if ti_ic.type_id2 > 0 { ic_is_result = true }
+                        if ic_ret_type > 16 && ic_ret_type < ll.store.types.len() {
+                            ret_ti := store_get(ll.store, ic_ret_type)
+                            if type_kind_name(ret_ti.kind) == "Result" {
+                                ic_is_result = true
+                                ic_ret_type = type_info_type_id(ret_ti)
+                                if ic_ret_type == 12 { ret_hint = "str" }
+                            }
+                        }
+                    }
+                }
+                ic_nt := _lnew_temp(ll)
+                ll = ic_nt.l
+                ll = _lemit(ll, new_inst(OpCallIndirect, ic_nt.temp, fn_ptr_nt.temp, total_regs, ret_hint, pack_start.temp))
+                if ic_ret_type > 0 { ll = _lset_type(ll, ic_nt.temp, ic_ret_type) }
+                if ic_is_result { ll = _lset_is_result(ll, ic_nt.temp) }
+                return LT{l: ll, temp: ic_nt.temp}
             }
         }
 
