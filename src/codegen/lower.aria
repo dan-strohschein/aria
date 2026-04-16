@@ -3766,6 +3766,11 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if _lis_result(ll, expr.temp) {
             ex_pl := _lget_type(ll, expr.temp)
             if ex_pl > 0 && ex_pl < 16 { catch_body_type = ex_pl }
+            // If the temp is typed as a full Result TypeInfo, unwrap to its ok type.
+            if ex_pl > 16 && ex_pl < ll.store.types.len() {
+                pl_info := store_get(ll.store, ex_pl)
+                if type_kind_name(pl_info.kind) == "Result" { catch_body_type = pl_info.type_id }
+            }
         }
         ok_lbl := _lnew_label(ll)
         ll = ok_lbl.l
@@ -3776,6 +3781,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         err_val := _lnew_temp(ll)
         ll = err_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
+        // Propagate the err payload's concrete type so downstream consumers
+        // (pattern match, interpolation) can dispatch correctly.
+        if expr_type > 16 && expr_type < ll.store.types.len() {
+            et_info := store_get(ll.store, expr_type)
+            if type_kind_name(et_info.kind) == "Result" && et_info.type_id2 > 0 {
+                ll = _lset_type(ll, err_val.temp, et_info.type_id2)
+            }
+        }
         if node.b1 {
             // Multi-arm catch: dispatch on error variant tags
             // Extract the error-variant tag. For an error type whose variants
@@ -4711,8 +4724,15 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
             if rt != 12 { ll = _lset_type(ll, nt_temp, rt) }
         }
         if call_sig.name != "" {
-            if call_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, call_sig.return_type) }
-            if call_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
+            if call_sig.error_type > 0 && call_sig.return_type > 0 {
+                res_ti := mk_result_type(call_sig.return_type, call_sig.error_type)
+                new_st := store_add_canonical(ll.store, res_ti)
+                ll = _lset_store(ll, new_st.store)
+                ll = _lset_type(ll, nt_temp, new_st.id)
+                ll = _lset_is_result(ll, nt_temp)
+            } else if call_sig.return_type > 0 {
+                ll = _lset_type(ll, nt_temp, call_sig.return_type)
+            }
         }
         return LT{l: ll, temp: nt_temp}
     }
@@ -11298,25 +11318,33 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         err_arg := _lower_expr(ll)
         ll = err_arg.l
         if _lk(ll) == ")" { ll = _ladv(ll) }
+        // Determine if err and/or ok payloads are str — Result uses 3 slots
+        // whenever either side carries a fat-pointer str.
+        err_is_str := _lget_type(ll, err_arg.temp) == 12
+        obj_type := _lget_type(ll, obj)
+        mut ok_is_str := false
+        if obj_type > 16 && obj_type < ll.store.types.len() {
+            oi := store_get(ll.store, obj_type)
+            if type_kind_name(oi.kind) == "Optional" && oi.type_id == 12 { ok_is_str = true }
+        }
+        mut slots := 2
+        if err_is_str || ok_is_str { slots = 3 }
         // Read tag of the Option (slot 0)
         tag_nt := _lnew_temp(ll)
         ll = tag_nt.l
         ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, obj, 0, "_tag", 0))
-        // Constants
         zero_nt := _lnew_temp(ll)
         ll = zero_nt.l
         ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
         one_nt := _lnew_temp(ll)
         ll = one_nt.l
         ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
-        // Check tag == 1 (Some)
         is_some := _lnew_temp(ll)
         ll = is_some.l
         ll = _lemit(ll, new_inst(OpEq, is_some.temp, tag_nt.temp, one_nt.temp, "", 0))
-        // Allocate Result (2 slots)
         result := _lnew_temp(ll)
         ll = result.l
-        ll = _lemit(ll, new_inst(OpAlloc, result.temp, 2, 0, "_Result", 0))
+        ll = _lemit(ll, new_inst(OpAlloc, result.temp, slots, 0, "_Result", 0))
         some_lbl := _lnew_label(ll)
         ll = some_lbl.l
         end_lbl := _lnew_label(ll)
@@ -11325,14 +11353,34 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         // None path: Err(err_arg)
         ll = _lemit(ll, new_inst(OpFieldSet, result.temp, one_nt.temp, 0, "_tag", 0))
         ll = _lemit(ll, new_inst(OpFieldSet, result.temp, err_arg.temp, 1, "_val", 0))
+        if err_is_str {
+            err_len := err_arg.temp + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, err_len, 2, "_val_len", 0))
+        } else if slots == 3 {
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 2, "_val_len", 0))
+        }
         ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         // Some path: Ok(obj.val)
         ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
-        val_nt := _lnew_temp(ll)
-        ll = val_nt.l
-        ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+        if ok_is_str {
+            val_nt := _lnew_str_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp + 1, obj, 2, "_val_len", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+            val_len := val_nt.temp + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_len, 2, "_val_len", 0))
+        } else {
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+            if slots == 3 {
+                ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 2, "_val_len", 0))
+            }
+        }
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
         ll = _lset_is_result(ll, result.temp)
         return LT{l: ll, temp: result.temp}
@@ -12198,8 +12246,15 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
     obj_type := _lget_type(ll, obj)
 
     // Option.ok_or(err) — Some(v) -> Ok(v); None -> Err(err_arg).
-    // Mirror of the token-walker path in _lower_method_call.
     if method == "ok_or" {
+        err_is_str := _lget_type(ll, arg1) == 12
+        mut ok_is_str := false
+        if obj_type > 16 && obj_type < ll.store.types.len() {
+            oi := store_get(ll.store, obj_type)
+            if type_kind_name(oi.kind) == "Optional" && oi.type_id == 12 { ok_is_str = true }
+        }
+        mut slots := 2
+        if err_is_str || ok_is_str { slots = 3 }
         tag_nt := _lnew_temp(ll)
         ll = tag_nt.l
         ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, obj, 0, "_tag", 0))
@@ -12214,7 +12269,7 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         ll = _lemit(ll, new_inst(OpEq, is_some.temp, tag_nt.temp, one_nt.temp, "", 0))
         result := _lnew_temp(ll)
         ll = result.l
-        ll = _lemit(ll, new_inst(OpAlloc, result.temp, 2, 0, "_Result", 0))
+        ll = _lemit(ll, new_inst(OpAlloc, result.temp, slots, 0, "_Result", 0))
         some_lbl := _lnew_label(ll)
         ll = some_lbl.l
         end_lbl := _lnew_label(ll)
@@ -12222,13 +12277,33 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_some.temp, some_lbl.temp, "", 0))
         ll = _lemit(ll, new_inst(OpFieldSet, result.temp, one_nt.temp, 0, "_tag", 0))
         ll = _lemit(ll, new_inst(OpFieldSet, result.temp, arg1, 1, "_val", 0))
+        if err_is_str {
+            arg1_len := arg1 + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, arg1_len, 2, "_val_len", 0))
+        } else if slots == 3 {
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 2, "_val_len", 0))
+        }
         ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
-        val_nt := _lnew_temp(ll)
-        ll = val_nt.l
-        ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+        if ok_is_str {
+            val_nt := _lnew_str_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp + 1, obj, 2, "_val_len", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+            val_len := val_nt.temp + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_len, 2, "_val_len", 0))
+        } else {
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, val_nt.temp, obj, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 0, "_tag", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, result.temp, val_nt.temp, 1, "_val", 0))
+            if slots == 3 {
+                ll = _lemit(ll, new_inst(OpFieldSet, result.temp, zero_nt.temp, 2, "_val_len", 0))
+            }
+        }
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
         ll = _lset_is_result(ll, result.temp)
         return LT{l: ll, temp: result.temp}
@@ -13703,6 +13778,58 @@ fn _lower_interp_to_str(l: Lowerer, val: i64) -> LT {
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
         return LT{l: ll, temp: result_nt.temp}
     }
+    // User sum-type (enum) variants — interpolate as variant name.
+    sname := _struct_name_for_type(ll.store, ll.registry, t)
+    if sname != "" {
+        sdef := reg_find_struct(ll.registry, sname)
+        if sdef.is_sum && sdef.variant_names.len() > 1 {
+            // Read tag: if any variant carries data, tag is at slot 0; else val
+            // itself is the tag.
+            tag_src := val
+            mut tag_temp := tag_src
+            if sum_has_data(sdef) {
+                tnt := _lnew_temp(ll)
+                ll = tnt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tnt.temp, val, 0, "_tag", 0))
+                tag_temp = tnt.temp
+            }
+            // Build a branch cascade over the known variant tags. Tags are 1-based.
+            // Default (unreachable) falls through as "" to keep control flow sound.
+            result_nt := _lnew_str_temp(ll)
+            ll = result_nt.l
+            ll = _lset_type(ll, result_nt.temp, 12)
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            // Seed result with the first variant's name; then compare & overwrite
+            // for later variants. This avoids needing a fall-through default.
+            mut vi := 1
+            while vi < sdef.variant_names.len() {
+                vname := sdef.variant_names[vi]
+                vstr := _lower_string_const(ll, vname)
+                ll = vstr.l
+                if vi == 1 {
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, vstr.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, vstr.temp + 1, 0, "", 0))
+                } else {
+                    vtag_c := _lnew_temp(ll)
+                    ll = vtag_c.l
+                    ll = _lemit(ll, new_inst(OpConst, vtag_c.temp, vi, 0, "", 0))
+                    vcmp := _lnew_temp(ll)
+                    ll = vcmp.l
+                    ll = _lemit(ll, new_inst(OpEq, vcmp.temp, tag_temp, vtag_c.temp, "", 0))
+                    skip_lbl := _lnew_label(ll)
+                    ll = skip_lbl.l
+                    ll = _lemit(ll, new_inst(OpBranchFalse, 0, vcmp.temp, skip_lbl.temp, "", 0))
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp, vstr.temp, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, vstr.temp + 1, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpLabel, 0, skip_lbl.temp, 0, "", 0))
+                }
+                vi = vi + 1
+            }
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            return LT{l: ll, temp: result_nt.temp}
+        }
+    }
     conv_nt := _lnew_str_temp(ll)
     ll = conv_nt.l
     mut hint := ""
@@ -14914,6 +15041,17 @@ fn _lower_match_subject(l: Lowerer) -> LT {
                 mut fa := 0
                 if first_arg >= 0 { fa = first_arg }
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, fa, arg_count, name, 0))
+                // Preserve return-type info so Ok/Err pattern binding can
+                // infer the payload type from the Result's type_id/type_id2.
+                if sig.error_type > 0 && sig.return_type > 0 {
+                    res_ti := mk_result_type(sig.return_type, sig.error_type)
+                    new_st := store_add_canonical(ll.store, res_ti)
+                    ll = _lset_store(ll, new_st.store)
+                    ll = _lset_type(ll, nt.temp, new_st.id)
+                    ll = _lset_is_result(ll, nt.temp)
+                } else if sig.return_type > 0 {
+                    ll = _lset_type(ll, nt.temp, sig.return_type)
+                }
                 return LT{l: ll, temp: nt.temp}
             }
             // Not a registered fn — if env has a closure-typed binding, do
@@ -15587,6 +15725,21 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                 wvname := pat.s1
                 wvtag := _variant_tag(ll.registry, wvname)
                 wvparent := _variant_parent(ll.registry, wvname)
+                // For universal Ok/Err/Some without a registered parent, infer
+                // the payload type from the subject's Result/Optional shape.
+                mut w_inferred_ft := 0
+                if wvparent.name == "" && (wvname == "Ok" || wvname == "Err" || wvname == "Some") {
+                    if subj_type > 16 && subj_type < ll.store.types.len() {
+                        wsi := store_get(ll.store, subj_type)
+                        wsik := type_kind_name(wsi.kind)
+                        if wsik == "Result" {
+                            if wvname == "Err" { w_inferred_ft = wsi.type_id2 }
+                            else { w_inferred_ft = wsi.type_id }
+                        } else if wsik == "Optional" && wvname == "Some" {
+                            w_inferred_ft = wsi.type_id
+                        }
+                    }
+                }
                 if pat.b2 {
                     // Struct pattern: Move{x, y} or Repeat{count, cmd: inner}
                     // Field nodes: s1=binding_name, s2=field_name
@@ -15641,7 +15794,8 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                     while wfi < pat.list_count {
                         field_node := pool_get(ll.pool, pat.list_start + wfi)
                         fname := field_node.s1
-                        wftype := variant_field_type(wvparent, wvtag, wfi)
+                        mut wftype := variant_field_type(wvparent, wvtag, wfi)
+                        if wftype == 0 && wfi == 0 && w_inferred_ft != 0 { wftype = w_inferred_ft }
                         if fname != "_" {
                             if wftype == 12 {
                                 wfld_nt := _lnew_str_temp(ll)
@@ -15837,11 +15991,16 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                         fname := field_node.s1
                         fkind := expr_kind_name(field_node.kind)
                         // Look up payload type from subject's container type.
+                        // Ok/Some → ok type (type_id); Err → err type (type_id2).
                         mut payload_type := 0
                         if subj_type > 16 && subj_type < ll.store.types.len() {
                             si := store_get(ll.store, subj_type)
                             sik := type_kind_name(si.kind)
-                            if sik == "Optional" || sik == "Result" { payload_type = si.type_id }
+                            if sik == "Optional" { payload_type = si.type_id }
+                            if sik == "Result" {
+                                if dvtag == 0 - 2 { payload_type = si.type_id2 }
+                                else { payload_type = si.type_id }
+                            }
                         }
                         // Fallible-call results carry the payload type directly in subj_type
                         // (e.g. return 9 for f64!E). Fall back to that when no container type.
