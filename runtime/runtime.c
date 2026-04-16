@@ -819,6 +819,28 @@ void _aria_write_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_in
     _posix_close(fd);
 }
 
+// Real existence check via stat. Distinguishes empty-file (exists) from
+// missing-file (does not exist), which read-based exists() could not.
+aria_int _aria_file_exists(char *path_ptr, aria_int path_len) {
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+    struct stat st;
+    int rc = stat(path, &st);
+    free(path);
+    return rc == 0 ? 1 : 0;
+}
+
+// Delete a file. Returns 1 on success, 0 on failure.
+aria_int _aria_remove_file(char *path_ptr, aria_int path_len) {
+    char *path = (char *)malloc((size_t)(path_len + 1));
+    memcpy(path, path_ptr, (size_t)path_len);
+    path[path_len] = '\0';
+    int rc = unlink(path);
+    free(path);
+    return rc == 0 ? 1 : 0;
+}
+
 // Append data to a file (creates if doesn't exist)
 void _aria_append_file(char *path_ptr, aria_int path_len, char *data_ptr, aria_int data_len) {
     char *path = (char *)malloc((size_t)(path_len + 1));

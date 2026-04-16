@@ -21,6 +21,13 @@ fn elapsed(start: Instant, end: Instant) -> i64 {
     end.ns - start.ns
 }
 
+// Convert monotonic ns to a "unix-ish" seconds value. The runtime uses
+// CLOCK_MONOTONIC, so this isn't a true unix epoch — it's a stable counter
+// suitable for unique id generation (e.g. temp file names).
+fn unix(i: Instant) -> i64 {
+    i.ns / 1000000000
+}
+
 fn sleep(duration_ms: i64) with [Io] {
     _ariaSleep(duration_ms)
 }

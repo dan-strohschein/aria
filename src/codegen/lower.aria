@@ -4855,6 +4855,8 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaSleep" { return "_aria_sleep" }
     if name == "_ariaSha256Hex" { return "_aria_sha256_hex" }
     if name == "_ariaArgs" { return "_aria_args_get" }
+    if name == "_ariaFileExists" { return "_aria_file_exists" }
+    if name == "_ariaRemoveFile" { return "_aria_remove_file" }
     if name == "_ariaListDir" { return "_aria_list_dir" }
     if name == "_ariaIsDir" { return "_aria_is_dir" }
     if name == "_ariaGetenv" { return "_aria_getenv" }

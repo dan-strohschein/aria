@@ -123,3 +123,104 @@ fn db_row(result: DbResult, row: i64) -> DbRow {
 fn db_row_get(r: DbRow, col: i64) -> str {
     _ariaPgGetValue(r.result, r.row, col)
 }
+
+// ============================================================
+// High-level Connection / Transaction API
+//
+// Matches the spec-level `with conn := db.connect(url)? { ... }` pattern.
+// Current implementation fails fast (ConnectionFailed) because no real
+// backend is wired — callers should handle Err in a `catch` block. Once
+// libpq/SQLite is linked, connect() can return a live Connection and the
+// Transaction methods below can execute real queries.
+// ============================================================
+
+type Error =
+    | ConnectionFailed
+    | QueryFailed
+    | TxFailed
+    | NotFound
+    | Unavailable
+
+struct Connection {
+    handle: i64
+}
+
+struct Transaction {
+    conn_handle: i64
+    active: bool
+}
+
+// Connect to a database. Returns a Connection with handle==0 on failure
+// (check via conn.handle != 0 before using). Fallibility wrapped in Result
+// is aspirational — for now, use the handle check pattern.
+fn connect(url: str) -> Connection with [Io] {
+    h := _ariaPgConnect(url)
+    if h == 0 { return Connection { handle: 0 } }
+    if _ariaPgStatus(h) != 1 {
+        _ariaPgClose(h)
+        return Connection { handle: 0 }
+    }
+    Connection { handle: h }
+}
+
+fn is_connected(c: Connection) -> bool {
+    c.handle != 0
+}
+
+// All tx methods use the handle-based failure pattern rather than Result
+// wrapping (cross-module fallible returns with struct payloads need more
+// compiler work). Check tx.active / return values to detect failures.
+fn begin(conn: Connection) -> Transaction with [Io] {
+    if conn.handle == 0 { return Transaction { conn_handle: 0, active: false } }
+    r := _ariaPgExec(conn.handle, "BEGIN")
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    Transaction { conn_handle: conn.handle, active: ok }
+}
+
+fn exec(tx: Transaction, sql: str, params: [str]) -> bool with [Io] {
+    if !tx.active { return false }
+    r := _ariaPgExecParams(tx.conn_handle, sql, params)
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    ok
+}
+
+fn commit(tx: Transaction) -> bool with [Io] {
+    if !tx.active { return false }
+    r := _ariaPgExec(tx.conn_handle, "COMMIT")
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    ok
+}
+
+fn rollback(tx: Transaction) -> bool with [Io] {
+    if !tx.active { return false }
+    r := _ariaPgExec(tx.conn_handle, "ROLLBACK")
+    _ariaPgClear(r)
+    true
+}
+
+fn query_all(tx: Transaction, sql: str) -> [str] with [Io] {
+    mut empty: [str] = []
+    if !tx.active { return empty }
+    r := _ariaPgExec(tx.conn_handle, sql)
+    if _ariaPgResultStatus(r) != 0 {
+        _ariaPgClear(r)
+        return empty
+    }
+    nrows := _ariaPgNrows(r)
+    mut results: [str] = []
+    mut i := 0
+    while i < nrows {
+        results = results.append(_ariaPgGetValue(r, i, 0))
+        i = i + 1
+    }
+    _ariaPgClear(r)
+    results
+}
+
+fn close(conn: Connection) -> bool {
+    _ariaPgClose(conn.handle)
+    true
+}

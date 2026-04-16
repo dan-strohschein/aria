@@ -3,30 +3,32 @@ mod log
 // ============================================================
 // Logging Library for Aria
 //
-// Simple level-based logging to stdout/stderr.
+// Level-based logging to stdout/stderr.
+// Levels: 0=Debug, 1=Info, 2=Warn, 3=Error. Default 1 (Info).
+// Calls below the current level are suppressed.
 // ============================================================
 
+mut _level: i64 = 1
+
 fn info(msg: str) with [Io] {
-    println("[INFO] " + msg)
+    if _level <= 1 { println("[INFO] " + msg) }
 }
 
 fn warn(msg: str) with [Io] {
-    println("[WARN] " + msg)
+    if _level <= 2 { println("[WARN] " + msg) }
 }
 
 fn error(msg: str) with [Io] {
-    eprintln("[ERROR] " + msg)
+    if _level <= 3 { eprintln("[ERROR] " + msg) }
 }
 
 fn debug(msg: str) with [Io] {
-    println("[DEBUG] " + msg)
+    if _level <= 0 { println("[DEBUG] " + msg) }
 }
 
-// Stub: level filtering isnt implemented; accepts any i64 and returns it
-// unchanged so calls like `log.set_level(0)` compile and run as a no-op.
-// We intentionally dont declare log-level constants (log.Info, log.Debug,
-// etc.) here: they would collide with user-defined `Info`/`Error`/`Debug`
-// types common in error-handling examples.
+// Set the minimum log level (0=Debug, 1=Info, 2=Warn, 3=Error).
+// Messages below the current level are suppressed.
 fn set_level(level: i64) -> i64 {
+    _level = level
     level
 }

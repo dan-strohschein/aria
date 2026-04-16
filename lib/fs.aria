@@ -34,8 +34,7 @@ fn append(path: str, content: str) with [Fs] {
 }
 
 fn exists(path: str) -> bool with [Fs] {
-    content := _ariaReadFile(path)
-    content.len() > 0
+    _ariaFileExists(path) == 1
 }
 
 fn is_dir(path: str) -> bool with [Fs] {
@@ -65,15 +64,53 @@ fn metadata(path: str) -> Metadata with [Fs] {
     Metadata{path: path, size_bytes: content.len(), exists: content.len() > 0}
 }
 
-fn open(path: str) -> str with [Fs] {
-    _ariaReadFile(path)
-}
-
-fn create(path: str) -> str with [Fs] {
-    _ariaWriteFile(path, "")
-    path
-}
-
 fn remove(path: str) -> bool with [Fs] {
+    _ariaRemoveFile(path) == 1
+}
+
+// --- File handles (value-typed for now — no real fd resource, just path) ---
+// Matches the aspirational spec API: `with f := fs.open(p)? { f.read_all()? }`.
+struct File {
+    path: str
+    mode: str    // "r" | "w" | "a"
+}
+
+fn open(path: str) -> File!Error with [Fs] {
+    if _ariaFileExists(path) == 0 { return err(Error.NotFound) }
+    File { path: path, mode: "r" }
+}
+
+fn create(path: str) -> File!Error with [Fs] {
+    _ariaWriteFile(path, "")
+    File { path: path, mode: "w" }
+}
+
+fn file_read_all(f: File) -> str with [Fs] {
+    _ariaReadFile(f.path)
+}
+
+fn file_lines(f: File) -> [str] with [Fs] {
+    content := _ariaReadFile(f.path)
+    content.split("\n")
+}
+
+fn file_write(f: File, content: str) -> bool!Error with [Fs] {
+    if f.mode == "r" { return err(Error.IoFailed("file opened for reading")) }
+    if f.mode == "a" {
+        _ariaAppendFile(f.path, content)
+    } else {
+        _ariaAppendFile(f.path, content)
+    }
     true
+}
+
+fn file_write_line(f: File, content: str) -> bool!Error with [Fs] {
+    if f.mode == "r" { return err(Error.IoFailed("file opened for reading")) }
+    _ariaAppendFile(f.path, content)
+    _ariaAppendFile(f.path, "\n")
+    true
+}
+
+fn file_close(f: File) -> bool {
+    true    // no real fd to close yet; placeholder for the Drop integration
 }
