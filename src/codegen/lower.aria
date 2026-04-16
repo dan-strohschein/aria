@@ -2004,15 +2004,64 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "If" {
         // c0=cond, c1=then, c2=else (if b1)
-        cond := _lower_expr_node(ll, node.c0)
-        ll = cond.l
+        // if-let: `if NAME := expr { ... }` — parser produces Binary(":=", Ident, expr).
+        // Unwrap Option/Result: bind NAME to payload on Some/Ok, else fall through.
+        cond_node := pool_get(ll.pool, node.c0)
+        mut cond_temp := 0
+        if expr_kind_name(cond_node.kind) == "Binary" && cond_node.s1 == ":=" {
+            lhs_node := pool_get(ll.pool, cond_node.c0)
+            bind_name := lhs_node.s1
+            rexpr := _lower_expr_node(ll, cond_node.c1)
+            ll = rexpr.l
+            rt := _lget_type(ll, rexpr.temp)
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, rexpr.temp, 0, "_tag", 0))
+            mut payload_type := 0
+            mut truthy_tag := 1
+            if rt > 0 {
+                ri := store_get(ll.store, rt)
+                rk := type_kind_name(ri.kind)
+                if rk == "Optional" { payload_type = ri.type_id; truthy_tag = 1 }
+                else if rk == "Result" { payload_type = ri.type_id; truthy_tag = 0 }
+            }
+            if payload_type == 0 { payload_type = 12 }
+            mut bind_temp := 0
+            if payload_type == 12 {
+                bt := _lnew_str_temp(ll)
+                ll = bt.l
+                bind_temp = bt.temp
+                ll = _lemit(ll, new_inst(OpFieldGet, bt.temp, rexpr.temp, 1, "_val", 0))
+                ll = _lemit(ll, new_inst(OpFieldGet, bt.temp + 1, rexpr.temp, 2, "_val_len", 0))
+                ll = _lset_type(ll, bt.temp, 12)
+            } else {
+                bt := _lnew_temp(ll)
+                ll = bt.l
+                bind_temp = bt.temp
+                ll = _lemit(ll, new_inst(OpFieldGet, bt.temp, rexpr.temp, 1, "_val", 0))
+                if payload_type != 0 { ll = _lset_type(ll, bt.temp, payload_type) }
+            }
+            ll = _lenv_add(ll, bind_name, bind_temp)
+            cmp_const := _lnew_temp(ll)
+            ll = cmp_const.l
+            ll = _lemit(ll, new_inst(OpConst, cmp_const.temp, truthy_tag, 0, "", 0))
+            cmp_nt := _lnew_temp(ll)
+            ll = cmp_nt.l
+            ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, tag_nt.temp, cmp_const.temp, "", 0))
+            ll = _lset_type(ll, cmp_nt.temp, 1)
+            cond_temp = cmp_nt.temp
+        } else {
+            cond := _lower_expr_node(ll, node.c0)
+            ll = cond.l
+            cond_temp = cond.temp
+        }
         else_lbl := _lnew_label(ll)
         ll = else_lbl.l
         end_lbl := _lnew_label(ll)
         ll = end_lbl.l
         result_nt := _lnew_str_temp(ll)
         ll = result_nt.l
-        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond.temp, else_lbl.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_temp, else_lbl.temp, "", 0))
         // Then branch
         then_result := _lower_expr_node(ll, node.c1)
         ll = then_result.l
