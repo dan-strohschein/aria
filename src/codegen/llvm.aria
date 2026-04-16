@@ -510,6 +510,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare i64 @_aria_str_endsWith(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare i64 @_aria_str_indexOf(i8*, i64, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_trim(i8*, i64)" + nl)
+    p = p.append("declare " + si64 + " @_aria_str_repeat(i8*, i64, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_replace(i8*, i64, i8*, i64, i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_toLower(i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_str_toUpper(i8*, i64)" + nl)
@@ -817,6 +818,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare i64 @_aria_str_endsWith(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare i64 @_aria_str_indexOf(i8*, i64, i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_trim(i8*, i64)" + nl)
+    h = h.append("declare " + si64 + " @_aria_str_repeat(i8*, i64, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_replace(i8*, i64, i8*, i64, i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_toLower(i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_str_toUpper(i8*, i64)" + nl)
@@ -1866,6 +1868,23 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         res := "%strim_res_" + i2s(idx)
         gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_trim(i8* " + s_p + ", i64 " + s_len + ")")
         gg = _extract_str_result(gg, res, inst.dest, idx, "strim")
+        return gg
+    }
+
+    if op == "StrRepeat" {
+        mut gg := g
+        s_ptr := "%srep_sp_" + i2s(idx)
+        s_len := "%srep_sl_" + i2s(idx)
+        gg = _lg_emit(gg, s_ptr + " = load i64, i64* " + _t(inst.arg1))
+        gg = _lg_emit(gg, s_len + " = load i64, i64* " + _t(inst.arg1 + 1))
+        s_p := "%srep_spi_" + i2s(idx)
+        gg = _lg_emit(gg, s_p + " = inttoptr i64 " + s_ptr + " to i8*")
+        n_v := "%srep_n_" + i2s(idx)
+        gg = _lg_emit(gg, n_v + " = load i64, i64* " + _t(inst.arg2))
+        srt := _str_ret_type()
+        res := "%srep_res_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call " + srt + " @_aria_str_repeat(i8* " + s_p + ", i64 " + s_len + ", i64 " + n_v + ")")
+        gg = _extract_str_result(gg, res, inst.dest, idx, "srep")
         return gg
     }
 

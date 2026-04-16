@@ -1110,6 +1110,21 @@ struct _aria_str _aria_str_substring(char *ptr, aria_int len, aria_int start, ar
     return s;
 }
 
+struct _aria_str _aria_str_repeat(char *ptr, aria_int len, aria_int n) {
+    if (n <= 0 || len <= 0) {
+        struct _aria_str s = {"", 0};
+        return s;
+    }
+    aria_int total = len * n;
+    char *result = _str_arena_alloc(total);
+    for (aria_int i = 0; i < n; i++) {
+        memcpy(result + i * len, ptr, (size_t)len);
+    }
+    result[total] = '\0';
+    struct _aria_str s = {result, total};
+    return s;
+}
+
 aria_int _aria_str_is_alphanum(char *str_ptr, aria_int str_len) {
     // Returns 1 iff every char is [A-Za-z0-9_]; empty str → 0 (matches
     // most callers expectation that "" isn't a valid identifier/name).

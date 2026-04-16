@@ -65,6 +65,7 @@ type IrOp =
     | OpStrToUpper
     | OpStrSplit
     | OpStrIsAlphanum
+    | OpStrRepeat
     | OpIntToStr
     | OpStrToInt
     | OpFloatToInt
@@ -148,6 +149,7 @@ fn ir_op_name(op: IrOp) -> str = match op {
     OpStrToUpper => "StrToUpper"
     OpStrSplit => "StrSplit"
     OpStrIsAlphanum => "StrIsAlphanum"
+    OpStrRepeat => "StrRepeat"
     OpIntToStr => "IntToStr"
     OpStrToInt => "StrToInt"
     OpFloatToInt => "FloatToInt"
