@@ -134,7 +134,8 @@ fn db_row_get(r: DbRow, col: i64) -> str {
 // Transaction methods below can execute real queries.
 // ============================================================
 
-type Error =
+// Named DbError to avoid clashing with fs.Error when both are imported.
+type DbError =
     | ConnectionFailed
     | QueryFailed
     | TxFailed
