@@ -319,7 +319,8 @@ fn _is_pipeline_method(method: str) -> bool {
     method == "collect_map" ||
     method == "flat_map" ||
     method == "zip" ||
-    method == "unique"
+    method == "unique" ||
+    method == "enumerate"
 }
 
 // Shared impl for `.first()` / `.last()`. Returns an Option wrapping the head
@@ -10841,6 +10842,50 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     if method == "collect" {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         return LT{l: ll, temp: obj}
+    }
+
+    // enumerate() — turn [T] into [(i64, T)] by pairing each element with
+    // its index. Each pair is a 2-slot heap alloc so `for (i, v) in arr.enumerate()`
+    // destructures via the existing tuple patterns.
+    if method == "enumerate" {
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        new_arr := _lnew_temp(ll)
+        ll = new_arr.l
+        cap_nt := _lnew_temp(ll)
+        ll = cap_nt.l
+        ll = _lemit(ll, new_inst(OpConst, cap_nt.temp, 8, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpArrayNew, new_arr.temp, cap_nt.temp, 0, "", 0))
+        len_nt := _lnew_temp(ll)
+        ll = len_nt.l
+        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
+        idx_nt := _lnew_temp(ll)
+        ll = idx_nt.l
+        ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
+        loop_lbl := _lnew_label(ll)
+        ll = loop_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+        cmp := _lnew_temp(ll)
+        ll = cmp.l
+        ll = _lemit(ll, new_inst(OpLt, cmp.temp, idx_nt.temp, len_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp.temp, end_lbl.temp, "", 0))
+        elem := _lnew_temp(ll)
+        ll = elem.l
+        ll = _lemit(ll, new_inst(OpArrayGet, elem.temp, obj, idx_nt.temp, "", 0))
+        pair := _lnew_temp(ll)
+        ll = pair.l
+        ll = _lemit(ll, new_inst(OpAlloc, pair.temp, 2, 0, "_EnumPair", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, pair.temp, idx_nt.temp, 0, "_idx", 0))
+        ll = _lemit(ll, new_inst(OpFieldSet, pair.temp, elem.temp, 1, "_val", 0))
+        ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, pair.temp, "", 0))
+        inc := _lnew_temp(ll)
+        ll = inc.l
+        ll = _lemit(ll, new_inst(OpConst, inc.temp, 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpAdd, idx_nt.temp, idx_nt.temp, inc.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: new_arr.temp}
     }
 
     // collect_map() — turn [(K, V)] into a {K: V} map.
