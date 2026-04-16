@@ -85,32 +85,29 @@ fn create(path: str) -> File!Error with [Fs] {
     File { path: path, mode: "w" }
 }
 
-fn file_read_all(f: File) -> str with [Fs] {
+// Method-style names (Type_method) so `file.read_all()` dispatches correctly.
+fn File_read_all(f: File) -> str with [Fs] {
     _ariaReadFile(f.path)
 }
 
-fn file_lines(f: File) -> [str] with [Fs] {
+fn File_lines(f: File) -> [str] with [Fs] {
     content := _ariaReadFile(f.path)
     content.split("\n")
 }
 
-fn file_write(f: File, content: str) -> bool!Error with [Fs] {
-    if f.mode == "r" { return err(Error.IoFailed("file opened for reading")) }
-    if f.mode == "a" {
-        _ariaAppendFile(f.path, content)
-    } else {
-        _ariaAppendFile(f.path, content)
-    }
+fn File_write(f: File, content: str) -> bool with [Fs] {
+    if f.mode == "r" { return false }
+    _ariaAppendFile(f.path, content)
     true
 }
 
-fn file_write_line(f: File, content: str) -> bool!Error with [Fs] {
-    if f.mode == "r" { return err(Error.IoFailed("file opened for reading")) }
+fn File_write_line(f: File, content: str) -> bool with [Fs] {
+    if f.mode == "r" { return false }
     _ariaAppendFile(f.path, content)
     _ariaAppendFile(f.path, "\n")
     true
 }
 
-fn file_close(f: File) -> bool {
+fn File_close(f: File) -> bool {
     true    // no real fd to close yet; placeholder for the Drop integration
 }

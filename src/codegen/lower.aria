@@ -274,6 +274,29 @@ fn _lenv_lookup(l: Lowerer, name: str) -> i64 {
     return -1
 }
 
+// Truncate the env back to a given size. Used by `with` blocks so the
+// resource binding doesn't persist into the outer scope's drop pass.
+fn _lenv_truncate(l: Lowerer, new_len: i64) -> Lowerer {
+    mut names: [str] = [""]
+    mut slots: [i64] = [0]
+    mut i := 1
+    while i < new_len && i < l.env_names.len() {
+        names = names.append(l.env_names[i])
+        slots = slots.append(l.env_slots[i])
+        i = i + 1
+    }
+    Lowerer{tokens: l.tokens, pos: l.pos, store: l.store, registry: l.registry, treg: l.treg, pool: l.pool,
+            table: l.table, file: l.file, module: l.module,
+            current_func: l.current_func,
+            temp_counter: l.temp_counter, label_counter: l.label_counter,
+            env_names: names, env_slots: slots,
+            loop_start: l.loop_start, loop_end: l.loop_end,
+            const_names: l.const_names, const_vals: l.const_vals,
+            const_str_names: l.const_str_names, const_str_vals: l.const_str_vals,
+            temp_types: l.temp_types, is_result: l.is_result,
+            fn_error_type: l.fn_error_type, defer_starts: l.defer_starts, defer_ends: l.defer_ends}
+}
+
 // Array/iterator pipeline ops whose implementations live only in the token-based
 // _lower_method_call. The AST-based dispatch at method call sites seeks to `(`
 // and delegates to _lower_method_call for these, so we don't have to duplicate
@@ -2825,6 +2848,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         recv_tid := _struct_type_id(ll.registry, recv_name)
                         if recv_tid > 0 { ll = _lset_type(ll, mnt_temp, recv_tid) }
                     }
+                    // Mark fallible returns as Result so catch / ? can unwrap.
+                    if msig.error_type > 0 { ll = _lset_is_result(ll, mnt_temp) }
                     return LT{l: ll, temp: mnt_temp}
                 }
             }
@@ -2971,6 +2996,8 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 }
                 ll = _lemit(ll, new_inst(OpCall, nt_temp, recv.temp, 1, qualified, 0))
                 if msig.return_type > 0 { ll = _lset_type(ll, nt_temp, msig.return_type) }
+                // Mark fallible returns as Result so catch / ? can unwrap them.
+                if msig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
                 return LT{l: ll, temp: nt_temp}
             }
             // Fall back to token walker for builtin methods (len, sqrt, etc.).
@@ -3664,7 +3691,13 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ok_val := _lnew_temp(ll)
         ll = ok_val.l
         ll = _lemit(ll, new_inst(OpFieldGet, ok_val.temp, operand.temp, 1, "_val", 0))
-        payload_t := _lget_type(ll, operand.temp)
+        // Unwrap the payload type: if operand was typed as a Result TypeInfo,
+        // use its Ok type (type_id); otherwise use the temp's type directly.
+        mut payload_t := _lget_type(ll, operand.temp)
+        if payload_t > 16 && payload_t < ll.store.types.len() {
+            pi := store_get(ll.store, payload_t)
+            if type_kind_name(pi.kind) == "Result" { payload_t = pi.type_id }
+        }
         if payload_t > 0 { ll = _lset_type(ll, ok_val.temp, payload_t) }
         ll = _lemit(ll, new_inst(OpJump, 0, ok_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, err_lbl.temp, 0, "", 0))
@@ -3737,11 +3770,11 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // b1=false: single-body catch (c1=handler)
         expr := _lower_expr_node(ll, node.c0)
         ll = expr.l
-        // If the expression is a known non-Result type, catch is a no-op — return value as-is.
-        // Fallible calls tag the temp with the payload type (e.g. 9 for f64!E) but
-        // also mark _lis_result; those still need unwrapping, so guard on that here.
+        // If the expression isn't marked as a Result, catch is a no-op — just
+        // pass the value through. `_lis_result` is authoritative: call-lowering
+        // sets it on fallible calls, everything else is plain.
         expr_type := _lget_type(ll, expr.temp)
-        if (expr_type == 12 || expr_type == 9 || expr_type == 8) && !_lis_result(ll, expr.temp) {
+        if !_lis_result(ll, expr.temp) && expr_type != 200 {
             return LT{l: ll, temp: expr.temp}
         }
         ll = _emit_result_null_guard(ll, expr.temp)
@@ -3764,10 +3797,12 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if _lis_result(ll, expr.temp) {
             ex_pl := _lget_type(ll, expr.temp)
             if ex_pl > 0 && ex_pl < 16 { catch_body_type = ex_pl }
-            // If the temp is typed as a full Result TypeInfo, unwrap to its ok type.
             if ex_pl > 16 && ex_pl < ll.store.types.len() {
                 pl_info := store_get(ll.store, ex_pl)
+                // Full Result TypeInfo: unwrap to Ok-payload type.
                 if type_kind_name(pl_info.kind) == "Result" { catch_body_type = pl_info.type_id }
+                // Already-unwrapped payload (Named/Array/etc): use as-is.
+                else { catch_body_type = ex_pl }
             }
         }
         ok_lbl := _lnew_label(ll)
@@ -4009,14 +4044,15 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
 
     if nk == "With" {
         // with name := resource_expr { body }
-        // 1. Lower resource expression
+        // Resource is OWNED by this scope: construct, bind, run body, drop, unbind.
         resource := _lower_expr_node(ll, node.c0)
         ll = resource.l
-        // 2. Bind resource to name
+        // Record env size BEFORE binding the resource — so we can truncate
+        // after the drop and prevent the outer scope from re-dropping.
+        env_len_before := ll.env_names.len()
         if node.s1.len() > 0 {
             ll = _lenv_add(ll, node.s1, resource.temp)
         }
-        // 3. Determine drop function for cleanup
         res_slot := resource.temp
         obj_type := _lget_type(ll, res_slot)
         sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
@@ -4027,16 +4063,16 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             drop_sig := reg_find_fn(ll.registry, drop_fn)
             if drop_sig.name != "" { has_drop = true }
         }
-        // 4. Lower body block, capturing result
         body := _lower_expr_node(ll, node.c1)
         ll = body.l
-        // 5. Emit drop call for resource cleanup
         if has_drop {
             dnt := _lnew_temp(ll)
             ll = dnt.l
             ll = _lemit(ll, new_inst(OpCall, dnt.temp, res_slot, 1, drop_fn, 0))
         }
-        // 6. Return body's value
+        // Truncate env back to pre-binding size so the outer scope's drop
+        // pass doesn't emit a second drop call for this resource.
+        ll = _lenv_truncate(ll, env_len_before)
         return LT{l: ll, temp: body.temp}
     }
 
@@ -14187,12 +14223,16 @@ fn _emit_drops_scoped(l: Lowerer, scope_start: i64) -> Lowerer {
         sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
         if sname != "" {
             drop_fn := sname + "_drop"
-            drop_sig := reg_find_fn(ll.registry, drop_fn)
-            if drop_sig.name != "" {
-                // Emit: TypeName_drop(binding)
-                nt := _lnew_temp(ll)
-                ll = nt.l
-                ll = _lemit(ll, new_inst(OpCall, nt.temp, slot, 1, drop_fn, 0))
+            // Don't call Type_drop from within Type_drop itself — infinite recursion
+            // on the `self` parameter would otherwise happen for every Drop impl.
+            if drop_fn != ll.current_func.name {
+                drop_sig := reg_find_fn(ll.registry, drop_fn)
+                if drop_sig.name != "" {
+                    // Emit: TypeName_drop(binding)
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpCall, nt.temp, slot, 1, drop_fn, 0))
+                }
             }
         }
         i = i - 1
