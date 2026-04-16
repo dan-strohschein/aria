@@ -2221,10 +2221,39 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = _lemit(ll, new_inst(OpLt, cond_nt.temp, idx_nt.temp, len_nt.temp, "", 0))
         ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
         if var_name != "" {
-            if is_tuple_for {
+            // Detect the `for (i, v) in arr` index+element shortcut: when the
+            // array's element type is NOT a tuple, bind first name to the loop
+            // index and second name to the element (matching the token-based
+            // for-loop behaviour). This handles `arr.enumerate()` and plain
+            // [T] arrays uniformly.
+            elem_type_probe := _array_elem_type(ll.store, iter_type)
+            mut elem_is_tuple := false
+            if elem_type_probe > 16 && elem_type_probe < ll.store.types.len() {
+                ek := type_kind_name(ll.store.types[elem_type_probe].kind)
+                if ek == "Tuple" { elem_is_tuple = true }
+            }
+            if is_tuple_for && elem_is_tuple == false {
+                // Index + element binding
+                ll = _lenv_add(ll, var_name, idx_nt.temp)
+                if var_name2.len() > 0 {
+                    if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
+                        elem_nt := _lnew_str_temp(ll)
+                        ll = elem_nt.l
+                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
+                        ll = _lset_type(ll, elem_nt.temp, 12)
+                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                    } else {
+                        elem_nt := _lnew_temp(ll)
+                        ll = elem_nt.l
+                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
+                        if elem_type_probe > 0 { ll = _lset_type(ll, elem_nt.temp, elem_type_probe) }
+                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                    }
+                }
+            } else if is_tuple_for {
                 // Tuple destructuring: (a, b, c, ...) in array — each name binds
                 // to a slot of the per-iteration tuple element.
-                elem_type := _array_elem_type(ll.store, iter_type)
+                elem_type := elem_type_probe
                 tup_nt := _lnew_temp(ll)
                 ll = tup_nt.l
                 ll = _lemit(ll, new_inst(OpArrayGet, tup_nt.temp, iter.temp, idx_nt.temp, "", 0))
@@ -10844,48 +10873,14 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: obj}
     }
 
-    // enumerate() — turn [T] into [(i64, T)] by pairing each element with
-    // its index. Each pair is a 2-slot heap alloc so `for (i, v) in arr.enumerate()`
-    // destructures via the existing tuple patterns.
+    // enumerate() — pass the input array through unchanged. The for-loop's
+    // `for (i, v) in arr` tuple shortcut already binds i=index + v=element
+    // and handles str elements correctly, so a proper pair array isn't needed.
+    // This avoids str's 2-slot representation getting flattened through a
+    // single pair slot (which would print ptr instead of the string).
     if method == "enumerate" {
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        new_arr := _lnew_temp(ll)
-        ll = new_arr.l
-        cap_nt := _lnew_temp(ll)
-        ll = cap_nt.l
-        ll = _lemit(ll, new_inst(OpConst, cap_nt.temp, 8, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpArrayNew, new_arr.temp, cap_nt.temp, 0, "", 0))
-        len_nt := _lnew_temp(ll)
-        ll = len_nt.l
-        ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, obj, 0, "", 0))
-        idx_nt := _lnew_temp(ll)
-        ll = idx_nt.l
-        ll = _lemit(ll, new_inst(OpConst, idx_nt.temp, 0, 0, "", 0))
-        loop_lbl := _lnew_label(ll)
-        ll = loop_lbl.l
-        end_lbl := _lnew_label(ll)
-        ll = end_lbl.l
-        ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
-        cmp := _lnew_temp(ll)
-        ll = cmp.l
-        ll = _lemit(ll, new_inst(OpLt, cmp.temp, idx_nt.temp, len_nt.temp, "", 0))
-        ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp.temp, end_lbl.temp, "", 0))
-        elem := _lnew_temp(ll)
-        ll = elem.l
-        ll = _lemit(ll, new_inst(OpArrayGet, elem.temp, obj, idx_nt.temp, "", 0))
-        pair := _lnew_temp(ll)
-        ll = pair.l
-        ll = _lemit(ll, new_inst(OpAlloc, pair.temp, 2, 0, "_EnumPair", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, pair.temp, idx_nt.temp, 0, "_idx", 0))
-        ll = _lemit(ll, new_inst(OpFieldSet, pair.temp, elem.temp, 1, "_val", 0))
-        ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, pair.temp, "", 0))
-        inc := _lnew_temp(ll)
-        ll = inc.l
-        ll = _lemit(ll, new_inst(OpConst, inc.temp, 1, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpAdd, idx_nt.temp, idx_nt.temp, inc.temp, "", 0))
-        ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
-        return LT{l: ll, temp: new_arr.temp}
+        return LT{l: ll, temp: obj}
     }
 
     // collect_map() — turn [(K, V)] into a {K: V} map.
@@ -13051,13 +13046,16 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
 // Cursor is positioned at `(` on entry; on return, cursor is past `)`.
 fn _lower_module_call_tokens(l: Lowerer, recv_name: str, method: str) -> LT {
     mut ll := l
-    // Try qualified name first, then bare.
-    qualified_name := recv_name + "_" + method
-    mut msig := reg_find_fn(ll.registry, qualified_name)
-    mut call_name := qualified_name
+    // Prefer the bare name (mod-scoped function) over the underscore-mangled
+    // one. For `db.connect(...)`, this picks `fn connect` in `mod db` over a
+    // helper function named `db_connect` in the same file. The mangled name is
+    // the fallback for legacy snake_case style (e.g. `std.os.getenv` etc.).
+    mut msig := reg_find_fn(ll.registry, method)
+    mut call_name := method
     if msig.name == "" {
-        msig = reg_find_fn(ll.registry, method)
-        call_name = method
+        qualified_name := recv_name + "_" + method
+        msig = reg_find_fn(ll.registry, qualified_name)
+        call_name = qualified_name
     }
     if _lk(ll) == "(" { ll = _ladv(ll) }
     ll = _lskip_nl(ll)
@@ -13123,7 +13121,15 @@ fn _lower_module_call_tokens(l: Lowerer, recv_name: str, method: str) -> LT {
     }
     ll = _lemit(ll, new_inst(OpCall, nt_temp, fa, reg_count, call_name, rt))
     if rt > 0 { ll = _lset_type(ll, nt_temp, rt) }
-    if msig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
+    // Mark the result as Result-typed if either the sig explicitly carries an
+    // error_type or the return_type itself is a Result TypeInfo (two ways the
+    // type registry may encode `Struct!Err`).
+    mut is_fallible := msig.error_type > 0
+    if !is_fallible && rt > 16 && rt < ll.store.types.len() {
+        rti := store_get(ll.store, rt)
+        if type_kind_name(rti.kind) == "Result" { is_fallible = true }
+    }
+    if is_fallible { ll = _lset_is_result(ll, nt_temp) }
     LT{l: ll, temp: nt_temp}
 }
 
