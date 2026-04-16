@@ -14880,8 +14880,10 @@ fn _lower_match_subject(l: Lowerer) -> LT {
                             ret_ti := store_get(ll.store, ic_ret_type)
                             if type_kind_name(ret_ti.kind) == "Result" {
                                 ic_is_result = true
-                                ic_ret_type = type_info_type_id(ret_ti)
-                                if ic_ret_type == 12 { ret_hint = "str" }
+                                // Preserve the full Result type id so pattern
+                                // binding (Ok/Err) can look up its ok/err types.
+                                ok_id := type_info_type_id(ret_ti)
+                                if ok_id == 12 { ret_hint = "str" }
                             }
                         }
                     }
@@ -16912,6 +16914,22 @@ fn _lower_match(l: Lowerer) -> LT {
             } else if has_bindings {
                 // Positional tuple destructuring (with nested pattern support)
                 parent := _variant_parent(ll.registry, pattern)
+                // For universal Ok/Err/Some patterns without registered parent,
+                // infer payload type from the subject's Result/Optional type.
+                mut inferred_ft := 0
+                if parent.name == "" && (pattern == "Ok" || pattern == "Err" || pattern == "Some") {
+                    subj_tid := _lget_type(ll, subj.temp)
+                    if subj_tid > 0 {
+                        si_info := store_get(ll.store, subj_tid)
+                        sk := type_kind_name(si_info.kind)
+                        if sk == "Result" {
+                            if pattern == "Ok" { inferred_ft = si_info.type_id }
+                            if pattern == "Err" { inferred_ft = si_info.type_id2 }
+                        } else if sk == "Optional" && pattern == "Some" {
+                            inferred_ft = si_info.type_id
+                        }
+                    }
+                }
                 mut bi := 0
                 while bi < bind_total {
                     mut bname := ""
@@ -16930,7 +16948,8 @@ fn _lower_match(l: Lowerer) -> LT {
                         }
                         si = si + 1
                     }
-                    ft := variant_field_type(parent, tag, bi)
+                    mut ft := variant_field_type(parent, tag, bi)
+                    if ft == 0 && bi == 0 && inferred_ft != 0 { ft = inferred_ft }
 
                     // Check if this is a nested variant pattern
                     mut nv := ""
@@ -18070,6 +18089,18 @@ fn _lower_mono_fn(l: Lowerer, spec: MonoSpec) -> Lowerer {
 
     // Start a new IR function with the specialized name
     ll = _lset_func(ll, new_ir_func(spec.specialized_name, actual_param_count, sig.return_type))
+
+    // Track error type for Ok wrapping and ? operator (specialized E)
+    mut mono_err_type := sig.error_type
+    if mono_err_type == 0 && sig.return_type > 0 {
+        mrt_info := store_get(ll.store, sig.return_type)
+        if type_kind_name(mrt_info.kind) == "Result" {
+            mono_err_type = mrt_info.type_id2
+        }
+    }
+    if mono_err_type > 0 {
+        ll = _lset_error_type(ll, mono_err_type)
+    }
 
     // Allocate temps for parameters
     pi = 1
