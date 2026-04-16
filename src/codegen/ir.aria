@@ -226,6 +226,11 @@ fn func_set_temp_types(f: IrFunc, types: [i64]) -> IrFunc =
            insts: f.insts, return_type: f.return_type,
            local_count: f.local_count, temp_types: types}
 
+fn func_set_return_type(f: IrFunc, rt: i64) -> IrFunc =
+    IrFunc{name: f.name, param_count: f.param_count,
+           insts: f.insts, return_type: rt,
+           local_count: f.local_count, temp_types: f.temp_types}
+
 fn func_inst_count(f: IrFunc) -> i64 = f.insts.len() - 1  // minus sentinel
 
 // --- IR Module ---

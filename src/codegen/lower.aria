@@ -1433,6 +1433,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         mut bval := 0
         if node.b1 { bval = 1 }
         ll = _lemit(ll, new_inst(OpConst, nt.temp, bval, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -10679,6 +10680,16 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = elem_nt.l
         ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, obj, idx_nt.temp, "", 0))
 
+        // Infer closure return type before the call
+        mut closure_ret := 0
+        tf_type := _lget_type(ll, transform.temp)
+        if tf_type > 16 && tf_type < ll.store.types.len() {
+            tfi := store_get(ll.store, tf_type)
+            if type_kind_name(tfi.kind) == "Function" && tfi.type_id > 0 {
+                closure_ret = tfi.type_id
+            }
+        }
+
         // Call transform closure
         fn_ptr := _lnew_temp(ll)
         ll = fn_ptr.l
@@ -10692,12 +10703,26 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, transform.temp, 1, "", 0))
         ll = _lemit(ll, new_inst(OpStore, arg_start.temp, env_ptr.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpStore, arg_elem.temp, elem_nt.temp, 0, "", 0))
-        result_nt := _lnew_temp(ll)
-        ll = result_nt.l
-        ll = _lemit(ll, new_inst(OpCallIndirect, result_nt.temp, fn_ptr.temp, 2, "", arg_start.temp))
 
-        // Always append the transformed value (not the original element)
-        ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, result_nt.temp, "", 0))
+        if closure_ret == 12 {
+            // str-returning closure: use struct-return CallIndirect + pack into 2-slot alloc
+            result_nt := _lnew_str_temp(ll)
+            ll = result_nt.l
+            ll = _lemit(ll, new_inst(OpCallIndirect, result_nt.temp, fn_ptr.temp, 2, "str", arg_start.temp))
+            ll = _lset_type(ll, result_nt.temp, 12)
+            // Pack str (ptr, len) into a 2-slot heap alloc for array element
+            pack := _lnew_temp(ll)
+            ll = pack.l
+            ll = _lemit(ll, new_inst(OpAlloc, pack.temp, 2, 0, "_StrPair", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, pack.temp, result_nt.temp, 0, "_ptr", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, pack.temp, result_nt.temp + 1, 1, "_len", 0))
+            ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, pack.temp, "", 0))
+        } else {
+            result_nt := _lnew_temp(ll)
+            ll = result_nt.l
+            ll = _lemit(ll, new_inst(OpCallIndirect, result_nt.temp, fn_ptr.temp, 2, "", arg_start.temp))
+            ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, new_arr.temp, result_nt.temp, "", 0))
+        }
 
         // i = i + 1
         one_nt := _lnew_temp(ll)
@@ -10707,18 +10732,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
 
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
-        // Infer result element type from the closure's TyFunction return type,
-        // falling back to the indirect-call result temp's type.
-        mut result_elem := _lget_type(ll, result_nt.temp)
-        if result_elem == 0 {
-            tf_type := _lget_type(ll, transform.temp)
-            if tf_type > 16 && tf_type < ll.store.types.len() {
-                tfi := store_get(ll.store, tf_type)
-                if type_kind_name(tfi.kind) == "Function" && tfi.type_id > 0 {
-                    result_elem = tfi.type_id
-                }
-            }
-        }
+        mut result_elem := closure_ret
         if result_elem == 0 { result_elem = 1 }
         marr := TypeInfo{kind: TyArray, name: "", type_id: result_elem, type_id2: 0, param_start: 0, param_count: 0}
         smar := store_add_canonical(ll.store, marr)
@@ -10996,27 +11010,32 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         elem := _lnew_temp(ll)
         ll = elem.l
         ll = _lemit(ll, new_inst(OpArrayGet, elem.temp, obj, idx_nt.temp, "", 0))
-        // Call reducer(acc, elem)
-        fn_ptr := _lnew_temp(ll)
-        ll = fn_ptr.l
-        ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, reducer.temp, 0, "", 0))
-        arg_s := _lnew_temp(ll)
-        ll = arg_s.l
-        arg_a := _lnew_temp(ll)
-        ll = arg_a.l
-        arg_e := _lnew_temp(ll)
-        ll = arg_e.l
-        env_p := _lnew_temp(ll)
-        ll = env_p.l
-        ll = _lemit(ll, new_inst(OpFieldGet, env_p.temp, reducer.temp, 1, "", 0))
-        ll = _lemit(ll, new_inst(OpStore, arg_s.temp, env_p.temp, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpStore, arg_a.temp, acc_nt.temp, 0, "", 0))
-        ll = _lemit(ll, new_inst(OpStore, arg_e.temp, elem.temp, 0, "", 0))
-        result_nt := _lnew_temp(ll)
-        ll = result_nt.l
-        ll = _lemit(ll, new_inst(OpCallIndirect, result_nt.temp, fn_ptr.temp, 3, "", arg_s.temp))
-        // acc = result
-        ll = _lemit(ll, new_inst(OpStore, acc_nt.temp, result_nt.temp, 0, "", 0))
+        if _is_float_type(init_type) {
+            // f64 fast path: inline float add instead of closure call
+            ll = _lset_type(ll, elem.temp, 9)
+            ll = _lemit(ll, new_inst(OpAdd, acc_nt.temp, acc_nt.temp, elem.temp, "f64", 0))
+        } else {
+            // General path: call reducer closure
+            fn_ptr := _lnew_temp(ll)
+            ll = fn_ptr.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, reducer.temp, 0, "", 0))
+            arg_s := _lnew_temp(ll)
+            ll = arg_s.l
+            arg_a := _lnew_temp(ll)
+            ll = arg_a.l
+            arg_e := _lnew_temp(ll)
+            ll = arg_e.l
+            env_p := _lnew_temp(ll)
+            ll = env_p.l
+            ll = _lemit(ll, new_inst(OpFieldGet, env_p.temp, reducer.temp, 1, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, arg_s.temp, env_p.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, arg_a.temp, acc_nt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, arg_e.temp, elem.temp, 0, "", 0))
+            result_nt := _lnew_temp(ll)
+            ll = result_nt.l
+            ll = _lemit(ll, new_inst(OpCallIndirect, result_nt.temp, fn_ptr.temp, 3, "", arg_s.temp))
+            ll = _lemit(ll, new_inst(OpStore, acc_nt.temp, result_nt.temp, 0, "", 0))
+        }
         inc := _lnew_temp(ll)
         ll = inc.l
         ll = _lemit(ll, new_inst(OpConst, inc.temp, 1, 0, "", 0))
@@ -11224,9 +11243,52 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
     if method == "sort_by" {
+        // Lower the key extractor closure
+        key_fn := _lower_expr(ll)
+        ll = key_fn.l
+        // Check for `descending: true` named arg
+        mut desc_val := 0
+        if _lk(ll) == "," {
+            ll = _ladv(ll)
+            ll = _lskip_nl(ll)
+            if _lk(ll) == "IDENT" && _lcur(ll).text == "descending" {
+                ll = _ladv(ll)  // skip "descending"
+                if _lk(ll) == ":" { ll = _ladv(ll) }  // skip ":"
+                if _lk(ll) == "true" { desc_val = 1 }
+                if _lk(ll) == "true" || _lk(ll) == "false" { ll = _ladv(ll) }
+            }
+        }
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
-        return LT{l: ll, temp: obj}
+        // Extract fn_ptr and env from closure struct
+        fn_ptr := _lnew_temp(ll)
+        ll = fn_ptr.l
+        ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, key_fn.temp, 0, "", 0))
+        env_ptr := _lnew_temp(ll)
+        ll = env_ptr.l
+        ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, key_fn.temp, 1, "", 0))
+        desc_nt := _lnew_temp(ll)
+        ll = desc_nt.l
+        ll = _lemit(ll, new_inst(OpConst, desc_nt.temp, desc_val, 0, "", 0))
+        // Pack args: arr, fn_ptr, env_ptr, descending in consecutive temps
+        arg0 := _lnew_temp(ll)
+        ll = arg0.l
+        ll = _lemit(ll, new_inst(OpStore, arg0.temp, obj, 0, "", 0))
+        arg1 := _lnew_temp(ll)
+        ll = arg1.l
+        ll = _lemit(ll, new_inst(OpStore, arg1.temp, fn_ptr.temp, 0, "", 0))
+        arg2 := _lnew_temp(ll)
+        ll = arg2.l
+        ll = _lemit(ll, new_inst(OpStore, arg2.temp, env_ptr.temp, 0, "", 0))
+        arg3 := _lnew_temp(ll)
+        ll = arg3.l
+        ll = _lemit(ll, new_inst(OpStore, arg3.temp, desc_nt.temp, 0, "", 0))
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, arg0.temp, 4, "_aria_array_sort_by_key", 0))
+        obj_type := _lget_type(ll, obj)
+        if obj_type > 0 { ll = _lset_type(ll, nt.temp, obj_type) }
+        return LT{l: ll, temp: nt.temp}
     }
 
     if method == "append" {
@@ -11262,6 +11324,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         } else {
             ll = _lemit(ll, new_inst(OpArrayContains, nt.temp, obj, arg.temp, "", 0))
         }
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -14326,6 +14389,11 @@ fn _lower_closure(l: Lowerer) -> LT {
             if body_type > 0 && ret_type == 1 { ret_type = body_type }
             ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
         }
+    }
+
+    // Update function return type if body inference changed it
+    if ret_type != 1 || ret_type > 0 {
+        ll = _lset_func(ll, func_set_return_type(ll.current_func, ret_type))
     }
 
     // Finish closure function

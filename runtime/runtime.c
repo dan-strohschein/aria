@@ -1494,6 +1494,54 @@ aria_int _aria_array_append(aria_int arr_ptr, aria_int value) {
     return (aria_int)new_header;
 }
 
+// Sort by key: calls key_fn(env, element) for comparisons.
+// key_fn returns i64 (or f64 bit pattern for float keys).
+// descending: 0 = ascending, 1 = descending
+aria_int _aria_array_sort_by_key(aria_int arr_ptr, aria_int fn_ptr, aria_int env_ptr, aria_int descending) {
+    if (arr_ptr == 0) return 0;
+    typedef aria_int (*key_fn_t)(aria_int, aria_int);
+    key_fn_t key_fn = (key_fn_t)fn_ptr;
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+    // Extract keys
+    aria_int *keys = (aria_int *)malloc((size_t)length * 8);
+    for (aria_int i = 0; i < length; i++) {
+        keys[i] = key_fn(env_ptr, data[i]);
+    }
+    // Insertion sort on keys, moving data in parallel
+    for (aria_int i = 1; i < length; i++) {
+        aria_int kkey = keys[i];
+        aria_int kval = data[i];
+        aria_int j = i - 1;
+        if (descending) {
+            // Compare as f64 if the key looks like a float bit pattern,
+            // otherwise as signed i64. Use f64 for sort_by(fn => .score).
+            while (j >= 0) {
+                double da = *(double *)&keys[j];
+                double db = *(double *)&kkey;
+                if (da >= db) break;
+                keys[j + 1] = keys[j];
+                data[j + 1] = data[j];
+                j--;
+            }
+        } else {
+            while (j >= 0) {
+                double da = *(double *)&keys[j];
+                double db = *(double *)&kkey;
+                if (da <= db) break;
+                keys[j + 1] = keys[j];
+                data[j + 1] = data[j];
+                j--;
+            }
+        }
+        keys[j + 1] = kkey;
+        data[j + 1] = kval;
+    }
+    free(keys);
+    return arr_ptr;
+}
+
 aria_int _aria_array_sort(aria_int arr_ptr) {
     if (arr_ptr == 0) return 0;
     aria_int *header = (aria_int *)arr_ptr;
