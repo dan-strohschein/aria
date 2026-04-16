@@ -3188,19 +3188,55 @@ fn _parse_return(p: Parser) -> PR {
 }
 
 fn _parse_with(p: Parser) -> PR {
+    // Parse one or more `name := resource_expr` pairs separated by commas,
+    // then a block. Desugars multi-resource syntax into nested With nodes so
+    // lowering can keep its single-resource implementation.
     span := _pspan(p)
     mut pp := _adv(p)
-    name := _cur(pp).text
-    pp = _adv(pp)
-    pp = _expect(pp, ":=")
-    resource := _parse_expr(pp, 0)
-    res_idx := _pidx(resource.p)
-    pp = _padd(resource.p, resource.e)
+    mut names: [str] = [""]
+    mut res_indices: [i64] = [0]
+    mut count := 0
+    mut parsing := true
+    while parsing {
+        name := _cur(pp).text
+        pp = _adv(pp)
+        pp = _expect(pp, ":=")
+        resource := _parse_expr(pp, 0)
+        res_idx := _pidx(resource.p)
+        pp = _padd(resource.p, resource.e)
+        names = names.append(name)
+        res_indices = res_indices.append(res_idx)
+        count = count + 1
+        // Skip whitespace before `,` or `{`
+        pp = _skip_nl(pp)
+        if _ck(pp) == "," {
+            pp = _adv(pp)
+            pp = _skip_nl(pp)
+        } else {
+            parsing = false
+        }
+    }
     body := _parse_block(pp)
     body_idx := _pidx(body.p)
     pp = _padd(body.p, body.e)
-    PR{p: pp, e: Expr{kind: EkWith, s1: name, s2: "", b1: false, b2: false,
-                       c0: res_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
+    // Build nested With expressions from innermost to outermost so the first
+    // declared resource is the outermost scope (LIFO drop order).
+    mut inner_idx := body_idx
+    mut i := count
+    while i > 0 {
+        w_expr := Expr{kind: EkWith, s1: names[i], s2: "", b1: false, b2: false,
+                        c0: res_indices[i], c1: inner_idx, c2: 0, list_start: 0, list_count: 0, span: span}
+        if i > 1 {
+            pp = _padd(pp, w_expr)
+            inner_idx = _pidx(pp) - 1
+        } else {
+            return PR{p: pp, e: w_expr}
+        }
+        i = i - 1
+    }
+    // Unreachable — we always return in the i==1 case above
+    PR{p: pp, e: Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                       c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
 fn _parse_assert(p: Parser) -> PR {

@@ -6664,9 +6664,41 @@ fn _lower_comparison(l: Lowerer) -> LT {
 // --- Lower expression ---
 
 fn _lower_expr(l: Lowerer) -> LT {
-    result := _lower_primary(l)
-    mut ll := result.l
-    mut left := result.temp
+    // Module-qualified call short-circuit: `IDENT . IDENT ( args )` where the
+    // first IDENT isn't in scope but the resolved function exists. Run
+    // _lower_module_call_tokens to produce the call result, then fall through
+    // to the postfix loop so trailing operators (catch, ?, |>) still apply.
+    mut ll := l
+    mut left := 0
+    mut did_module_call := false
+    if _lk(l) == "IDENT" {
+        recv_name := _lcur(l).text
+        if _lenv_lookup(l, recv_name) < 0 {
+            pk1 := l.pos + 1
+            pk2 := l.pos + 2
+            pk3 := l.pos + 3
+            if pk3 < l.tokens.len() &&
+               l.tokens[pk1].name == "." &&
+               l.tokens[pk2].name == "IDENT" &&
+               l.tokens[pk3].name == "(" {
+                method := l.tokens[pk2].text
+                qualified := recv_name + "_" + method
+                if reg_find_fn(l.registry, qualified).name != "" ||
+                   reg_find_fn(l.registry, method).name != "" {
+                    ll0 := _lset_pos(l, pk3)
+                    mc := _lower_module_call_tokens(ll0, recv_name, method)
+                    ll = mc.l
+                    left = mc.temp
+                    did_module_call = true
+                }
+            }
+        }
+    }
+    if did_module_call == false {
+        result := _lower_primary(l)
+        ll = result.l
+        left = result.temp
+    }
 
     // Handle binary operators and postfix
     mut running := true
@@ -7307,7 +7339,26 @@ fn _lower_expr(l: Lowerer) -> LT {
             ll = cr.l
             left = cr.temp
         } else if k == "catch" {
-            // catch |e| { body } — unwrap Ok or run recovery with error bound to e
+            // catch |e| { body } — unwrap Ok or run recovery with error bound to e.
+            // If the expression isn't a Result, consume the catch block tokens
+            // and pass the value through (catch is a no-op on non-fallible values).
+            if !_lis_result(ll, left) && _lget_type(ll, left) != 200 {
+                mut scan := ll.pos
+                mut depth := 0
+                mut seen_brace := false
+                while scan < ll.tokens.len() {
+                    sname := ll.tokens[scan].name
+                    if sname == "\{" { depth = depth + 1; seen_brace = true }
+                    else if sname == "\}" {
+                        depth = depth - 1
+                        if seen_brace && depth == 0 { scan = scan + 1; break }
+                    }
+                    scan = scan + 1
+                }
+                ll = _lset_pos(ll, scan)
+                running = false
+                // left is unchanged — pass the value through
+            } else {
             ll = _ladv(ll)  // skip catch
             // Parse error binding: |e| or |_|
             mut err_name := "_"
@@ -7550,6 +7601,7 @@ fn _lower_expr(l: Lowerer) -> LT {
             // End
             ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
             left = final_nt.temp
+            }   // close else branch added for non-Result catch no-op
         } else if k == "IDENT" && _lcur(ll).text == "or" {
             // or default_value — sugar for catch { _ => yield value }
             ll = _ladv(ll)  // skip or
@@ -12949,8 +13001,113 @@ fn _lower_struct_lit(l: Lowerer, name: str) -> LT {
 // --- Lower atom: primary + postfix (.field, .method(), [index]) ---
 // Used as operand parser for binary ops and conditions.
 
+// Lower a `recv.method(args)` call where recv is a module-like name (not an
+// in-scope binding) and `recv_method` or bare `method` is a registered fn.
+// Cursor is positioned at `(` on entry; on return, cursor is past `)`.
+fn _lower_module_call_tokens(l: Lowerer, recv_name: str, method: str) -> LT {
+    mut ll := l
+    // Try qualified name first, then bare.
+    qualified_name := recv_name + "_" + method
+    mut msig := reg_find_fn(ll.registry, qualified_name)
+    mut call_name := qualified_name
+    if msig.name == "" {
+        msig = reg_find_fn(ll.registry, method)
+        call_name = method
+    }
+    if _lk(ll) == "(" { ll = _ladv(ll) }
+    ll = _lskip_nl(ll)
+    // Lower args, collecting (temp, type) pairs.
+    mut arg_temps := [0]
+    mut arg_types := [0]
+    while _lk(ll) != ")" && _lk(ll) != "EOF" {
+        ll = _lskip_nl(ll)
+        ar := _lower_expr(ll)
+        ll = ar.l
+        arg_temps = arg_temps.append(ar.temp)
+        arg_types = arg_types.append(_lget_type(ll, ar.temp))
+        ll = _lskip_nl(ll)
+        if _lk(ll) == "," { ll = _ladv(ll) }
+        ll = _lskip_nl(ll)
+    }
+    if _lk(ll) == ")" { ll = _ladv(ll) }
+    // Count register slots (str args take 2).
+    mut reg_count := 0
+    mut ci := 1
+    while ci < arg_temps.len() {
+        if arg_types[ci] == 12 { reg_count = reg_count + 2 } else { reg_count = reg_count + 1 }
+        ci = ci + 1
+    }
+    // Pack args into consecutive temps.
+    mut fa := 0
+    if arg_temps.len() > 1 {
+        first_nt := _lnew_temp(ll)
+        ll = first_nt.l
+        mut ri := 1
+        while ri < reg_count {
+            extra := _lnew_temp(ll)
+            ll = extra.l
+            ri = ri + 1
+        }
+        mut mslot := 0
+        ci = 1
+        while ci < arg_temps.len() {
+            if arg_types[ci] == 12 {
+                ll = _lemit(ll, new_inst(OpStore, first_nt.temp + mslot, arg_temps[ci], 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, first_nt.temp + mslot + 1, arg_temps[ci] + 1, 0, "", 0))
+                mslot = mslot + 2
+            } else {
+                ll = _lemit(ll, new_inst(OpStore, first_nt.temp + mslot, arg_temps[ci], 0, "", 0))
+                mslot = mslot + 1
+            }
+            ci = ci + 1
+        }
+        fa = first_nt.temp
+    }
+    // Determine return type.
+    mut rt := 0
+    if msig.name != "" { rt = msig.return_type }
+    mut nt_temp := 0
+    if rt == 12 {
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        nt_temp = nt.temp
+    } else {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        nt_temp = nt.temp
+    }
+    ll = _lemit(ll, new_inst(OpCall, nt_temp, fa, reg_count, call_name, rt))
+    if rt > 0 { ll = _lset_type(ll, nt_temp, rt) }
+    if msig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
+    LT{l: ll, temp: nt_temp}
+}
+
 fn _lower_atom(l: Lowerer) -> LT {
     lb := "\{"
+    // Module-qualified call short-circuit: `IDENT . IDENT ( args )` where the
+    // first IDENT isn't an in-scope binding but the second names a registered
+    // function. Handle it directly so we don't emit the OpConst-0 fallback for
+    // the module name and corrupt the arg packing with a stale temp.
+    if _lk(l) == "IDENT" {
+        recv_name := _lcur(l).text
+        if _lenv_lookup(l, recv_name) < 0 {
+            pk1 := l.pos + 1
+            pk2 := l.pos + 2
+            pk3 := l.pos + 3
+            if pk3 < l.tokens.len() &&
+               l.tokens[pk1].name == "." &&
+               l.tokens[pk2].name == "IDENT" &&
+               l.tokens[pk3].name == "(" {
+                method := l.tokens[pk2].text
+                qualified := recv_name + "_" + method
+                if reg_find_fn(l.registry, qualified).name != "" ||
+                   reg_find_fn(l.registry, method).name != "" {
+                    ll0 := _lset_pos(l, pk3)
+                    return _lower_module_call_tokens(ll0, recv_name, method)
+                }
+            }
+        }
+    }
     result := _lower_primary(l)
     mut ll := result.l
     mut left := result.temp
