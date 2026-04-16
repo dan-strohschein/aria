@@ -3321,17 +3321,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     idx_node := pool_get(ll.pool, node.list_start + svi)
                     fval := _lower_expr_node(ll, idx_node.c0)
                     ll = fval.l
-                    // Find the slot for this field name in the variant
-                    vfc := variant_data_count(sv_parent, sv_vtag)
-                    sv_foff := sv_parent.variant_field_offsets[sv_vtag]
-                    mut svi2 := 0
-                    mut found_slot := sv_slot
-                    while svi2 < vfc {
-                        idx2 := sv_foff + svi2
-                        if idx2 < sv_parent.variant_field_names.len() && sv_parent.variant_field_names[idx2] == sv_fname {
-                            found_slot = svi2 + 1
-                        }
-                        svi2 = svi2 + 1
+                    // Assume AST args are in declaration order. Compute slot by
+                    // summing widths of preceding fields (str takes 2 slots).
+                    mut found_slot := 1
+                    mut wsi := 0
+                    while wsi < svi {
+                        wft := variant_field_type(sv_parent, sv_vtag, wsi)
+                        if wft == 12 { found_slot = found_slot + 2 } else { found_slot = found_slot + 1 }
+                        wsi = wsi + 1
                     }
                     sv_ftype := variant_field_type(sv_parent, sv_vtag, svi)
                     if sv_ftype == 12 {
@@ -3778,18 +3775,27 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         end_lbl := _lnew_label(ll)
         ll = end_lbl.l
         ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_err.temp, ok_lbl.temp, "", 0))
-        // Error path
-        err_val := _lnew_temp(ll)
-        ll = err_val.l
-        ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
-        // Propagate the err payload's concrete type so downstream consumers
-        // (pattern match, interpolation) can dispatch correctly.
+        // Determine the concrete error-type id upfront so we can handle str
+        // errors (2-slot ptr+len) vs scalar/struct errors (single slot).
+        mut err_type_id := 0
         if expr_type > 16 && expr_type < ll.store.types.len() {
             et_info := store_get(ll.store, expr_type)
             if type_kind_name(et_info.kind) == "Result" && et_info.type_id2 > 0 {
-                ll = _lset_type(ll, err_val.temp, et_info.type_id2)
+                err_type_id = et_info.type_id2
             }
         }
+        // Error path
+        mut err_val := _lnew_temp(ll)
+        if err_type_id == 12 {
+            err_val = _lnew_str_temp(ll)
+        }
+        ll = err_val.l
+        ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, expr.temp, 1, "_val", 0))
+        if err_type_id == 12 {
+            // str error: also read the length from slot 2
+            ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp + 1, expr.temp, 2, "_val_len", 0))
+        }
+        if err_type_id > 0 { ll = _lset_type(ll, err_val.temp, err_type_id) }
         if node.b1 {
             // Multi-arm catch: dispatch on error variant tags
             // Extract the error-variant tag. For an error type whose variants
@@ -4848,7 +4854,7 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaTimeNow" { return "_aria_get_time_ns" }
     if name == "_ariaSleep" { return "_aria_sleep" }
     if name == "_ariaSha256Hex" { return "_aria_sha256_hex" }
-    if name == "_ariaArgs" { return "_aria_args" }
+    if name == "_ariaArgs" { return "_aria_args_get" }
     if name == "_ariaListDir" { return "_aria_list_dir" }
     if name == "_ariaIsDir" { return "_aria_is_dir" }
     if name == "_ariaGetenv" { return "_aria_getenv" }
