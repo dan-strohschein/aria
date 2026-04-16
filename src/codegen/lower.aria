@@ -1337,8 +1337,29 @@ fn _lower_block_node_result(l: Lowerer, node: Expr) -> LT {
                 r := _lower_expr_node(ll, child.c0)
                 ll = r.l
                 ll = _emit_defers(ll)
-                ret_type := _lget_type(ll, r.temp)
-                ll = _lemit(ll, new_inst(OpRet, 0, r.temp, 0, "", ret_type))
+                if ll.fn_error_type > 0 && _lget_type(ll, r.temp) != 200 && !_lis_result(ll, r.temp) {
+                    r_rt := _lget_type(ll, r.temp)
+                    mut ok_slots := 2
+                    if r_rt == 12 { ok_slots = 3 }
+                    ok_nt := _lnew_temp(ll)
+                    ll = ok_nt.l
+                    ll = _lemit(ll, new_inst(OpAlloc, ok_nt.temp, ok_slots, 0, "_Result", 0))
+                    tag_nt := _lnew_temp(ll)
+                    ll = tag_nt.l
+                    ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, 0, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, tag_nt.temp, 0, "_tag", 0))
+                    if r_rt == 12 {
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, r.temp, 1, "_val", 0))
+                        r_len := r.temp + 1
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, r_len, 2, "_val_len", 0))
+                    } else {
+                        ll = _lemit(ll, new_inst(OpFieldSet, ok_nt.temp, r.temp, 1, "_val", 0))
+                    }
+                    ll = _lemit(ll, new_inst(OpRet, 0, ok_nt.temp, 0, "", 0))
+                } else {
+                    ret_type := _lget_type(ll, r.temp)
+                    ll = _lemit(ll, new_inst(OpRet, 0, r.temp, 0, "", ret_type))
+                }
             } else {
                 ll = _emit_defers(ll)
                 ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
@@ -2176,23 +2197,47 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         ll = _lemit(ll, new_inst(OpBranchFalse, 0, cond_nt.temp, end_lbl.temp, "", 0))
         if var_name != "" {
             if is_tuple_for {
-                // Tuple destructuring: (i, x) — first name = index, second = element
-                ll = _lenv_add(ll, var_name, idx_nt.temp)
-                if var_name2.len() > 0 {
-                    if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
-                        elem_nt := _lnew_str_temp(ll)
-                        ll = elem_nt.l
-                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 12))
-                        ll = _lset_type(ll, elem_nt.temp, 12)
-                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
-                    } else {
-                        elem_nt := _lnew_temp(ll)
-                        ll = elem_nt.l
-                        ll = _lemit(ll, new_inst(OpArrayGet, elem_nt.temp, iter.temp, idx_nt.temp, "", 0))
-                        elem_type := _array_elem_type(ll.store, iter_type)
-                        if elem_type > 0 { ll = _lset_type(ll, elem_nt.temp, elem_type) }
-                        ll = _lenv_add(ll, var_name2, elem_nt.temp)
+                // Tuple destructuring: (a, b, c, ...) in array — each name binds
+                // to a slot of the per-iteration tuple element.
+                elem_type := _array_elem_type(ll.store, iter_type)
+                tup_nt := _lnew_temp(ll)
+                ll = tup_nt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, tup_nt.temp, iter.temp, idx_nt.temp, "", 0))
+                if elem_type > 0 { ll = _lset_type(ll, tup_nt.temp, elem_type) }
+                // Build name list: var_name (first) + var_name2 (comma-separated rest)
+                mut names := [var_name]
+                mut nsrc := var_name2
+                while nsrc.len() > 0 {
+                    mut cp := nsrc.len()
+                    mut ci := 0
+                    while ci < nsrc.len() {
+                        if nsrc.charAt(ci) == "," { cp = ci; ci = nsrc.len() } else { ci = ci + 1 }
                     }
+                    nm := nsrc.substring(0, cp)
+                    if nm.len() > 0 { names = names.append(nm) }
+                    if cp < nsrc.len() { nsrc = nsrc.substring(cp + 1, nsrc.len()) } else { nsrc = "" }
+                }
+                // Bind each name from the tuple's field slots (str fields get 2 slots)
+                mut ni := 0
+                while ni < names.len() {
+                    nm := names[ni]
+                    ft := tuple_elem_type(ll.store, elem_type, ni)
+                    slot := _tuple_slot(ll.store, elem_type, ni)
+                    if ft == 12 {
+                        bnt := _lnew_str_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, tup_nt.temp, slot, nm, 0))
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp + 1, tup_nt.temp, slot + 1, nm, 0))
+                        ll = _lset_type(ll, bnt.temp, 12)
+                        ll = _lenv_add(ll, nm, bnt.temp)
+                    } else {
+                        bnt := _lnew_temp(ll)
+                        ll = bnt.l
+                        ll = _lemit(ll, new_inst(OpFieldGet, bnt.temp, tup_nt.temp, slot, nm, 0))
+                        if ft > 0 { ll = _lset_type(ll, bnt.temp, ft) }
+                        ll = _lenv_add(ll, nm, bnt.temp)
+                    }
+                    ni = ni + 1
                 }
             } else if iter_type == 13 || _is_str_array_type(ll.store, iter_type) {
                 elem_nt := _lnew_str_temp(ll)

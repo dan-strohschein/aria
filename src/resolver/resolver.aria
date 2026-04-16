@@ -1930,9 +1930,21 @@ fn _resolve_expr_node(r: Resolver, idx: i64) -> Resolver {
         parent_scope := r.current_scope
         mut rr := _push_scope(r, ScBlock, "for")
         rr = _add_sym_warn_shadow(rr, node.s1, SkVariable, node.span, false)
-        // Tuple destructuring: for (i, x) in arr — register second variable too
+        // Tuple destructuring: s2 is comma-separated list of remaining names
         if node.b1 && node.s2.len() > 0 {
-            rr = _add_sym_warn_shadow(rr, node.s2, SkVariable, node.span, false)
+            mut nsrc := node.s2
+            while nsrc.len() > 0 {
+                mut cp := nsrc.len()
+                mut ci := 0
+                while ci < nsrc.len() {
+                    if nsrc.charAt(ci) == "," { cp = ci; ci = nsrc.len() } else { ci = ci + 1 }
+                }
+                nm := nsrc.substring(0, cp)
+                if nm.len() > 0 {
+                    rr = _add_sym_warn_shadow(rr, nm, SkVariable, node.span, false)
+                }
+                if cp < nsrc.len() { nsrc = nsrc.substring(cp + 1, nsrc.len()) } else { nsrc = "" }
+            }
         }
         rr = _resolve_expr_node(rr, node.c0)
         rr = _resolve_expr_node(rr, node.c1)

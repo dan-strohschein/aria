@@ -3037,21 +3037,26 @@ fn _parse_struct_lit(p: Parser, name: str, span: Span) -> PR {
 fn _parse_for(p: Parser) -> PR {
     span := _pspan(p)
     mut pp := _adv(p)
-    // Check for tuple destructuring: for (i, x) in ...
+    // Check for tuple destructuring: for (a, b, c, ...) in ...
+    // s1 = first name, s2 = comma-separated remaining names ("b,c,..."), b1 = is_tuple
     mut pat := ""
     mut pat2 := ""
     mut is_tuple := false
     if _ck(pp) == "(" {
         pp = _adv(pp)  // skip (
-        if _ck(pp) == "IDENT" {
-            pat = _cur(pp).text
-            pp = _adv(pp)
-        }
-        if _ck(pp) == "," { pp = _adv(pp) }
-        if _ck(pp) == "IDENT" {
-            pat2 = _cur(pp).text
-            pp = _adv(pp)
-            is_tuple = true
+        mut first := true
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            if _ck(pp) == "IDENT" {
+                nm := _cur(pp).text
+                pp = _adv(pp)
+                if first { pat = nm; first = false }
+                else {
+                    if pat2.len() > 0 { pat2 = pat2 + "," }
+                    pat2 = pat2 + nm
+                    is_tuple = true
+                }
+            }
+            if _ck(pp) == "," { pp = _adv(pp) }
         }
         if _ck(pp) == ")" { pp = _adv(pp) }
     } else {
@@ -3065,7 +3070,6 @@ fn _parse_for(p: Parser) -> PR {
     body := _parse_block(pp)
     body_idx := _pidx(body.p)
     pp = _padd(body.p, body.e)
-    // Store tuple destructuring: s1=first name, s2=second name, b1=is_tuple
     PR{p: pp, e: Expr{kind: EkFor, s1: pat, s2: pat2, b1: is_tuple, b2: false,
                        c0: iter_idx, c1: body_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
@@ -3102,9 +3106,20 @@ fn _parse_for_body(p: Parser, label: str) -> PR {
     mut is_tuple := false
     if _ck(pp) == "(" {
         pp = _adv(pp)
-        if _ck(pp) == "IDENT" { pat = _cur(pp).text; pp = _adv(pp) }
-        if _ck(pp) == "," { pp = _adv(pp) }
-        if _ck(pp) == "IDENT" { pat2 = _cur(pp).text; pp = _adv(pp); is_tuple = true }
+        mut first := true
+        while _ck(pp) != ")" && _ck(pp) != "EOF" {
+            if _ck(pp) == "IDENT" {
+                nm := _cur(pp).text
+                pp = _adv(pp)
+                if first { pat = nm; first = false }
+                else {
+                    if pat2.len() > 0 { pat2 = pat2 + "," }
+                    pat2 = pat2 + nm
+                    is_tuple = true
+                }
+            }
+            if _ck(pp) == "," { pp = _adv(pp) }
+        }
         if _ck(pp) == ")" { pp = _adv(pp) }
     } else {
         pat = _cur(pp).text
