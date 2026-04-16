@@ -151,15 +151,14 @@ struct Transaction {
     active: bool
 }
 
-// Connect to a database. Returns a Connection with handle==0 on failure
-// (check via conn.handle != 0 before using). Fallibility wrapped in Result
-// is aspirational — for now, use the handle check pattern.
-fn connect(url: str) -> Connection with [Io] {
+// Connect to a database. Returns Connection!DbError — use catch to handle
+// the unavailable case.
+fn connect(url: str) -> Connection!DbError with [Io] {
     h := _ariaPgConnect(url)
-    if h == 0 { return Connection { handle: 0 } }
+    if h == 0 { return err(DbError.Unavailable) }
     if _ariaPgStatus(h) != 1 {
         _ariaPgClose(h)
-        return Connection { handle: 0 }
+        return err(DbError.ConnectionFailed)
     }
     Connection { handle: h }
 }

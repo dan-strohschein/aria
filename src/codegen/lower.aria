@@ -2721,14 +2721,14 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             recv_name := recv_node.s1
             recv_slot := _lenv_lookup(ll, recv_name)
             if recv_slot < 0 {
-                // Receiver not in scope — check if method is a registered function
-                // Try qualified name first: Type.method → Type_method
-                mut msig := reg_find_fn(ll.registry, recv_name + "_" + method)
-                mut mcall_name := recv_name + "_" + method
+                // Receiver not in scope — prefer the bare method name (mod-scoped
+                // fn) over the underscore-mangled legacy name. Matches
+                // _lower_module_call_tokens so AST + token paths stay consistent.
+                mut msig := reg_find_fn(ll.registry, method)
+                mut mcall_name := method
                 if msig.name == "" {
-                    // Try bare method name (module-qualified call)
-                    msig = reg_find_fn(ll.registry, method)
-                    mcall_name = method
+                    msig = reg_find_fn(ll.registry, recv_name + "_" + method)
+                    mcall_name = recv_name + "_" + method
                 }
                 if msig.name != "" {
                     // Module-qualified call: lower args, then emit direct function call
@@ -3067,6 +3067,24 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 ll = fa_nt.l
                 ll = _lemit(ll, new_inst(OpConst, fa_nt.temp, fa_vtag, 0, "", 0))
                 return LT{l: ll, temp: fa_nt.temp}
+            }
+        }
+        // Module-qualified const short-circuit: `module.CONST` where module
+        // isn't a real binding. The pre-scan registers lib-file consts by bare
+        // name, so just look up the field name directly. Prevents the default
+        // path from treating the module as an unresolved OpConst-0 pointer.
+        recv_node := pool_get(ll.pool, node.c0)
+        if expr_kind_name(recv_node.kind) == "Ident" {
+            ident_name := recv_node.s1
+            if _lenv_lookup(ll, ident_name) < 0 && mod_find_global(ll.module, ident_name) == 0 {
+                cv := _lconst_lookup(ll, field)
+                if cv != 0 - 9999999 {
+                    nt := _lnew_temp(ll)
+                    ll = nt.l
+                    ll = _lemit(ll, new_inst(OpConst, nt.temp, cv, 0, "", 0))
+                    ll = _lset_type(ll, nt.temp, 1)
+                    return LT{l: ll, temp: nt.temp}
+                }
             }
         }
         recv := _lower_expr_node(ll, node.c0)
@@ -6694,10 +6712,11 @@ fn _lower_comparison(l: Lowerer) -> LT {
 // --- Lower expression ---
 
 fn _lower_expr(l: Lowerer) -> LT {
-    // Module-qualified call short-circuit: `IDENT . IDENT ( args )` where the
-    // first IDENT isn't in scope but the resolved function exists. Run
-    // _lower_module_call_tokens to produce the call result, then fall through
-    // to the postfix loop so trailing operators (catch, ?, |>) still apply.
+    // Module-qualified access short-circuit: `IDENT . IDENT [(args)]` where the
+    // first IDENT isn't in scope. Two cases:
+    //   - with parens: dispatch through _lower_module_call_tokens
+    //   - without parens: treat as a const reference (bare name lookup). If no
+    //     const found, fall through to the default primary path.
     mut ll := l
     mut left := 0
     mut did_module_call := false
@@ -6707,19 +6726,34 @@ fn _lower_expr(l: Lowerer) -> LT {
             pk1 := l.pos + 1
             pk2 := l.pos + 2
             pk3 := l.pos + 3
-            if pk3 < l.tokens.len() &&
+            if pk2 < l.tokens.len() &&
                l.tokens[pk1].name == "." &&
-               l.tokens[pk2].name == "IDENT" &&
-               l.tokens[pk3].name == "(" {
+               l.tokens[pk2].name == "IDENT" {
                 method := l.tokens[pk2].text
-                qualified := recv_name + "_" + method
-                if reg_find_fn(l.registry, qualified).name != "" ||
-                   reg_find_fn(l.registry, method).name != "" {
-                    ll0 := _lset_pos(l, pk3)
-                    mc := _lower_module_call_tokens(ll0, recv_name, method)
-                    ll = mc.l
-                    left = mc.temp
-                    did_module_call = true
+                is_call := pk3 < l.tokens.len() && l.tokens[pk3].name == "("
+                if is_call {
+                    qualified := recv_name + "_" + method
+                    if reg_find_fn(l.registry, qualified).name != "" ||
+                       reg_find_fn(l.registry, method).name != "" {
+                        ll0 := _lset_pos(l, pk3)
+                        mc := _lower_module_call_tokens(ll0, recv_name, method)
+                        ll = mc.l
+                        left = mc.temp
+                        did_module_call = true
+                    }
+                } else {
+                    // Module-qualified const: `module.CONST`. The pre-scan
+                    // registers lib consts by bare name, so look up `method`.
+                    cv := _lconst_lookup(l, method)
+                    if cv != 0 - 9999999 {
+                        nt := _lnew_temp(l)
+                        ll = nt.l
+                        ll = _lemit(ll, new_inst(OpConst, nt.temp, cv, 0, "", 0))
+                        // Advance past IDENT . IDENT
+                        ll = _lset_pos(ll, l.pos + 3)
+                        left = nt.temp
+                        did_module_call = true
+                    }
                 }
             }
         }
@@ -7182,8 +7216,8 @@ fn _lower_expr(l: Lowerer) -> LT {
                         left = mr.temp
                     }
                     } // close variant else block
-                } else if _lk(ll) == "[" && (field == "to" || field == "trunc") {
-                    // Conversion with type arg: .to[Type]() or .trunc[Type]()
+                } else if _lk(ll) == "[" && (field == "to" || field == "trunc" || field == "parse") {
+                    // Conversion with type arg: .to[Type]() / .trunc[Type]() / .parse[Type]()
                     ll = _ladv(ll)  // skip [
                     mut target_type_name := ""
                     if _lk(ll) == "IDENT" {
@@ -7193,7 +7227,8 @@ fn _lower_expr(l: Lowerer) -> LT {
                     if _lk(ll) == "]" { ll = _ladv(ll) }
                     if _lk(ll) == "(" { ll = _ladv(ll) }
                     if _lk(ll) == ")" { ll = _ladv(ll) }
-                    mr := _lower_conversion(ll, left, field, target_type_name)
+                    conv_method := if field == "parse" { "to" } else { field }
+                    mr := _lower_conversion(ll, left, conv_method, target_type_name)
                     ll = mr.l
                     left = mr.temp
                 } else {
@@ -10393,6 +10428,10 @@ fn _lower_conversion(l: Lowerer, obj: i64, method: str, target: str) -> LT {
             // End
             ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
             ll = _lset_type(ll, final_nt.temp, 200)
+            // Flag as Result so `?` / catch correctly unwrap. Without this,
+            // `s.parse[i64]()?` treated the result as opaque and returned the
+            // whole Result struct pointer instead of the parsed i64.
+            ll = _lset_is_result(ll, final_nt.temp)
             return LT{l: ll, temp: final_nt.temp}
         }
         // String to float
@@ -13176,8 +13215,9 @@ fn _lower_atom(l: Lowerer) -> LT {
                     mr := _lower_method_call(ll, left, field)
                     ll = mr.l
                     left = mr.temp
-                } else if _lk(ll) == "[" && (field == "to" || field == "trunc") {
-                    // Conversion method with type arg: .to[Type]() or .trunc[Type]()
+                } else if _lk(ll) == "[" && (field == "to" || field == "trunc" || field == "parse") {
+                    // Conversion method with type arg: .to[Type]() / .trunc[Type]() / .parse[Type]()
+                    // (parse aliases to "to" in the conversion impl.)
                     ll = _ladv(ll)  // skip [
                     mut target_type_name := ""
                     if _lk(ll) == "IDENT" {
@@ -13187,7 +13227,8 @@ fn _lower_atom(l: Lowerer) -> LT {
                     if _lk(ll) == "]" { ll = _ladv(ll) }
                     if _lk(ll) == "(" { ll = _ladv(ll) }
                     if _lk(ll) == ")" { ll = _ladv(ll) }
-                    mr := _lower_conversion(ll, left, field, target_type_name)
+                    conv_method := if field == "parse" { "to" } else { field }
+                    mr := _lower_conversion(ll, left, conv_method, target_type_name)
                     ll = mr.l
                     left = mr.temp
                 } else {
