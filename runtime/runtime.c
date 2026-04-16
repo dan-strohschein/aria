@@ -981,6 +981,44 @@ struct _aria_str _aria_array_int_to_str(aria_int arr_ptr) {
     return s;
 }
 
+struct _aria_str _aria_array_str_to_str(aria_int arr_ptr) {
+    if (arr_ptr == 0) {
+        char *r = _str_arena_alloc(2);
+        r[0] = '['; r[1] = ']'; r[2] = 0;
+        struct _aria_str s = {r, 2};
+        return s;
+    }
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+    size_t cap = 2 + (size_t)length * 64 + 1;
+    char *buf = (char *)malloc(cap);
+    int pos = 0;
+    buf[pos++] = '[';
+    for (aria_int i = 0; i < length; i++) {
+        if (i > 0) { buf[pos++] = ','; buf[pos++] = ' '; }
+        aria_int elem = data[i];
+        aria_int *pair = (aria_int *)elem;
+        char *sptr = (char *)pair[0];
+        aria_int slen = pair[1];
+        if (sptr && slen > 0) {
+            if (pos + (size_t)slen + 4 > cap) {
+                cap = cap * 2 + (size_t)slen;
+                buf = (char *)realloc(buf, cap);
+            }
+            memcpy(buf + pos, sptr, (size_t)slen);
+            pos += (int)slen;
+        }
+    }
+    buf[pos++] = ']';
+    char *result = _str_arena_alloc(pos);
+    memcpy(result, buf, (size_t)pos);
+    result[pos] = 0;
+    free(buf);
+    struct _aria_str s = {result, (aria_int)pos};
+    return s;
+}
+
 // --- String arena allocator ---
 // Short-lived string allocations (concat, substring, int_to_str) use a bump
 // allocator. When the arena fills, a new chunk is allocated and the old one
@@ -1454,6 +1492,23 @@ aria_int _aria_array_append(aria_int arr_ptr, aria_int value) {
     }
 
     return (aria_int)new_header;
+}
+
+aria_int _aria_array_sort(aria_int arr_ptr) {
+    if (arr_ptr == 0) return 0;
+    aria_int *header = (aria_int *)arr_ptr;
+    aria_int length = header[0];
+    aria_int *data = (aria_int *)header[2];
+    for (aria_int i = 1; i < length; i++) {
+        aria_int key = data[i];
+        aria_int j = i - 1;
+        while (j >= 0 && data[j] > key) {
+            data[j + 1] = data[j];
+            j--;
+        }
+        data[j + 1] = key;
+    }
+    return arr_ptr;
 }
 
 aria_int _aria_array_slice(aria_int arr_ptr, aria_int start) {

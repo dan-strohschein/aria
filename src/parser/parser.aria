@@ -1809,6 +1809,15 @@ fn _parse_expr(p: Parser, min_bp: i64) -> PR {
 
     mut running := true
     while running {
+        // Skip NL when the next non-NL token is a pipeline continuation `|>`
+        // so multi-line pipelines are parsed as a single expression.
+        if _cur(pp).name == "NEWLINE" {
+            mut peek := pp.pos + 1
+            while peek < pp.tokens.len() && pp.tokens[peek].name == "NEWLINE" { peek = peek + 1 }
+            if peek < pp.tokens.len() && pp.tokens[peek].text == "|>" {
+                pp = Parser{tokens: pp.tokens, pos: peek, pool: pp.pool, diagnostics: pp.diagnostics}
+            }
+        }
         cur_name := _cur(pp).name
         post_bp := postfix_binding_power(cur_name)
         // Contextual postfix keywords stored as IDENT: `or`, `must`

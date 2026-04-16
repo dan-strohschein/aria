@@ -7951,12 +7951,14 @@ fn _lower_primary(l: Lowerer) -> LT {
 
     if k == "true" {
         nt := _lnew_temp(l)
-        ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 1, 0, "", 0))
+        mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 1, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
     if k == "false" {
         nt := _lnew_temp(l)
-        ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        mut ll := _lemit(_ladv(nt.l), new_inst(OpConst, nt.temp, 0, 0, "", 0))
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -10705,19 +10707,23 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
 
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
-        // Track result array type: register canonical TyArray(result_elem_type)
-        // so downstream consumers (for-loops, interp, subsequent pipelines) see
-        // the correct element type. Without this, a mapped array comes back
-        // untyped and the next pipeline or iteration reads raw words.
-        result_elem := _lget_type(ll, result_nt.temp)
-        if result_elem == 12 {
-            ll = _lset_type(ll, new_arr.temp, 13)
-        } else if result_elem > 0 {
-            marr := TypeInfo{kind: TyArray, name: "", type_id: result_elem, type_id2: 0, param_start: 0, param_count: 0}
-            smar := store_add_canonical(ll.store, marr)
-            ll = _lset_store(ll, smar.store)
-            ll = _lset_type(ll, new_arr.temp, smar.id)
+        // Infer result element type from the closure's TyFunction return type,
+        // falling back to the indirect-call result temp's type.
+        mut result_elem := _lget_type(ll, result_nt.temp)
+        if result_elem == 0 {
+            tf_type := _lget_type(ll, transform.temp)
+            if tf_type > 16 && tf_type < ll.store.types.len() {
+                tfi := store_get(ll.store, tf_type)
+                if type_kind_name(tfi.kind) == "Function" && tfi.type_id > 0 {
+                    result_elem = tfi.type_id
+                }
+            }
         }
+        if result_elem == 0 { result_elem = 1 }
+        marr := TypeInfo{kind: TyArray, name: "", type_id: result_elem, type_id2: 0, param_start: 0, param_count: 0}
+        smar := store_add_canonical(ll.store, marr)
+        ll = _lset_store(ll, smar.store)
+        ll = _lset_type(ll, new_arr.temp, smar.id)
         return LT{l: ll, temp: new_arr.temp}
     }
 
@@ -11073,7 +11079,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpAdd, idx_nt.temp, idx_nt.temp, inc.temp, "", 0))
         ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
-        ll = _lset_type(ll, result_nt.temp, 1)
+        ll = _lset_type(ll, result_nt.temp, 11)
         return LT{l: ll, temp: result_nt.temp}
     }
 
@@ -11129,7 +11135,7 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         ll = _lemit(ll, new_inst(OpLabel, 0, cont_lbl.temp, 0, "", 0))
         ll = _lemit(ll, new_inst(OpConst, result_nt.temp, 0, 0, "", 0))
         ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
-        ll = _lset_type(ll, result_nt.temp, 1)
+        ll = _lset_type(ll, result_nt.temp, 11)
         return LT{l: ll, temp: result_nt.temp}
     }
 
@@ -11207,7 +11213,17 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     }
 
     // sort_by(fn, ...) / sort() — consume args and return array unchanged (stub)
-    if method == "sort_by" || method == "sort" {
+    if method == "sort" {
+        while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+        if _lk(ll) == ")" { ll = _ladv(ll) }
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_array_sort", 0))
+        obj_type := _lget_type(ll, obj)
+        if obj_type > 0 { ll = _lset_type(ll, nt.temp, obj_type) }
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "sort_by" {
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
         return LT{l: ll, temp: obj}
@@ -12464,6 +12480,7 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpArrayContains, nt.temp, obj, arg1, "", 0))
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -12482,7 +12499,7 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpMapContains, nt.temp, obj, arg1, "", 0))
-        ll = _lset_type(ll, nt.temp, 1)
+        ll = _lset_type(ll, nt.temp, 11)
         return LT{l: ll, temp: nt.temp}
     }
 
@@ -13726,6 +13743,35 @@ fn _lower_interp_to_str(l: Lowerer, val: i64) -> LT {
     mut ll := l
     t := _lget_type(ll, val)
     if t == 12 { return LT{l: ll, temp: val} }
+    // Bool interp: emit "true" / "false" instead of 1 / 0.
+    if t == 11 {
+        true_s := _lower_string_const(ll, "true")
+        ll = true_s.l
+        false_s := _lower_string_const(ll, "false")
+        ll = false_s.l
+        result_nt := _lnew_str_temp(ll)
+        ll = result_nt.l
+        ll = _lset_type(ll, result_nt.temp, 12)
+        is_false := _lnew_temp(ll)
+        ll = is_false.l
+        zero_c := _lnew_temp(ll)
+        ll = zero_c.l
+        ll = _lemit(ll, new_inst(OpConst, zero_c.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpEq, is_false.temp, val, zero_c.temp, "", 0))
+        true_lbl := _lnew_label(ll)
+        ll = true_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_false.temp, true_lbl.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, false_s.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, false_s.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, true_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp, true_s.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, result_nt.temp + 1, true_s.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        return LT{l: ll, temp: result_nt.temp}
+    }
     // Option interp: print "None" or "Some(<payload>)". Covers common cases
     // like println("First: {arr.first()}") where first() returns Option<T>.
     if _is_option_type(ll.store, t) {
@@ -13855,7 +13901,7 @@ fn _lower_interp_to_str(l: Lowerer, val: i64) -> LT {
     // [i64] array interp: dispatch to the runtime array-formatter.
     if t > 16 && t < ll.store.types.len() {
         ainfo := store_get(ll.store, t)
-        if type_kind_name(ainfo.kind) == "Array" && ainfo.type_id != 12 {
+        if type_kind_name(ainfo.kind) == "Array" {
             hint = "array_int"
         }
     }
@@ -14276,6 +14322,8 @@ fn _lower_closure(l: Lowerer) -> LT {
         } else {
             result := _lower_expr(ll)
             ll = result.l
+            body_type := _lget_type(ll, result.temp)
+            if body_type > 0 && ret_type == 1 { ret_type = body_type }
             ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
         }
     }
