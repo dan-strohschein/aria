@@ -5010,6 +5010,18 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaSbLen" { return "_aria_sb_len" }
     if name == "_ariaSbBuild" { return "_aria_sb_build" }
     if name == "_ariaSbClear" { return "_aria_sb_clear" }
+    if name == "_ariaArenaNew" { return "_aria_arena_new" }
+    if name == "_ariaArenaAlloc" { return "_aria_arena_alloc" }
+    if name == "_ariaArenaAllocated" { return "_aria_arena_allocated" }
+    if name == "_ariaArenaCapacity" { return "_aria_arena_capacity" }
+    if name == "_ariaArenaReset" { return "_aria_arena_reset" }
+    if name == "_ariaArenaFree" { return "_aria_arena_free" }
+    if name == "_ariaPoolNew" { return "_aria_pool_new" }
+    if name == "_ariaPoolGet" { return "_aria_pool_get" }
+    if name == "_ariaPoolPut" { return "_aria_pool_put" }
+    if name == "_ariaGcCollect" { return "_aria_gc_collect" }
+    if name == "_ariaGcTotalBytes" { return "_aria_gc_total_bytes" }
+    if name == "_ariaGcAllocationCount" { return "_aria_gc_allocation_count" }
     if name == "i2s" { return "i2s" }
     return name
 }
@@ -5031,7 +5043,8 @@ fn _builtin_return_type(name: str) -> i64 {
        name == "_ariaExit" || name == "_ariaSleep" ||
        name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
-       name == "_ariaMutexUnlock" {
+       name == "_ariaMutexUnlock" ||
+       name == "_ariaArenaReset" || name == "_ariaArenaFree" || name == "_ariaPoolPut" {
         return 0
     }
     return 1

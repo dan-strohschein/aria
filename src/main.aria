@@ -618,9 +618,19 @@ fn _resolve_and_validate_runtime(runtime_path: str) -> str with [Io, Fs] {
 // Determine output path: explicit > derived from file > derived from directory > a.out
 fn _determine_output_path(raw_files: [str], file: str, explicit: str) -> str with [Fs] {
     if explicit.len() > 0 { return explicit }
+    // Prefer the first user-supplied file so the output binary is named
+    // after the entry source, not after whichever file module-priority
+    // sorting happens to place first (e.g. src/lexer/token.aria).
+    mut primary := file
+    if raw_files.len() > 1 {
+        cand := raw_files[1]
+        if cand.len() > 5 && cand.substring(cand.len() - 5, cand.len()) == ".aria" {
+            primary = cand
+        }
+    }
     mut output := "a.out"
-    if file.len() > 5 && file.substring(file.len() - 5, file.len()) == ".aria" {
-        output = file.substring(0, file.len() - 5)
+    if primary.len() > 5 && primary.substring(primary.len() - 5, primary.len()) == ".aria" {
+        output = primary.substring(0, primary.len() - 5)
     }
     if raw_files.len() > 1 {
         raw_input := raw_files[1]
