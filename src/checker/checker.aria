@@ -1760,14 +1760,34 @@ fn _register_impl_fn_sig_ast_inner(c: Checker, impl_type: str, method_idx: i64, 
     mut sig := new_fn_sig(name, pnames, ptypes, ret, err)
     if eff_gp_count > 0 {
         // Find the fn keyword's token index. AST method spans may not carry a
-        // reliable offset, so scan tokens for `fn <raw_name>` in sequence. This
-        // is unambiguous within a file — one declaration per (name, kind).
+        // reliable offset, so scan tokens for `fn <raw_name>` with a body.
+        // Trait-declared methods (same name, signature-only) are skipped by
+        // requiring the signature to be followed by `=` or `{` (impl body).
+        lb2 := "\{"
+        rb2 := "\}"
         mut tstart := 0
         mut ti := 0
         while ti < cc.tokens.len() - 1 {
             if cc.tokens[ti].name == "fn" && cc.tokens[ti + 1].name == "IDENT" && cc.tokens[ti + 1].text == raw_name {
-                tstart = ti
-                ti = cc.tokens.len()
+                // Look ahead for `=` or `{` before the next line/decl boundary
+                // to confirm this is an impl body, not a trait declaration.
+                mut tj := ti + 2
+                mut has_body := false
+                mut paren_depth := 0
+                while tj < cc.tokens.len() {
+                    tk := cc.tokens[tj].name
+                    if tk == "(" { paren_depth = paren_depth + 1 }
+                    else if tk == ")" { paren_depth = paren_depth - 1 }
+                    else if paren_depth == 0 {
+                        if tk == "=" || tk == lb2 { has_body = true; tj = cc.tokens.len() }
+                        else if tk == "NEWLINE" || tk == rb2 || tk == "fn" || tk == "EOF" { tj = cc.tokens.len() }
+                    }
+                    tj = tj + 1
+                }
+                if has_body {
+                    tstart = ti
+                    ti = cc.tokens.len()
+                }
             }
             ti = ti + 1
         }

@@ -12905,6 +12905,90 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         }
     }
 
+    // Blanket impl dispatch: same scheme as _lower_method_call (token path).
+    // If obj's type implements some trait T, and there's a blanket impl
+    // `impl[X: T] OtherTrait for X` that provides `method`, dispatch to the
+    // blanket's `_method` fn. When the blanket fn is generic (e.g.
+    // `fn wrap[U](self, val: U) -> U`), specialize on the arg type and
+    // register a MonoSpec so the mono pass emits the body.
+    if sname != "" {
+        mut ii := 1
+        while ii < ll.treg.impl_defs.len() {
+            bimp := ll.treg.impl_defs[ii]
+            if bimp.type_name.len() > 1 && bimp.type_name.charAt(0) == "*" {
+                bound := bimp.type_name.substring(1, bimp.type_name.len())
+                if treg_has_impl(ll.treg, sname, bound) {
+                    blanket_fn := "_" + method
+                    mut bsig := reg_find_fn(ll.registry, blanket_fn)
+                    mut call_name := blanket_fn
+                    if bsig.name != "" {
+                        if fn_is_generic(bsig) {
+                            // Infer a concrete type suffix from the first arg's
+                            // TypeVar position (val: U in the canonical case).
+                            arg1_t := _lget_type(ll, arg1)
+                            suffix := _type_name_suffix_l(ll.store, ll.registry, arg1_t)
+                            if suffix != "unknown" && suffix != "" {
+                                spec_name := blanket_fn + "_" + sname + "_" + suffix
+                                existing := reg_find_fn(ll.registry, spec_name)
+                                if existing.name != "" {
+                                    bsig = existing
+                                    call_name = spec_name
+                                } else {
+                                    // Substitute TypeVars: self → sname, U → arg1_t
+                                    self_tid := _struct_type_id(ll.registry, sname)
+                                    mut sp_pt := [0]
+                                    mut spi := 1
+                                    while spi < bsig.param_types.len() {
+                                        mut pt := bsig.param_types[spi]
+                                        if spi == 1 && bsig.param_names.len() > 1 && bsig.param_names[1] == "self" {
+                                            if self_tid > 0 { pt = self_tid }
+                                        } else if pt > 0 && pt < ll.store.types.len() {
+                                            pti := store_get(ll.store, pt)
+                                            if type_kind_name(pti.kind) == "TypeVar" { pt = arg1_t }
+                                        }
+                                        sp_pt = sp_pt.append(pt)
+                                        spi = spi + 1
+                                    }
+                                    mut sp_ret := bsig.return_type
+                                    if sp_ret > 0 && sp_ret < ll.store.types.len() {
+                                        rti := store_get(ll.store, sp_ret)
+                                        if type_kind_name(rti.kind) == "TypeVar" { sp_ret = arg1_t }
+                                    }
+                                    new_sig := new_fn_sig(spec_name, bsig.param_names, sp_pt, sp_ret, bsig.error_type)
+                                    ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                                    ms := MonoSpec{generic_name: blanket_fn, specialized_name: spec_name,
+                                                   type_arg_0: arg1_t, type_arg_1: 0, type_arg_2: 0}
+                                    ll = _lset_reg(ll, reg_add_mono(ll.registry, ms))
+                                    bsig = new_sig
+                                    call_name = spec_name
+                                }
+                            }
+                        }
+                        base_nt := _lnew_temp(ll)
+                        ll = base_nt.l
+                        ll = _lemit(ll, new_inst(OpStore, base_nt.temp, obj, 0, "", 0))
+                        if arg_count >= 1 {
+                            a1_nt := _lnew_temp(ll)
+                            ll = a1_nt.l
+                            ll = _lemit(ll, new_inst(OpStore, a1_nt.temp, arg1, 0, "", 0))
+                        }
+                        if arg_count >= 2 {
+                            a2_nt := _lnew_temp(ll)
+                            ll = a2_nt.l
+                            ll = _lemit(ll, new_inst(OpStore, a2_nt.temp, arg2, 0, "", 0))
+                        }
+                        result_nt := _lnew_temp(ll)
+                        ll = result_nt.l
+                        ll = _lemit(ll, new_inst(OpCall, result_nt.temp, base_nt.temp, arg_count + 1, call_name, bsig.return_type))
+                        if bsig.return_type > 0 { ll = _lset_type(ll, result_nt.temp, bsig.return_type) }
+                        return LT{l: ll, temp: result_nt.temp}
+                    }
+                }
+            }
+            ii = ii + 1
+        }
+    }
+
     // Fallback: return obj (method not recognized)
     _warn_unresolved(ll, "method", method)
     return LT{l: ll, temp: obj}
