@@ -2693,12 +2693,31 @@ fn _parse_pattern(p: Parser) -> PR {
             return PR{p: pp, e: Expr{kind: EkCall, s1: name, s2: "", b1: false, b2: true,
                                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
         }
-        // Check for qualified name: Mod.Variant
+        // Check for qualified name: Mod.Variant or Mod.Variant(args)
         if _ck(pp) == "." && _pk(pp) == "IDENT" {
             pp = _adv(pp)
             qual := _cur(pp).text
             pp = _adv(pp)
-            return PR{p: pp, e: mk_ident(name + "." + qual, span)}
+            qname := name + "." + qual
+            if _ck(pp) == "(" {
+                pp = _adv(pp)
+                mut list_start := 0 - 1
+                mut count := 0
+                while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                    pp = _skip_nl(pp)
+                    sub := _parse_pattern(pp)
+                    pp = _padd(sub.p, sub.e)
+                    if list_start < 0 { list_start = _pidx(pp) - 1 }
+                    count = count + 1
+                    pp = _skip_nl(pp)
+                    if _ck(pp) == "," { pp = _adv(pp) }
+                }
+                pp = _expect(pp, ")")
+                if list_start < 0 { list_start = _pidx(pp) }
+                return PR{p: pp, e: Expr{kind: EkCall, s1: qname, s2: "", b1: false, b2: false,
+                                          c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
+            }
+            return PR{p: pp, e: mk_ident(qname, span)}
         }
         // Method ref: Type::method — produce qualified name Type_method
         if _ck(pp) == ":" && _pk(pp) == ":" {

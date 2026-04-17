@@ -16277,6 +16277,60 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                         sfi = sfi + 1
                     }
                 } else {
+                    // Nested variant in wildcard arm: Err(Type.Variant(s))
+                    mut wild_handled_nested := false
+                    if pat.list_count == 1 {
+                        mut wfirst := pool_get(ll.pool, pat.list_start)
+                        mut wfkind := expr_kind_name(wfirst.kind)
+                        if wfkind == "Ident" {
+                            wnext := pool_get(ll.pool, pat.list_start + 1)
+                            wnk := expr_kind_name(wnext.kind)
+                            if wnk == "Call" && wnext.list_count > 0 && wnext.s1.contains(".") {
+                                wfirst = wnext
+                                wfkind = wnk
+                            }
+                        }
+                        wfvname_raw := wfirst.s1
+                        mut wfvname := wfvname_raw
+                        if wfvname_raw.contains(".") {
+                            wparts := wfvname_raw.split(".")
+                            wfvname = wparts[wparts.len() - 1]
+                        }
+                        wfvtag := _variant_tag(ll.registry, wfvname)
+                        if wfvtag > 0 && wfirst.list_count > 0 &&
+                           (wfkind == "Call" || wfkind == "MethodCall") {
+                            wild_handled_nested = true
+                            wfv_parent := _variant_parent(ll.registry, wfvname)
+                            w_outer := _lnew_temp(ll)
+                            ll = w_outer.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, w_outer.temp, subj.temp, 1, "_val", 0))
+                            mut iwbi := 0
+                            mut iwslot := 1
+                            while iwbi < wfirst.list_count {
+                                iwarg := pool_get(ll.pool, wfirst.list_start + iwbi)
+                                iwname := iwarg.s1
+                                iwft := variant_field_type(wfv_parent, wfvtag, iwbi)
+                                if iwft == 12 {
+                                    iwbnt := _lnew_str_temp(ll)
+                                    ll = iwbnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, iwbnt.temp, w_outer.temp, iwslot, "", 0))
+                                    ll = _lemit(ll, new_inst(OpFieldGet, iwbnt.temp + 1, w_outer.temp, iwslot + 1, "", 0))
+                                    ll = _lset_type(ll, iwbnt.temp, 12)
+                                    if iwname != "_" { ll = _lenv_add(ll, iwname, iwbnt.temp) }
+                                    iwslot = iwslot + 2
+                                } else {
+                                    iwbnt := _lnew_temp(ll)
+                                    ll = iwbnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, iwbnt.temp, w_outer.temp, iwslot, "", 0))
+                                    if iwft > 0 { ll = _lset_type(ll, iwbnt.temp, iwft) }
+                                    if iwname != "_" { ll = _lenv_add(ll, iwname, iwbnt.temp) }
+                                    iwslot = iwslot + 1
+                                }
+                                iwbi = iwbi + 1
+                            }
+                        }
+                    }
+                    if wild_handled_nested == false {
                     // Tuple pattern: Variant(a, b, c)
                     mut wfi := 0
                     mut wslot := 1
@@ -16304,6 +16358,7 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                         if wftype == 12 { wslot = wslot + 2 } else { wslot = wslot + 1 }
                         wfi = wfi + 1
                     }
+                    }   // end if wild_handled_nested == false
                 }
             }
             body := _lower_expr_node(ll, body_idx)
@@ -16477,8 +16532,70 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                     // env entry has the right type for interp/string handling.
                     if pat.list_count > 0 {
                         field_node := pool_get(ll.pool, pat.list_start)
-                        fname := field_node.s1
-                        fkind := expr_kind_name(field_node.kind)
+                        mut fname := field_node.s1
+                        mut fkind := expr_kind_name(field_node.kind)
+                        // Nested variant: Err(ParseErr.BadInt(s)). With old list_start,
+                        // field_node points at inner `s` Ident; the Call wrapper is at +1.
+                        mut handled_nested := false
+                        mut inner_node := field_node
+                        if fkind == "Ident" && pat.list_count == 1 {
+                            next_node := pool_get(ll.pool, pat.list_start + 1)
+                            next_kind := expr_kind_name(next_node.kind)
+                            if next_kind == "Call" && next_node.list_count > 0 && next_node.s1.contains(".") {
+                                inner_node = next_node
+                                fname = inner_node.s1
+                                fkind = next_kind
+                            }
+                        }
+                        raw_vname := inner_node.s1
+                        mut nested_vname := raw_vname
+                        if raw_vname.contains(".") {
+                            dparts := raw_vname.split(".")
+                            nested_vname = dparts[dparts.len() - 1]
+                        }
+                        nv_tag := _variant_tag(ll.registry, nested_vname)
+                        if nv_tag > 0 && inner_node.list_count > 0 &&
+                           (fkind == "Call" || fkind == "MethodCall") {
+                            handled_nested = true
+                            nv_parent := _variant_parent(ll.registry, nested_vname)
+                            outer_payload := _lnew_temp(ll)
+                            ll = outer_payload.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, outer_payload.temp, subj.temp, 1, "_val", 0))
+                            inner_tag_val := _lnew_temp(ll)
+                            ll = inner_tag_val.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, inner_tag_val.temp, outer_payload.temp, 0, "_tag", 0))
+                            nv_tag_c := _lnew_temp(ll)
+                            ll = nv_tag_c.l
+                            ll = _lemit(ll, new_inst(OpConst, nv_tag_c.temp, nv_tag, 0, "", 0))
+                            nv_cmp := _lnew_temp(ll)
+                            ll = nv_cmp.l
+                            ll = _lemit(ll, new_inst(OpEq, nv_cmp.temp, inner_tag_val.temp, nv_tag_c.temp, "", 0))
+                            ll = _lemit(ll, new_inst(OpBranchFalse, 0, nv_cmp.temp, next_lbl.temp, "", 0))
+                            mut ibi := 0
+                            mut idata_slot := 1
+                            while ibi < inner_node.list_count {
+                                inner_arg := pool_get(ll.pool, inner_node.list_start + ibi)
+                                ibname := inner_arg.s1
+                                iv_ft := variant_field_type(nv_parent, nv_tag, ibi)
+                                if iv_ft == 12 {
+                                    ibnt := _lnew_str_temp(ll)
+                                    ll = ibnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, outer_payload.temp, idata_slot, "", 0))
+                                    ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp + 1, outer_payload.temp, idata_slot + 1, "", 0))
+                                    ll = _lset_type(ll, ibnt.temp, 12)
+                                    if ibname != "_" { ll = _lenv_add(ll, ibname, ibnt.temp) }
+                                    idata_slot = idata_slot + 2
+                                } else {
+                                    ibnt := _lnew_temp(ll)
+                                    ll = ibnt.l
+                                    ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, outer_payload.temp, idata_slot, "", 0))
+                                    if iv_ft > 0 { ll = _lset_type(ll, ibnt.temp, iv_ft) }
+                                    if ibname != "_" { ll = _lenv_add(ll, ibname, ibnt.temp) }
+                                    idata_slot = idata_slot + 1
+                                }
+                                ibi = ibi + 1
+                            }
+                        }
                         // Look up payload type from subject's container type.
                         // Ok/Some → ok type (type_id); Err → err type (type_id2).
                         mut payload_type := 0
@@ -16496,7 +16613,9 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                         if payload_type == 0 && subj_type > 0 && subj_type < 16 && _lis_result(ll, subj.temp) {
                             payload_type = subj_type
                         }
-                        if payload_type == 12 {
+                        if handled_nested {
+                            // nested handler already bound — skip default
+                        } else if payload_type == 12 {
                             // String payload: load both ptr (slot 1) and len (slot 2)
                             sfld_nt := _lnew_str_temp(ll)
                             ll = sfld_nt.l
