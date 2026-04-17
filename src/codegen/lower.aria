@@ -15012,7 +15012,8 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                     depth = depth - 1
                     if entered && depth == 0 { bscan = ll.tokens.len() }
                 }
-                if bscan < ll.tokens.len() && tname == "IDENT" && ll.tokens[bscan].text == pname {
+                if bscan < ll.tokens.len() {
+                  if tname == "IDENT" && ll.tokens[bscan].text == pname {
                     nx := bscan + 1
                     if nx < ll.tokens.len() && ll.tokens[nx].name == "." {
                         nx2 := nx + 1
@@ -15027,6 +15028,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                             }
                         }
                     }
+                  }
                 }
                 bscan = bscan + 1
             }
