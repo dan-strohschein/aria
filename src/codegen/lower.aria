@@ -9927,11 +9927,14 @@ fn _lower_primary(l: Lowerer) -> LT {
                         ret_type := type_info_type_id(ti)
                         if ret_type == 12 { ret_hint = "str" }
                         ll = _lset_type(ll, nt_temp, ret_type)
-                        // TypeInfo.type_id2 holds the fn's error type (0 for
-                        // infallible). If set, the callee returns a Result
-                        // pointer — mark the icall result so outer wrappers
-                        // (fn body Ok-wrap, catch) treat it correctly.
+                        // A fallible closure's Function type_id points at a Result
+                        // TypeInfo (err baked in). Flag is_result when either the
+                        // direct error field is set or the wrapped return is Result.
                         if ti.type_id2 > 0 { ic_is_result = true }
+                        if ret_type > 16 && ret_type < ll.store.types.len() {
+                            rt_info := store_get(ll.store, ret_type)
+                            if type_kind_name(rt_info.kind) == "Result" { ic_is_result = true }
+                        }
                     }
                 }
                 ll = _lemit(ll, new_inst(OpCallIndirect, nt_temp, fn_ptr_nt.temp, total_args, ret_hint, pack_start.temp))
@@ -14947,12 +14950,18 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                     rscan = rscan + 1
                     if rscan < ll.tokens.len() && ll.tokens[rscan].name == "IDENT" {
                         et_name := ll.tokens[rscan].text
-                        et_sid := _struct_type_id(ll.registry, et_name)
-                        if et_sid > 0 {
-                            err_type = et_sid
+                        // Try primitive name first (str/i64/bool/etc.), then struct.
+                        et_prim := resolve_type_name(ll.store, et_name)
+                        if et_prim != TY_UNKNOWN {
+                            err_type = et_prim
                         } else {
-                            // Sentinel non-zero so body lowering knows we're fallible
-                            err_type = 0 - 1
+                            et_sid := _struct_type_id(ll.registry, et_name)
+                            if et_sid > 0 {
+                                err_type = et_sid
+                            } else {
+                                // Sentinel non-zero so body lowering knows we're fallible
+                                err_type = 0 - 1
+                            }
                         }
                     }
                 }
@@ -14976,6 +14985,55 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
         ci = ci + 1
     }
     cap_count := cap_names.len() - 1
+
+    // Heuristic param-type inference: for params left as i64-default (no
+    // annotation), scan the body for string-typical method calls (parse,
+    // contains, split, trim, replace, starts_with, ends_with, lines, chars,
+    // split_whitespace). If found on a param name, promote to str. Cheap
+    // approximation of bidirectional type inference — handles the common
+    // `try_map(strings, fn(s) -> i64!E { s.parse[...]() })` pattern where
+    // the closure has no explicit `s: str` annotation.
+    mut ipi := 1
+    while ipi < param_types.len() {
+        if param_types[ipi] == 1 {
+            pname := param_names[ipi]
+            // Scan tokens forward from the closure's fn keyword until
+            // matching close brace, tracking brace depth.
+            mut bscan := tp
+            mut depth := 0
+            mut entered := false
+            mut found_str_use := false
+            lbc := "\{"
+            rbc := "\}"
+            while bscan < ll.tokens.len() && found_str_use == false {
+                tname := ll.tokens[bscan].name
+                if tname == lbc { depth = depth + 1; entered = true }
+                else if tname == rbc {
+                    depth = depth - 1
+                    if entered && depth == 0 { bscan = ll.tokens.len() }
+                }
+                if bscan < ll.tokens.len() && tname == "IDENT" && ll.tokens[bscan].text == pname {
+                    nx := bscan + 1
+                    if nx < ll.tokens.len() && ll.tokens[nx].name == "." {
+                        nx2 := nx + 1
+                        if nx2 < ll.tokens.len() && ll.tokens[nx2].name == "IDENT" {
+                            mname := ll.tokens[nx2].text
+                            if mname == "parse" || mname == "contains" ||
+                               mname == "split" || mname == "trim" ||
+                               mname == "replace" || mname == "starts_with" ||
+                               mname == "ends_with" || mname == "lines" ||
+                               mname == "chars" || mname == "split_whitespace" {
+                                found_str_use = true
+                            }
+                        }
+                    }
+                }
+                bscan = bscan + 1
+            }
+            if found_str_use { param_types[ipi] = 12 }
+        }
+        ipi = ipi + 1
+    }
 
     // Create closure function: env_ptr + user params
     mut actual_params := 1  // env_ptr
