@@ -1860,6 +1860,45 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             return LT{l: ll, temp: left.temp}
         }
 
+        // Short-circuit `&&` and `||`: lower left, branch on it,
+        // lower right only when needed. Prevents side-effecting or
+        // bounds-dependent operands from running when the result is
+        // already determined by left.
+        if op == "&&" {
+            left_sc := _lower_expr_node(ll, node.c0)
+            ll = left_sc.l
+            slot := _lnew_temp(ll)
+            ll = slot.l
+            ll = _lemit(ll, new_inst(OpStore, slot.temp, left_sc.temp, 0, "", 0))
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            // If left is false, skip right (short-circuit: result = left = 0).
+            ll = _lemit(ll, new_inst(OpBranchFalse, 0, left_sc.temp, end_lbl.temp, "", 0))
+            right_sc := _lower_expr_node(ll, node.c1)
+            ll = right_sc.l
+            ll = _lemit(ll, new_inst(OpStore, slot.temp, right_sc.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            ll = _lset_type(ll, slot.temp, 1)
+            return LT{l: ll, temp: slot.temp}
+        }
+        if op == "||" {
+            left_sc := _lower_expr_node(ll, node.c0)
+            ll = left_sc.l
+            slot := _lnew_temp(ll)
+            ll = slot.l
+            ll = _lemit(ll, new_inst(OpStore, slot.temp, left_sc.temp, 0, "", 0))
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            // If left is true, skip right (short-circuit: result = left = 1).
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, left_sc.temp, end_lbl.temp, "", 0))
+            right_sc := _lower_expr_node(ll, node.c1)
+            ll = right_sc.l
+            ll = _lemit(ll, new_inst(OpStore, slot.temp, right_sc.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            ll = _lset_type(ll, slot.temp, 1)
+            return LT{l: ll, temp: slot.temp}
+        }
+
         // Arithmetic and comparison
         left := _lower_expr_node(ll, node.c0)
         ll = left.l
@@ -2016,18 +2055,6 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             return LT{l: ll, temp: nt.temp}
         }
 
-        if op == "&&" {
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpAnd, nt.temp, left.temp, right.temp, "", 0))
-            return LT{l: ll, temp: nt.temp}
-        }
-        if op == "||" {
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpOr, nt.temp, left.temp, right.temp, "", 0))
-            return LT{l: ll, temp: nt.temp}
-        }
         // Bitwise operators
         if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
             nt := _lnew_temp(ll)
@@ -15012,8 +15039,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                     depth = depth - 1
                     if entered && depth == 0 { bscan = ll.tokens.len() }
                 }
-                if bscan < ll.tokens.len() {
-                  if tname == "IDENT" && ll.tokens[bscan].text == pname {
+                if bscan < ll.tokens.len() && tname == "IDENT" && ll.tokens[bscan].text == pname {
                     nx := bscan + 1
                     if nx < ll.tokens.len() && ll.tokens[nx].name == "." {
                         nx2 := nx + 1
@@ -15028,7 +15054,6 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                             }
                         }
                     }
-                  }
                 }
                 bscan = bscan + 1
             }
