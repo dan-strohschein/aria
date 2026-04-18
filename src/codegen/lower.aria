@@ -2254,6 +2254,32 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         iter := _lower_expr_node(ll, node.c0)
         ll = iter.l
         iter_type := _lget_type(ll, iter.temp)
+        // Channel iteration: `for v in ch { ... }` blocks on recv until the
+        // channel is closed + empty. Delegate to the token-based helper
+        // (_lower_for_channel) which already implements the try_recv loop.
+        // Detection mirrors _lower_for at L14100 — check TypeKind is Named
+        // with name "chan" to avoid colliding on user types that happen to
+        // have ID 17.
+        mut iter_is_chan := false
+        if iter_type > 0 && iter_type < ll.store.types.len() {
+            ik := type_kind_name(ll.store.types[iter_type].kind)
+            iname := ll.store.types[iter_type].name
+            if ik == "Named" && (iname == "chan" || iname == "Chan" || iname == "Channel") {
+                iter_is_chan = true
+            }
+        }
+        if iter_is_chan {
+            // Bridge to the token-based for-channel lowering. It expects
+            // the cursor positioned at the body `{` — set it up, run,
+            // and restore. The body's token span comes from c1's node span.
+            body_node := pool_get(ll.pool, node.c1)
+            bp := _find_tok_pos(ll, body_node.span.offset)
+            saved_pos := ll.pos
+            ll = _lset_pos(ll, bp)
+            ll = _lower_for_channel(ll, var_name, iter.temp)
+            ll = _lset_pos(ll, saved_pos)
+            return LT{l: ll, temp: -1}
+        }
         len_nt := _lnew_temp(ll)
         ll = len_nt.l
         ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, iter.temp, 0, "", 0))
@@ -12871,10 +12897,62 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         return LT{l: ll, temp: obj}
     }
 
-    // Channel .send is handled by the proper typed dispatch at L10613+.
-    // The old fallback here emitted malformed OpCall (argc collision with
-    // arg-temp); removed — if obj_type_ch isn't 17/19 we want a clean
-    // "unresolved method" error, not broken IR.
+    // --- Channel methods (AST path — mirror of _lower_method_call's L10681+) ---
+    // Channel handles carry TY_CHAN (17) / TY_CHAN_SEND (19) / TY_CHAN_RECV (20);
+    // Task handles carry TY_TASK (18). The AST MethodCall dispatch routes
+    // method-with-args through here, so we duplicate the typed handlers so
+    // send/close/await on AST paths hit the correct runtime intrinsic.
+    if method == "send" && (obj_type == 17 || obj_type == 19) {
+        // _aria_chan_send(ch, val) — args must be consecutive temps.
+        pack0 := _lnew_temp(ll)
+        ll = pack0.l
+        ll = _lemit(ll, new_inst(OpStore, pack0.temp, obj, 0, "", 0))
+        pack1 := _lnew_temp(ll)
+        ll = pack1.l
+        ll = _lemit(ll, new_inst(OpStore, pack1.temp, arg1, 0, "", 0))
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_send", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "recv" && (obj_type == 17 || obj_type == 20) {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_recv", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "close" && (obj_type == 17 || obj_type == 19 || obj_type == 20) {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_close", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
+    // --- Task methods ---
+    // _lower_spawn tags joinables as 1 (collides with TY_I64) and detached
+    // as 18; we accept either — parallels the token-path dispatch at L10720.
+    // arg_count == 0 for these zero-arg methods, so arg1 is unused.
+    if method == "await" && (obj_type == 1 || obj_type == 18) && arg_count == 0 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_await", 1))
+        ll = _lset_type(ll, nt.temp, 1)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "done" && (obj_type == 1 || obj_type == 18) && arg_count == 0 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_done", 1))
+        ll = _lset_type(ll, nt.temp, 11)
+        return LT{l: ll, temp: nt.temp}
+    }
+    if method == "cancel" && (obj_type == 1 || obj_type == 18) && arg_count == 0 {
+        nt := _lnew_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_task_cancel", 0))
+        return LT{l: ll, temp: nt.temp}
+    }
 
     // --- User-defined methods (qualified call: StructName_method) ---
     sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
@@ -16073,18 +16151,25 @@ fn _lower_spawn(l: Lowerer) -> LT {
     }
 
     // Emit the spawn: _aria_spawn(fn_ptr, env_ptr) -> task handle.
-    fnref_nt := _lnew_temp(ll)
-    ll = fnref_nt.l
-    ll = _lemit(ll, new_inst(OpFnRef, fnref_nt.temp, 0, 0, fname, 0))
-    // Pack (fn, env) as two call arguments for the OpCall instruction.
+    //
+    // OpCall's LLVM emitter reads argc consecutive temps starting at
+    // `first_arg` (second inst field). We must therefore allocate the
+    // fn-ref temp and the env-copy temp back-to-back — allocating them
+    // in order (pack_fn first, then pack_env) guarantees pack_env ==
+    // pack_fn + 1. Re-using env_temp directly would break this invariant
+    // because earlier lowering steps already advanced the temp counter.
+    pack_fn := _lnew_temp(ll)
+    ll = pack_fn.l
+    ll = _lemit(ll, new_inst(OpFnRef, pack_fn.temp, 0, 0, fname, 0))
+    pack_env := _lnew_temp(ll)
+    ll = pack_env.l
+    ll = _lemit(ll, new_inst(OpStore, pack_env.temp, env_temp, 0, "", 0))
     nt := _lnew_temp(ll)
     ll = nt.l
-    ll = _lemit(ll, new_inst(OpCall, nt.temp, fnref_nt.temp, 2, "_aria_spawn", 1))
-    // env_temp is the second call argument — the LLVM emitter reads call
-    // args contiguously from (first_arg .. first_arg + argc - 1), so the
-    // OpCall above must see fnref_nt.temp + 1 == env_temp. We emit env
-    // via an intermediate OpMove to guarantee adjacency if the allocator
-    // separated them; in practice the temp counter keeps them consecutive.
+    ll = _lemit(ll, new_inst(OpCall, nt.temp, pack_fn.temp, 2, "_aria_spawn", 1))
+    // Tag result: 1 (joinable, collides with TY_I64 but matches scope auto-join
+    // heuristic which awaits all temps in scope frame; detached tasks get 18
+    // so scope skips them). Method dispatch at L10720 accepts either.
     mut spawn_type := 1
     if is_detach { spawn_type = 18 }
     ll = _lset_type(ll, nt.temp, spawn_type)
