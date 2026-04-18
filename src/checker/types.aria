@@ -180,7 +180,7 @@ fn new_store() -> TypeStore {
     types = types.append(TypeInfo{kind: TyUnknown, name: "Unknown", type_id: 0, type_id2: 0, param_start: 0, param_count: 0})
     // Reserve slots 17-20 for concurrency types (Chan, Task, ChanSend, ChanRecv)
     // so user-defined types start at ID 21 and never collide with these well-known IDs
-    types = types.append(mk_named_type("Chan"))      // 17: TY_CHAN
+    types = types.append(mk_named_type("chan"))      // 17: TY_CHAN — lowercase to match user syntax `chan[T]`
     types = types.append(mk_named_type("Task"))      // 18: TY_TASK
     types = types.append(mk_named_type("ChanSend"))  // 19: TY_CHAN_SEND
     types = types.append(mk_named_type("ChanRecv"))  // 20: TY_CHAN_RECV

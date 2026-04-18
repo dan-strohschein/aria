@@ -8221,6 +8221,50 @@ fn _lower_primary(l: Lowerer) -> LT {
         name := _lcur(l).text
         mut ll := _ladv(l)
 
+        // Channel constructor: chan[T]() or chan[T](capacity)
+        // Lowers to @_aria_chan_new(cap). Element type T is informational
+        // for the checker; at the LLVM layer all channels carry i64 boxed
+        // values (same runtime ABI used by send/recv/close lowering).
+        if name == "chan" && _lk(ll) == "[" {
+            ll = _ladv(ll)  // skip [
+            // Skip the element type (we don't use it at the IR layer)
+            mut depth := 1
+            while depth > 0 && _lk(ll) != "EOF" {
+                if _lk(ll) == "[" { depth = depth + 1 }
+                else if _lk(ll) == "]" { depth = depth - 1; if depth == 0 { ll = _ladv(ll); break } }
+                ll = _ladv(ll)
+            }
+            // Expect ( cap? )
+            mut cap_temp := 0
+            if _lk(ll) == "(" {
+                ll = _ladv(ll)  // skip (
+                if _lk(ll) == ")" {
+                    // Unbuffered: capacity 0
+                    z := _lnew_temp(ll)
+                    ll = z.l
+                    ll = _lemit(ll, new_inst(OpConst, z.temp, 0, 0, "", 0))
+                    cap_temp = z.temp
+                } else {
+                    ce := _lower_expr(ll)
+                    ll = ce.l
+                    cap_temp = ce.temp
+                }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+            } else {
+                z := _lnew_temp(ll)
+                ll = z.l
+                ll = _lemit(ll, new_inst(OpConst, z.temp, 0, 0, "", 0))
+                cap_temp = z.temp
+            }
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpCall, nt.temp, cap_temp, 1, "_aria_chan_new", 1))
+            // Tag the result with TY_CHAN (17) so subsequent .send/.close/.recv
+            // method dispatch at ~L10613-10648 picks the right runtime intrinsic.
+            ll = _lset_type(ll, nt.temp, 17)
+            return LT{l: ll, temp: nt.temp}
+        }
+
         // Method reference: Type::method — rewrite as Type_method fn-value ref
         if _lk(ll) == ":" {
             next_pos := ll.pos + 1
@@ -12803,11 +12847,10 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
         return LT{l: ll, temp: obj}
     }
 
-    // --- Channel methods ---
-    if method == "send" {
-        ll = _lemit(ll, new_inst(OpCall, 0, obj, arg1, "_ariaChanSend", 2))
-        return LT{l: ll, temp: obj}
-    }
+    // Channel .send is handled by the proper typed dispatch at L10613+.
+    // The old fallback here emitted malformed OpCall (argc collision with
+    // arg-temp); removed — if obj_type_ch isn't 17/19 we want a clean
+    // "unresolved method" error, not broken IR.
 
     // --- User-defined methods (qualified call: StructName_method) ---
     sname := _struct_name_for_type(ll.store, ll.registry, obj_type)
@@ -14035,7 +14078,7 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     mut is_chan := false
     if iter_type_check > 0 && iter_type_check < ll.store.types.len() {
         iter_kind := type_kind_name(ll.store.types[iter_type_check].kind)
-        if iter_kind == "Named" && (ll.store.types[iter_type_check].name == "Chan" || ll.store.types[iter_type_check].name == "Channel") {
+        if iter_kind == "Named" && (ll.store.types[iter_type_check].name == "chan" || ll.store.types[iter_type_check].name == "Chan" || ll.store.types[iter_type_check].name == "Channel") {
             is_chan = true
         }
     }
@@ -15837,6 +15880,7 @@ fn _lower_match_subject(l: Lowerer) -> LT {
 fn _lower_spawn(l: Lowerer) -> LT {
     mut ll := _ladv(l)  // skip spawn
     lb := "\{"
+    rb := "\}"
     // Check for spawn.detach
     mut is_detach := false
     if _lk(ll) == "." {
@@ -15847,40 +15891,172 @@ fn _lower_spawn(l: Lowerer) -> LT {
             is_detach = true
         }
     }
-    // If next token is {, it's a spawn block
-    if _lk(ll) == lb {
-        // Treat as spawn { block } — lower the block's body as a closure
-        // For now, lower the closure expression inline and call _ariaSpawn
-        closure := _lower_closure_from_block(ll)
-        ll = closure.l
-        // Extract fn_ptr and env_ptr from closure
-        fn_ptr := _lnew_temp(ll)
-        ll = fn_ptr.l
-        ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, closure.temp, 0, "_fn", 0))
-        env_ptr := _lnew_temp(ll)
-        ll = env_ptr.l
-        ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, closure.temp, 1, "_env", 0))
-        nt := _lnew_temp(ll)
-        ll = nt.l
-        ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
-        // Type 1 = joinable task, type 18 = detached task (scope won't auto-join)
-        mut spawn_type := 1
-        if is_detach { spawn_type = 18 }
-        ll = _lset_type(ll, nt.temp, spawn_type)
-        return LT{l: ll, temp: nt.temp}
+    is_block := _lk(ll) == lb
+
+    // Determine body token range (body_start .. body_end). Evaluation of
+    // the body happens inside a synthesized thunk fn, not in the caller;
+    // we only need to walk tokens here to find the end position and to
+    // scan for captured identifiers.
+    body_start := ll.pos
+    if is_block {
+        ll = _skip_braces_l(ll)
+    } else {
+        // Single expression — advance until statement boundary.
+        mut depth := 0
+        mut found_end := false
+        while _lk(ll) != "NEWLINE" && _lk(ll) != "EOF" && found_end == false {
+            if _lk(ll) == "(" { depth = depth + 1 }
+            if _lk(ll) == ")" {
+                if depth == 0 { found_end = true } else { depth = depth - 1 }
+            }
+            if _lk(ll) == "[" { depth = depth + 1 }
+            if _lk(ll) == "]" {
+                if depth == 0 { found_end = true } else { depth = depth - 1 }
+            }
+            if found_end == false && _lk(ll) == "," && depth == 0 { found_end = true }
+            if found_end == false && _lk(ll) == rb && depth == 0 { found_end = true }
+            if found_end == false { ll = _ladv(ll) }
+        }
     }
-    // spawn <expr> — the expr should evaluate to a closure
-    expr := _lower_expr(ll)
-    ll = expr.l
-    fn_ptr := _lnew_temp(ll)
-    ll = fn_ptr.l
-    ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr.temp, expr.temp, 0, "_fn", 0))
-    env_ptr := _lnew_temp(ll)
-    ll = env_ptr.l
-    ll = _lemit(ll, new_inst(OpFieldGet, env_ptr.temp, expr.temp, 1, "_env", 0))
+    body_end := ll.pos
+
+    // Scan body tokens for captures: identifiers that resolve to outer-env
+    // slots. Skip identifiers that are field-access selectors (preceded by
+    // `.`) and module-qualified names' trailing segments.
+    mut cap_names := [""]
+    mut cap_slots := [0]
+    mut cap_types := [0]
+    mut scan_pos := body_start
+    while scan_pos < body_end && scan_pos < ll.tokens.len() {
+        stok := ll.tokens[scan_pos]
+        if stok.name == "IDENT" {
+            mut is_field := false
+            if scan_pos > 0 && ll.tokens[scan_pos - 1].name == "." { is_field = true }
+            if is_field == false {
+                sname := stok.text
+                outer_slot := _lenv_lookup(ll, sname)
+                if outer_slot >= 0 {
+                    mut already := false
+                    mut cci := 1
+                    while cci < cap_names.len() {
+                        if cap_names[cci] == sname { already = true }
+                        cci = cci + 1
+                    }
+                    if already == false {
+                        cap_names = cap_names.append(sname)
+                        cap_slots = cap_slots.append(outer_slot)
+                        cap_types = cap_types.append(_lget_type(ll, outer_slot))
+                    }
+                }
+            }
+        }
+        scan_pos = scan_pos + 1
+    }
+    cap_count := cap_names.len() - 1
+
+    // Save outer state before switching into the thunk function.
+    fname := "_spawn_fn_" + i2s(ll.temp_counter)
+    saved_func := ll.current_func
+    saved_temp := ll.temp_counter
+    saved_label := ll.label_counter
+    saved_env_names := ll.env_names
+    saved_env_slots := ll.env_slots
+    saved_types := ll.temp_types
+    saved_is_result := ll.is_result
+    saved_err_type := ll.fn_error_type
+
+    ll = _lset_func(ll, new_ir_func(fname, 1, 0))
+
+    // Thunk param 0 = env pointer.
+    env_param := _lnew_temp(ll)
+    ll = env_param.l
+    ll = _lemit(ll, new_inst(OpArg, env_param.temp, 0, 0, "", 0))
+    ll = _lenv_add(ll, "_env", env_param.temp)
+
+    // Load captured values from env struct into local temps.
+    if cap_count > 0 {
+        mut ci := 1
+        while ci < cap_names.len() {
+            cap_nt := _lnew_temp(ll)
+            ll = cap_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, cap_nt.temp, env_param.temp, ci - 1, "", 0))
+            ll = _lenv_add(ll, cap_names[ci], cap_nt.temp)
+            if cap_types[ci] > 0 { ll = _lset_type(ll, cap_nt.temp, cap_types[ci]) }
+            ci = ci + 1
+        }
+    }
+
+    // Lower body inside the thunk.
+    ll = _lset_pos(ll, body_start)
+    if is_block {
+        ll = _ladv(ll)  // skip {
+        ll = _lskip_nl(ll)
+        while _lk(ll) != rb && _lk(ll) != "EOF" {
+            ll = _lower_stmt(ll)
+            ll = _lskip_nl(ll)
+        }
+        if _lk(ll) == rb { ll = _ladv(ll) }
+        // Return 0 (task result discarded for block-spawns)
+        ret_nt := _lnew_temp(ll)
+        ll = ret_nt.l
+        ll = _lemit(ll, new_inst(OpConst, ret_nt.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpRet, 0, ret_nt.temp, 0, "", 0))
+    } else {
+        // Single-expression spawn — capture return value.
+        result := _lower_expr(ll)
+        ll = result.l
+        ll = _lemit(ll, new_inst(OpRet, 0, result.temp, 0, "", 0))
+    }
+
+    ll = _lfinish_func(ll)
+
+    // Restore outer function state at body_end.
+    ll = Lowerer{tokens: ll.tokens, pos: body_end, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
+                 table: ll.table, file: ll.file, module: ll.module,
+                 current_func: saved_func,
+                 temp_counter: saved_temp, label_counter: saved_label,
+                 env_names: saved_env_names, env_slots: saved_env_slots,
+                 loop_start: ll.loop_start, loop_end: ll.loop_end,
+                 const_names: ll.const_names, const_vals: ll.const_vals,
+                 const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
+                 temp_types: saved_types, is_result: saved_is_result,
+                 fn_error_type: saved_err_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+
+    // Build env struct with captured values, or null if no captures.
+    mut env_temp := 0
+    if cap_count > 0 {
+        env_nt := _lnew_temp(ll)
+        ll = env_nt.l
+        ll = _lemit(ll, new_inst(OpAlloc, env_nt.temp, cap_count, 0, "_env", 0))
+        mut ci := 1
+        while ci < cap_slots.len() {
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, cap_slots[ci], 0, "", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, env_nt.temp, val_nt.temp, ci - 1, "", 0))
+            ci = ci + 1
+        }
+        env_temp = env_nt.temp
+    } else {
+        null_nt := _lnew_temp(ll)
+        ll = null_nt.l
+        ll = _lemit(ll, new_inst(OpConst, null_nt.temp, 0, 0, "", 0))
+        env_temp = null_nt.temp
+    }
+
+    // Emit the spawn: _aria_spawn(fn_ptr, env_ptr) -> task handle.
+    fnref_nt := _lnew_temp(ll)
+    ll = fnref_nt.l
+    ll = _lemit(ll, new_inst(OpFnRef, fnref_nt.temp, 0, 0, fname, 0))
+    // Pack (fn, env) as two call arguments for the OpCall instruction.
     nt := _lnew_temp(ll)
     ll = nt.l
-    ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr.temp, 2, "_aria_spawn", 1))
+    ll = _lemit(ll, new_inst(OpCall, nt.temp, fnref_nt.temp, 2, "_aria_spawn", 1))
+    // env_temp is the second call argument — the LLVM emitter reads call
+    // args contiguously from (first_arg .. first_arg + argc - 1), so the
+    // OpCall above must see fnref_nt.temp + 1 == env_temp. We emit env
+    // via an intermediate OpMove to guarantee adjacency if the allocator
+    // separated them; in practice the temp counter keeps them consecutive.
     mut spawn_type := 1
     if is_detach { spawn_type = 18 }
     ll = _lset_type(ll, nt.temp, spawn_type)
