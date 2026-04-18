@@ -16117,10 +16117,20 @@ fn _lower_match_subject(l: Lowerer) -> LT {
                     if _lk(ll) == "IDENT" {
                         field := _lcur(ll).text
                         ll = _ladv(ll)
-                        nt := _lnew_temp(ll)
-                        ll = nt.l
-                        ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, cur, 0, field, 0))
-                        cur = nt.temp
+                        if _lk(ll) == "(" {
+                            // Method call on the match subject. Without this
+                            // branch, `match obj.method() { Ok/Err ... }` read
+                            // `method` as a struct field, returning garbage
+                            // and causing all arms to fall through.
+                            mr := _lower_method_call(ll, cur, field)
+                            ll = mr.l
+                            cur = mr.temp
+                        } else {
+                            nt := _lnew_temp(ll)
+                            ll = nt.l
+                            ll = _lemit(ll, new_inst(OpFieldGet, nt.temp, cur, 0, field, 0))
+                            cur = nt.temp
+                        }
                     }
                 }
                 return LT{l: ll, temp: cur}
