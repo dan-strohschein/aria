@@ -2264,7 +2264,7 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         if iter_type > 0 && iter_type < ll.store.types.len() {
             ik := type_kind_name(ll.store.types[iter_type].kind)
             iname := ll.store.types[iter_type].name
-            if ik == "Named" && (iname == "chan" || iname == "Chan" || iname == "Channel") {
+            if ik == "Named" && (iname == "chan" || iname == "chan.str" || iname == "Chan" || iname == "Channel") {
                 iter_is_chan = true
             }
         }
@@ -8272,12 +8272,18 @@ fn _lower_primary(l: Lowerer) -> LT {
         mut ll := _ladv(l)
 
         // Channel constructor: chan[T]() or chan[T](capacity)
-        // Lowers to @_aria_chan_new(cap). Element type T is informational
-        // for the checker; at the LLVM layer all channels carry i64 boxed
-        // values (same runtime ABI used by send/recv/close lowering).
+        // Lowers to @_aria_chan_new(cap). We inspect the element type to
+        // tag the handle as TY_CHAN (17) or TY_CHAN_STR (21) — the latter
+        // drives the send/recv box-unbox path since str is a two-word
+        // value and the chan ABI carries only a single i64.
         if name == "chan" && _lk(ll) == "[" {
             ll = _ladv(ll)  // skip [
-            // Skip the element type (we don't use it at the IR layer)
+            // Peek for the simple `chan[str]` shape: next token is IDENT "str".
+            mut elem_is_str := false
+            if _lk(ll) == "IDENT" && _lcur(ll).text == "str" {
+                elem_is_str = true
+            }
+            // Skip the element type (generic args aren't reified in the IR).
             mut depth := 1
             while depth > 0 && _lk(ll) != "EOF" {
                 if _lk(ll) == "[" { depth = depth + 1 }
@@ -8309,9 +8315,9 @@ fn _lower_primary(l: Lowerer) -> LT {
             nt := _lnew_temp(ll)
             ll = nt.l
             ll = _lemit(ll, new_inst(OpCall, nt.temp, cap_temp, 1, "_aria_chan_new", 1))
-            // Tag the result with TY_CHAN (17) so subsequent .send/.close/.recv
-            // method dispatch at ~L10613-10648 picks the right runtime intrinsic.
-            ll = _lset_type(ll, nt.temp, 17)
+            mut chan_tag := 17
+            if elem_is_str { chan_tag = 21 }  // TY_CHAN_STR
+            ll = _lset_type(ll, nt.temp, chan_tag)
             return LT{l: ll, temp: nt.temp}
         }
 
@@ -10704,38 +10710,59 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
 
     // Channel methods: .send(val), .recv(), .close(), .try_recv()
     obj_type_ch := _lget_type(ll, obj)
-    if method == "send" && (obj_type_ch == 17 || obj_type_ch == 19) {
+    if method == "send" && (obj_type_ch == 17 || obj_type_ch == 19 || obj_type_ch == 21) {
         val := _lower_expr(ll)
         ll = val.l
         if _lk(ll) == ")" { ll = _ladv(ll) }
+        // chan[str]: box the (ptr, len) pair into a 2-slot heap cell so
+        // the chan ABI's single-i64 send can carry it. Recv side unboxes.
+        mut payload := val.temp
+        if obj_type_ch == 21 {
+            box := _lnew_temp(ll)
+            ll = box.l
+            ll = _lemit(ll, new_inst(OpAlloc, box.temp, 2, 0, "_StrBox", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, box.temp, val.temp, 0, "_ptr", 0))
+            val_len := val.temp + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, box.temp, val_len, 1, "_len", 0))
+            payload = box.temp
+        }
         pack0 := _lnew_temp(ll)
         ll = pack0.l
         ll = _lemit(ll, new_inst(OpStore, pack0.temp, obj, 0, "", 0))
         pack1 := _lnew_temp(ll)
         ll = pack1.l
-        ll = _lemit(ll, new_inst(OpStore, pack1.temp, val.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, pack1.temp, payload, 0, "", 0))
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_send", 1))
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "recv" && (obj_type_ch == 17 || obj_type_ch == 20) {
+    if method == "recv" && (obj_type_ch == 17 || obj_type_ch == 20 || obj_type_ch == 21) {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_recv", 1))
+        if obj_type_ch == 21 {
+            // Unbox str cell: {ptr, len} — load into a str-temp pair.
+            str_nt := _lnew_str_temp(ll)
+            ll = str_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp, nt.temp, 0, "_ptr", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp + 1, nt.temp, 1, "_len", 0))
+            ll = _lset_type(ll, str_nt.temp, 12)
+            return LT{l: ll, temp: str_nt.temp}
+        }
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "try_recv" && (obj_type_ch == 17 || obj_type_ch == 20) {
+    if method == "try_recv" && (obj_type_ch == 17 || obj_type_ch == 20 || obj_type_ch == 21) {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_str_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_try_recv", 0))
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "close" && (obj_type_ch == 17 || obj_type_ch == 19 || obj_type_ch == 20) {
+    if method == "close" && (obj_type_ch == 17 || obj_type_ch == 19 || obj_type_ch == 20 || obj_type_ch == 21) {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         nt := _lnew_temp(ll)
         ll = nt.l
@@ -12902,28 +12929,47 @@ fn _lower_method_with_args(l: Lowerer, obj: i64, method: str, arg1: i64, arg2: i
     // Task handles carry TY_TASK (18). The AST MethodCall dispatch routes
     // method-with-args through here, so we duplicate the typed handlers so
     // send/close/await on AST paths hit the correct runtime intrinsic.
-    if method == "send" && (obj_type == 17 || obj_type == 19) {
+    if method == "send" && (obj_type == 17 || obj_type == 19 || obj_type == 21) {
         // _aria_chan_send(ch, val) — args must be consecutive temps.
+        // chan[str] (21): box the (ptr, len) pair into a 2-slot cell.
+        mut payload := arg1
+        if obj_type == 21 {
+            box := _lnew_temp(ll)
+            ll = box.l
+            ll = _lemit(ll, new_inst(OpAlloc, box.temp, 2, 0, "_StrBox", 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, box.temp, arg1, 0, "_ptr", 0))
+            arg1_len := arg1 + 1
+            ll = _lemit(ll, new_inst(OpFieldSet, box.temp, arg1_len, 1, "_len", 0))
+            payload = box.temp
+        }
         pack0 := _lnew_temp(ll)
         ll = pack0.l
         ll = _lemit(ll, new_inst(OpStore, pack0.temp, obj, 0, "", 0))
         pack1 := _lnew_temp(ll)
         ll = pack1.l
-        ll = _lemit(ll, new_inst(OpStore, pack1.temp, arg1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, pack1.temp, payload, 0, "", 0))
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, pack0.temp, 2, "_aria_chan_send", 1))
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "recv" && (obj_type == 17 || obj_type == 20) {
+    if method == "recv" && (obj_type == 17 || obj_type == 20 || obj_type == 21) {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_recv", 1))
+        if obj_type == 21 {
+            str_nt := _lnew_str_temp(ll)
+            ll = str_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp, nt.temp, 0, "_ptr", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp + 1, nt.temp, 1, "_len", 0))
+            ll = _lset_type(ll, str_nt.temp, 12)
+            return LT{l: ll, temp: str_nt.temp}
+        }
         ll = _lset_type(ll, nt.temp, 1)
         return LT{l: ll, temp: nt.temp}
     }
-    if method == "close" && (obj_type == 17 || obj_type == 19 || obj_type == 20) {
+    if method == "close" && (obj_type == 17 || obj_type == 19 || obj_type == 20 || obj_type == 21) {
         nt := _lnew_temp(ll)
         ll = nt.l
         ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, "_aria_chan_close", 0))
@@ -14180,7 +14226,8 @@ fn _lower_for(l: Lowerer) -> Lowerer {
     mut is_chan := false
     if iter_type_check > 0 && iter_type_check < ll.store.types.len() {
         iter_kind := type_kind_name(ll.store.types[iter_type_check].kind)
-        if iter_kind == "Named" && (ll.store.types[iter_type_check].name == "chan" || ll.store.types[iter_type_check].name == "Chan" || ll.store.types[iter_type_check].name == "Channel") {
+        iname := ll.store.types[iter_type_check].name
+        if iter_kind == "Named" && (iname == "chan" || iname == "chan.str" || iname == "Chan" || iname == "Channel") {
             is_chan = true
         }
     }
@@ -14333,12 +14380,27 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
     ll = _lemit(ll, new_inst(OpEq, cmp_nt.temp, status_nt.temp, zero_nt.temp, "", 0))
     ll = _lemit(ll, new_inst(OpBranchTrue, 0, cmp_nt.temp, end_lbl.temp, "", 0))
 
-    // Bind value to loop variable
+    // Bind value to loop variable. chan[str] (TY_CHAN_STR=21) carries a
+    // 2-slot box containing (ptr, len) — unbox into a str-temp pair so the
+    // loop body sees a real str value.
     if var_name != "" {
-        val_nt := _lnew_temp(ll)
-        ll = val_nt.l
-        ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, recv_nt.temp, 0, "", 0))
-        ll = _lenv_add(ll, var_name, val_nt.temp)
+        ch_elem_is_str := _lget_type(ll, ch_temp) == 21
+        if ch_elem_is_str {
+            box_nt := _lnew_temp(ll)
+            ll = box_nt.l
+            ll = _lemit(ll, new_inst(OpLoad, box_nt.temp, recv_nt.temp, 0, "", 0))
+            str_nt := _lnew_str_temp(ll)
+            ll = str_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp, box_nt.temp, 0, "_ptr", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp + 1, box_nt.temp, 1, "_len", 0))
+            ll = _lset_type(ll, str_nt.temp, 12)
+            ll = _lenv_add(ll, var_name, str_nt.temp)
+        } else {
+            val_nt := _lnew_temp(ll)
+            ll = val_nt.l
+            ll = _lemit(ll, new_inst(OpLoad, val_nt.temp, recv_nt.temp, 0, "", 0))
+            ll = _lenv_add(ll, var_name, val_nt.temp)
+        }
     }
 
     // Set loop labels

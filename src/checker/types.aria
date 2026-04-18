@@ -154,6 +154,12 @@ const TY_CHAN: i64 = 17
 const TY_TASK: i64 = 18
 const TY_CHAN_SEND: i64 = 19
 const TY_CHAN_RECV: i64 = 20
+// TY_CHAN_STR marks channels carrying str values. `str` is a two-word
+// (ptr, len) value but the chan ABI is a single i64, so the lowerer
+// boxes str into a 2-slot heap cell on .send and unboxes on recv.
+// Distinguishing "chan of str" from "chan of i64" (17) lets send/recv
+// dispatch pick the right path.
+const TY_CHAN_STR: i64 = 21
 
 // Registry-based struct type IDs start at this offset.
 // Type IDs >= TY_STRUCT_BASE are indices into the TypeRegistry's struct_defs array.
@@ -184,6 +190,7 @@ fn new_store() -> TypeStore {
     types = types.append(mk_named_type("Task"))      // 18: TY_TASK
     types = types.append(mk_named_type("ChanSend"))  // 19: TY_CHAN_SEND
     types = types.append(mk_named_type("ChanRecv"))  // 20: TY_CHAN_RECV
+    types = types.append(mk_named_type("chan.str"))  // 21: TY_CHAN_STR — chan whose element is str (lowerer boxes)
     TypeStore{types: types, name_index: strmap_new()}
 }
 
@@ -498,8 +505,11 @@ fn resolve_type_name(store: TypeStore, name: str) -> i64 {
             return idx
         }
     }
-    // Fallback: linear scan for entries not yet indexed
-    mut i := 21
+    // Fallback: linear scan for entries not yet indexed.
+    // Start at 17 so the reserved concurrency slots (chan=17, Task=18,
+    // ChanSend=19, ChanRecv=20, chan.str=21) are reachable even when the
+    // fast-path hash index hasn't been populated for them.
+    mut i := 17
     while i < store.types.len() {
         info := store.types[i]
         if type_kind_name(info.kind) == "Named" && info.name == name {

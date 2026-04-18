@@ -410,6 +410,12 @@ fn _parse_type_ann(c: Checker) -> CE {
                 cc = _cset_store(cc, sar.store)
                 return CE{c: cc, type_id: sar.id}
             }
+            // chan[T] specialization — distinguish str-carrying channels so
+            // the lowerer can box/unbox across the single-i64 chan ABI.
+            // chan[i64] / chan[T] all map to TY_CHAN (17); chan[str] → 21.
+            if name == "chan" && argc >= 1 && arg1 == TY_STR {
+                return CE{c: cc, type_id: TY_CHAN_STR}
+            }
             // Check if base name is an HKT TypeVar — create TyApplied
             tid := resolve_type_name(cc.store, name)
             if tid != TY_UNKNOWN {

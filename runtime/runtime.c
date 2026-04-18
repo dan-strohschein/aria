@@ -220,9 +220,12 @@ void _aria_eprintln_str(char *ptr, aria_int len) {
 // safepoints (roots are just LLVM stores to the alloca'd array).
 // ====================================================================
 
-// Global frame chain head — points to the most recent function's root frame
+// Frame chain head — per-thread, so spawned tasks don't corrupt the
+// main thread's GC root chain. Each thread sees its own `_gc_frame_top`
+// initialised to 0 on first access; push/pop mutate the thread-local
+// only, so concurrent frame-push/pop across spawned threads can't race.
 // Frame layout: [prev_ptr: i64, count: i64, roots...: i64*count]
-static aria_int _gc_frame_top = 0;
+static _Thread_local aria_int _gc_frame_top = 0;
 
 // Push a frame onto the chain. frame_ptr points to the alloca'd struct.
 void _aria_gc_frame_push(aria_int frame_ptr, aria_int count) {
