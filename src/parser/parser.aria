@@ -1940,6 +1940,8 @@ fn _parse_prefix(p: Parser) -> PR {
     if k == "if" { return _parse_if(p) }
     if k == "match" { return _parse_match(p) }
     if k == "select" { return _parse_select(p) }
+    if k == "spawn" { return _parse_spawn(p) }
+    if k == "scope" { return _parse_scope(p) }
     if k == "fn" { return _parse_closure_expr(p) }
     if k == "(" { return _parse_grouped(p) }
     if k == "[" { return _parse_array(p) }
@@ -3271,6 +3273,51 @@ fn _parse_assert(p: Parser) -> PR {
                        c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: 1, span: span}}
 }
 
+// --- Parse spawn expression ---
+// spawn <call-or-expr>    -> EkSpawn{c0=body_idx, b1=false}
+// spawn { block }         -> EkSpawn{c0=body_idx, b1=true}  (body is EkBlock)
+fn _parse_spawn(p: Parser) -> PR {
+    span := _pspan(p)
+    mut pp := _adv(p)  // skip 'spawn'
+    lb := "\{"
+    mut is_block := false
+    mut body_idx := 0
+    if _ck(pp) == lb {
+        is_block = true
+        br := _parse_block(pp)
+        body_idx = _pidx(br.p)
+        pp = _padd(br.p, br.e)
+    } else {
+        br := _parse_expr(pp, 0)
+        body_idx = _pidx(br.p)
+        pp = _padd(br.p, br.e)
+    }
+    PR{p: pp, e: Expr{kind: EkSpawn, s1: "", s2: "", b1: is_block, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
+// --- Parse scope expression ---
+// scope { block }  -> EkScope{c0=block_idx}
+fn _parse_scope(p: Parser) -> PR {
+    span := _pspan(p)
+    mut pp := _adv(p)  // skip 'scope'
+    pp = _skip_nl(pp)
+    lb := "\{"
+    mut body_idx := 0
+    if _ck(pp) == lb {
+        br := _parse_block(pp)
+        body_idx = _pidx(br.p)
+        pp = _padd(br.p, br.e)
+    } else {
+        // Tolerant fallback: treat as an empty block
+        body_idx = _pidx(pp)
+        pp = _padd(pp, Expr{kind: EkBlock, s1: "", s2: "", b1: false, b2: false,
+                             c0: 0, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span})
+    }
+    PR{p: pp, e: Expr{kind: EkScope, s1: "", s2: "", b1: false, b2: false,
+                       c0: body_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+}
+
 // --- Parse select expression ---
 // select { binding from channel => body, default => body }
 // Produces EkSelect node with list of arm pairs:
@@ -3310,14 +3357,62 @@ fn _parse_select(p: Parser) -> PR {
             arm_info_indices = arm_info_indices.append(info_idx)
             body_indices = body_indices.append(body_idx)
             count = count + 1
+        } else if _ck(pp) == "IDENT" && _cur(pp).text == "timeout" {
+            // timeout(dur_expr) => body  — stored as s1="_timeout", c0=dur_expr
+            tspan := _pspan(pp)
+            pp = _adv(pp)  // skip 'timeout'
+            pp = _expect(pp, "(")
+            dur := _parse_expr(pp, 0)
+            dur_idx := _pidx(dur.p)
+            pp = _padd(dur.p, dur.e)
+            if _ck(pp) == ")" { pp = _adv(pp) }
+            pp = _expect(pp, "=>")
+            pp = _skip_nl(pp)
+            body := _parse_expr(pp, 0)
+            body_idx := _pidx(body.p)
+            pp = _padd(body.p, body.e)
+            info_idx := _pidx(pp)
+            pp = _padd(pp, Expr{kind: EkNone, s1: "_timeout", s2: "", b1: false, b2: false,
+                                 c0: dur_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: tspan})
+            arm_info_indices = arm_info_indices.append(info_idx)
+            body_indices = body_indices.append(body_idx)
+            count = count + 1
+        } else if _ck(pp) == "after" {
+            // after dur => body  (spec form) — same shape as timeout(dur)
+            tspan := _pspan(pp)
+            pp = _adv(pp)  // skip 'after'
+            dur := _parse_expr(pp, 0)
+            dur_idx := _pidx(dur.p)
+            pp = _padd(dur.p, dur.e)
+            pp = _expect(pp, "=>")
+            pp = _skip_nl(pp)
+            body := _parse_expr(pp, 0)
+            body_idx := _pidx(body.p)
+            pp = _padd(body.p, body.e)
+            info_idx := _pidx(pp)
+            pp = _padd(pp, Expr{kind: EkNone, s1: "_timeout", s2: "", b1: false, b2: false,
+                                 c0: dur_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: tspan})
+            arm_info_indices = arm_info_indices.append(info_idx)
+            body_indices = body_indices.append(body_idx)
+            count = count + 1
         } else if _ck(pp) == "IDENT" {
-            // binding from channel => body
+            // Two forms accepted:
+            //   binding from channel => body        (spec form)
+            //   binding := <- channel => body       (ex09 form)
             bname := _cur(pp).text
             bspan := _pspan(pp)
             pp = _adv(pp)  // skip binding name
-            // Expect "from"
             if _ck(pp) == "IDENT" && _cur(pp).text == "from" {
                 pp = _adv(pp)  // skip from
+            } else if _ck(pp) == ":=" {
+                pp = _adv(pp)  // skip :=
+                // Expect '<' '-' forming a receive operator (kept contextual
+                // so we don't need a new lexer token that would clash with
+                // comparison against a negative expression).
+                if _ck(pp) == "<" && _pk(pp) == "-" {
+                    pp = _adv(pp)  // skip <
+                    pp = _adv(pp)  // skip -
+                }
             }
             // Parse channel expression
             ch := _parse_expr(pp, 0)

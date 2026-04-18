@@ -68,6 +68,10 @@ type ExprKind =
     | EkTypeTuple
     | EkMapLit
     | EkSetLit
+    | EkSpawn
+    | EkScope
+    | EkChanNew
+    | EkChanRecv
 
 fn expr_kind_name(k: ExprKind) -> str = match k {
     EkIntLit => "IntLit"
@@ -127,6 +131,10 @@ fn expr_kind_name(k: ExprKind) -> str = match k {
     EkTypeTuple => "TypeTuple"
     EkMapLit => "MapLit"
     EkSetLit => "SetLit"
+    EkSpawn => "Spawn"
+    EkScope => "Scope"
+    EkChanNew => "ChanNew"
+    EkChanRecv => "ChanRecv"
 }
 
 // --- Expr node ---
