@@ -193,18 +193,72 @@ aria_int _aria_write(aria_int fd, char *ptr, aria_int len) {
     return (aria_int)_posix_write((int)fd, ptr, (size_t)len);
 }
 
+// Concurrent println from multiple spawned tasks would otherwise interleave
+// the payload write with the trailing-newline write (and even mid-payload
+// across non-atomic write syscalls). Combine into a single write to a stack
+// buffer when the line fits; for larger lines, fall back to a brief mutex
+// around two writes. Single-write under PIPE_BUF (4096) is POSIX-atomic.
+#ifdef _WIN32
+#include <windows.h>
+static CRITICAL_SECTION _aria_stdout_cs;
+static CRITICAL_SECTION _aria_stderr_cs;
+static int _aria_print_cs_inited = 0;
+static void _aria_print_lock_init(void) {
+    if (!_aria_print_cs_inited) {
+        InitializeCriticalSection(&_aria_stdout_cs);
+        InitializeCriticalSection(&_aria_stderr_cs);
+        _aria_print_cs_inited = 1;
+    }
+}
+#define ARIA_PRINT_LOCK_INIT() _aria_print_lock_init()
+#define ARIA_PRINT_LOCK(cs)    EnterCriticalSection(&cs)
+#define ARIA_PRINT_UNLOCK(cs)  LeaveCriticalSection(&cs)
+#define ARIA_STDOUT_LOCK       _aria_stdout_cs
+#define ARIA_STDERR_LOCK       _aria_stderr_cs
+#else
+#include <pthread.h>
+static pthread_mutex_t _aria_stdout_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t _aria_stderr_mu = PTHREAD_MUTEX_INITIALIZER;
+#define ARIA_PRINT_LOCK_INIT() ((void)0)
+#define ARIA_PRINT_LOCK(mu)    pthread_mutex_lock(&mu)
+#define ARIA_PRINT_UNLOCK(mu)  pthread_mutex_unlock(&mu)
+#define ARIA_STDOUT_LOCK       _aria_stdout_mu
+#define ARIA_STDERR_LOCK       _aria_stderr_mu
+#endif
+
+static void _aria_println_locked(int fd, char *ptr, aria_int len) {
+    char stack_buf[4096];
+    if (len + 1 <= (aria_int)sizeof(stack_buf)) {
+        memcpy(stack_buf, ptr, (size_t)len);
+        stack_buf[len] = '\n';
+        _posix_write(fd, stack_buf, (size_t)(len + 1));
+    } else {
+        // Larger than stack buffer: two writes under the lock so
+        // concurrent printlns don't interleave between payload and newline.
+        _posix_write(fd, ptr, (size_t)len);
+        _posix_write(fd, "\n", 1);
+    }
+}
+
 void _aria_println_str(char *ptr, aria_int len) {
-    _posix_write(1, ptr, (size_t)len);
-    _posix_write(1, "\n", 1);
+    ARIA_PRINT_LOCK_INIT();
+    ARIA_PRINT_LOCK(ARIA_STDOUT_LOCK);
+    _aria_println_locked(1, ptr, len);
+    ARIA_PRINT_UNLOCK(ARIA_STDOUT_LOCK);
 }
 
 void _aria_print_str(char *ptr, aria_int len) {
+    ARIA_PRINT_LOCK_INIT();
+    ARIA_PRINT_LOCK(ARIA_STDOUT_LOCK);
     _posix_write(1, ptr, (size_t)len);
+    ARIA_PRINT_UNLOCK(ARIA_STDOUT_LOCK);
 }
 
 void _aria_eprintln_str(char *ptr, aria_int len) {
-    _posix_write(2, ptr, (size_t)len);
-    _posix_write(2, "\n", 1);
+    ARIA_PRINT_LOCK_INIT();
+    ARIA_PRINT_LOCK(ARIA_STDERR_LOCK);
+    _aria_println_locked(2, ptr, len);
+    ARIA_PRINT_UNLOCK(ARIA_STDERR_LOCK);
 }
 
 // ====================================================================
