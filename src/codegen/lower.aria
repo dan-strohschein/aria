@@ -5762,6 +5762,7 @@ fn _lower_blanket_method_specialized(l: Lowerer, raw_name: str, sig: FnSig, conc
                     // Specialized function name: "_raw_name_ConcreteType"
                     spec_fname := "_" + raw_name + "_" + concrete_type
                     ll = _lset_func(ll, new_ir_func(spec_fname, actual_param_count, sig.return_type))
+                    if sig.error_type > 0 { ll = _lset_error_type(ll, sig.error_type) }
                     // Allocate temps for parameters; self gets concrete_tid
                     pi = 1
                     while pi < sig.param_names.len() {
@@ -5840,6 +5841,8 @@ fn _lower_impl_method_by_name(l: Lowerer, impl_type: str, raw_name: str, sig: Fn
                     }
 
                     ll = _lset_func(ll, new_ir_func(impl_type + "_" + raw_name, actual_param_count, sig.return_type))
+                    // Track error type so a bare expression return auto-wraps in Ok(...)
+                    if sig.error_type > 0 { ll = _lset_error_type(ll, sig.error_type) }
 
                     // Allocate temps for parameters
                     pi = 1
