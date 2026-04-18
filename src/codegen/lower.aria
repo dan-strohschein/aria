@@ -5486,11 +5486,14 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
         if _lk(ll) == "]" { ll = _ladv(ll) }
     }
     mut impl_type := ""
+    mut impl_trait_name := ""
     if _lk(ll) == "IDENT" {
         impl_type = _lcur(ll).text
         ll = _ladv(ll)
     }
     if _lk(ll) == "for" {
+        // The IDENT before `for` was the trait name, not the impl type.
+        impl_trait_name = impl_type
         ll = _ladv(ll)
         if _lk(ll) == "IDENT" {
             impl_type = _lcur(ll).text
@@ -5585,6 +5588,19 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
             }
             mi = mi + 1
         }
+        // After emitting explicit impl methods, synthesize trait-default
+        // methods for any trait method the impl didn't override.
+        if impl_trait_name != "" && impl_type != "" && is_blanket == false {
+            mut impl_method_names := [""]
+            mut imn := 0
+            while imn < impl_node.list_count {
+                imn_idx := pool_get(ll.pool, impl_node.list_start + imn)
+                imn_node := pool_get(ll.pool, imn_idx.c0)
+                impl_method_names = impl_method_names.append(imn_node.s1)
+                imn = imn + 1
+            }
+            ll = _synthesize_trait_defaults(ll, impl_trait_name, impl_type, impl_method_names)
+        }
         ll = _lset_pos(ll, decl.body_end)
         return ll
     }
@@ -5592,6 +5608,127 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
     // Legacy fallback
     ll = _lower_impl_legacy(ll, impl_type)
     return ll
+}
+
+// Synthesize missing default methods for `impl Trait for Type`.
+// For each Trait method with a `= expr` or `{ block }` default body that
+// the impl didn't override, registers a FnSig `<Type>_<method>` and emits
+// the function body by repositioning the lexer at the trait's default body.
+fn _synthesize_trait_defaults(l: Lowerer, trait_name: str, impl_type: str, impl_methods: [str]) -> Lowerer {
+    mut ll := l
+    tdef := treg_find_trait(ll.treg, trait_name)
+    if tdef.name == "" { return ll }
+    lb := "\{"
+    rb := "\}"
+    // Locate `trait <trait_name> {` in tokens and find matching `}`.
+    mut trait_start := 0
+    mut trait_end := 0
+    mut ts := 0
+    while ts < ll.tokens.len() - 2 {
+        if ll.tokens[ts].name == "trait" && ll.tokens[ts + 1].name == "IDENT" && ll.tokens[ts + 1].text == trait_name {
+            mut tj := ts + 2
+            while tj < ll.tokens.len() && ll.tokens[tj].name != lb && ll.tokens[tj].name != "EOF" {
+                tj = tj + 1
+            }
+            if tj < ll.tokens.len() && ll.tokens[tj].name == lb {
+                trait_start = tj
+                mut depth := 1
+                mut tk := tj + 1
+                while tk < ll.tokens.len() && depth > 0 {
+                    if ll.tokens[tk].name == lb { depth = depth + 1 }
+                    else if ll.tokens[tk].name == rb { depth = depth - 1 }
+                    if depth > 0 { tk = tk + 1 }
+                }
+                trait_end = tk
+            }
+            ts = ll.tokens.len()
+        }
+        ts = ts + 1
+    }
+    if trait_start == 0 { return ll }
+    // Iterate trait methods (skip sentinel index 0).
+    mut mi := 1
+    while mi < tdef.method_names.len() {
+        mname := tdef.method_names[mi]
+        mut overridden := false
+        mut xi := 0
+        while xi < impl_methods.len() {
+            if impl_methods[xi] == mname { overridden = true }
+            xi = xi + 1
+        }
+        if overridden == false && mname != "" {
+            qualified := impl_type + "_" + mname
+            existing := reg_find_fn(ll.registry, qualified)
+            if existing.name == "" {
+                // Scan within trait body for `fn <mname>` followed by `=` or `{`.
+                mut fn_tok := 0
+                mut tj := trait_start + 1
+                while tj < trait_end {
+                    if ll.tokens[tj].name == "fn" && tj + 1 < ll.tokens.len() {
+                        if ll.tokens[tj + 1].name == "IDENT" && ll.tokens[tj + 1].text == mname {
+                            fn_tok = tj
+                            tj = trait_end
+                        }
+                    }
+                    tj = tj + 1
+                }
+                if fn_tok > 0 {
+                    // Parse minimal signature: skip generics, skip (params), optional -> ret_type.
+                    mut sig_ret := TY_UNIT
+                    mut has_body := false
+                    mut tk := fn_tok + 2
+                    if tk < trait_end && ll.tokens[tk].name == "[" {
+                        mut gd := 1
+                        tk = tk + 1
+                        while tk < trait_end && gd > 0 {
+                            if ll.tokens[tk].name == "[" { gd = gd + 1 }
+                            else if ll.tokens[tk].name == "]" { gd = gd - 1 }
+                            if gd > 0 { tk = tk + 1 }
+                        }
+                        tk = tk + 1
+                    }
+                    if tk < trait_end && ll.tokens[tk].name == "(" {
+                        mut pd := 1
+                        tk = tk + 1
+                        while tk < trait_end && pd > 0 {
+                            if ll.tokens[tk].name == "(" { pd = pd + 1 }
+                            else if ll.tokens[tk].name == ")" { pd = pd - 1 }
+                            if pd > 0 { tk = tk + 1 }
+                        }
+                        tk = tk + 1
+                    }
+                    if tk < trait_end && ll.tokens[tk].name == "->" {
+                        tk = tk + 1
+                        if tk < trait_end && ll.tokens[tk].name == "IDENT" {
+                            rtid := resolve_type_name(ll.store, ll.tokens[tk].text)
+                            if rtid > 0 { sig_ret = rtid }
+                            tk = tk + 1
+                        }
+                    }
+                    mut done := false
+                    while tk < trait_end && done == false {
+                        tkn := ll.tokens[tk].name
+                        if tkn == "=" || tkn == lb { has_body = true; done = true }
+                        else if tkn == "NEWLINE" || tkn == "fn" { done = true }
+                        else { tk = tk + 1 }
+                    }
+                    if has_body {
+                        self_tid := _struct_type_id(ll.registry, impl_type)
+                        pnames := ["", "self"]
+                        ptypes := [0, self_tid]
+                        new_sig := new_fn_sig(qualified, pnames, ptypes, sig_ret, 0)
+                        ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                        saved_pos := ll.pos
+                        ll = _lset_pos(ll, fn_tok)
+                        ll = _lower_impl_method_by_name(ll, impl_type, mname, new_sig)
+                        ll = _lset_pos(ll, saved_pos)
+                    }
+                }
+            }
+        }
+        mi = mi + 1
+    }
+    ll
 }
 
 // Lower a specific impl method — scans forward from current pos to find it
