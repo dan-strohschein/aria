@@ -14363,10 +14363,13 @@ fn _lower_for_channel(l: Lowerer, var_name: str, ch_temp: i64) -> Lowerer {
     // Loop start
     ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
 
-    // Call _aria_chan_try_recv(ch) -> {value, status}
+    // Call _aria_chan_recv_ok(ch) -> {value, status}. Unlike try_recv,
+    // this blocks when the channel is empty-but-not-closed, so the loop
+    // waits for the next value instead of prematurely exiting between
+    // producer sends. status=0 means the channel is drained for good.
     recv_nt := _lnew_str_temp(ll)
     ll = recv_nt.l
-    ll = _lemit(ll, new_inst(OpCall, recv_nt.temp, ch_temp, 1, "_aria_chan_try_recv", 0))
+    ll = _lemit(ll, new_inst(OpCall, recv_nt.temp, ch_temp, 1, "_aria_chan_recv_ok", 0))
 
     // Check status (recv_nt.temp + 1): if 0, break
     status_nt := _lnew_temp(ll)

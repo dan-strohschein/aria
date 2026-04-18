@@ -2691,6 +2691,28 @@ struct _aria_recv_result _aria_chan_try_recv(aria_int handle) {
     return r;
 }
 
+// Blocking recv that distinguishes "got value" from "closed+empty".
+// Used by `for v in ch { ... }` so the loop waits for the next value
+// instead of exiting the moment the buffer empties between sends.
+// Returns {value, 1} on success, {0, 0} when the channel is drained.
+struct _aria_recv_result _aria_chan_recv_ok(aria_int handle) {
+    struct _aria_chan *ch = (struct _aria_chan *)handle;
+    struct _aria_recv_result r = {0, 0};
+    pthread_mutex_lock(&ch->mutex);
+    while (ch->count == 0 && !ch->closed) {
+        pthread_cond_wait(&ch->cond_recv, &ch->mutex);
+    }
+    if (ch->count > 0) {
+        r.value = ch->buf[ch->head];
+        ch->head = (ch->head + 1) % ch->capacity;
+        ch->count--;
+        r.status = 1;
+        pthread_cond_signal(&ch->cond_send);
+    }
+    pthread_mutex_unlock(&ch->mutex);
+    return r;
+}
+
 // --- Channel: select (poll multiple channels) ---
 // Polls n channels, returns index of first ready one + received value.
 // channels_arr is an Aria array handle containing channel handles.
