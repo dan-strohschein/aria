@@ -16370,6 +16370,13 @@ fn _lower_select(l: Lowerer) -> LT {
     mut arm_end_3 := 0
     mut default_start := 0
     mut default_end := 0
+    // timeout-arm state (ex09 form: `timeout(d) => body` or spec `after d => body`).
+    // Only one timeout arm is honoured per select — additional arms win by arrival,
+    // which matches the spec's "first ready wins" semantics.
+    mut has_timeout := false
+    mut timeout_ms_temp := 0
+    mut timeout_body_start := 0
+    mut timeout_body_end := 0
     while _lk(ll) != rb && _lk(ll) != "EOF" {
         ll = _lskip_nl(ll)
         if _lk(ll) == rb { break }
@@ -16388,13 +16395,38 @@ fn _lower_select(l: Lowerer) -> LT {
                 while _lk(ll) != "NEWLINE" && _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
             }
             default_end = ll.pos
+        } else if _lk(ll) == "IDENT" && _lcur(ll).text == "timeout" && ll.pos + 1 < ll.tokens.len() && ll.tokens[ll.pos + 1].name == "(" {
+            // timeout(dur_ms) => body  — dur_ms is an i64 expression (ms).
+            // Runtime: _aria_chan_select(arr, timeout_ms) takes the ms directly.
+            ll = _ladv(ll)  // skip timeout
+            ll = _ladv(ll)  // skip (
+            d := _lower_expr(ll)
+            ll = d.l
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+            timeout_ms_temp = d.temp
+            has_timeout = true
+            if _lk(ll) == "=>" { ll = _ladv(ll) }
+            ll = _lskip_nl(ll)
+            timeout_body_start = ll.pos
+            if _lk(ll) == lb {
+                while _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == rb { ll = _ladv(ll) }
+            } else {
+                while _lk(ll) != "NEWLINE" && _lk(ll) != rb && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            }
+            timeout_body_end = ll.pos
         } else if _lk(ll) == "IDENT" {
-            // binding_name from channel_expr => body
+            // Two forms:
+            //   binding_name from channel_expr => body        (spec form)
+            //   binding_name := <-channel_expr => body         (ex09 form)
             bname := _lcur(ll).text
             ll = _ladv(ll)
-            // Expect "from"
             if _lk(ll) == "IDENT" && _lcur(ll).text == "from" {
                 ll = _ladv(ll)  // skip from
+            } else if _lk(ll) == ":=" {
+                ll = _ladv(ll)  // skip :=
+                if _lk(ll) == "<" { ll = _ladv(ll) }
+                if _lk(ll) == "-" { ll = _ladv(ll) }
             }
             // Lower channel expression
             ch_expr := _lower_expr(ll)
@@ -16431,19 +16463,26 @@ fn _lower_select(l: Lowerer) -> LT {
         ll = _lskip_nl(ll)
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
-    // Call _aria_chan_select(array, timeout)
-    // timeout: 0 if has_default (non-blocking), -1 otherwise (blocking)
-    timeout_nt := _lnew_temp(ll)
-    ll = timeout_nt.l
-    mut timeout_val := 0 - 1
-    if has_default { timeout_val = 0 }
-    ll = _lemit(ll, new_inst(OpConst, timeout_nt.temp, timeout_val, 0, "", 0))
+    // Call _aria_chan_select(array, timeout_ms)
+    // timeout: 0 if has_default (non-blocking), -1 if no timeout arm (blocking),
+    // or the user's duration (ms) if a `timeout(d)` arm is present.
+    mut timeout_temp := 0
+    if has_timeout {
+        timeout_temp = timeout_ms_temp
+    } else {
+        tn := _lnew_temp(ll)
+        ll = tn.l
+        mut timeout_val := 0 - 1
+        if has_default { timeout_val = 0 }
+        ll = _lemit(ll, new_inst(OpConst, tn.temp, timeout_val, 0, "", 0))
+        timeout_temp = tn.temp
+    }
     pack0 := _lnew_temp(ll)
     ll = pack0.l
     ll = _lemit(ll, new_inst(OpStore, pack0.temp, arr_nt.temp, 0, "", 0))
     pack1 := _lnew_temp(ll)
     ll = pack1.l
-    ll = _lemit(ll, new_inst(OpStore, pack1.temp, timeout_nt.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack1.temp, timeout_temp, 0, "", 0))
     sel_result := _lnew_str_temp(ll)  // 2 temps: {index, value}
     ll = sel_result.l
     ll = _lemit(ll, new_inst(OpCall, sel_result.temp, pack0.temp, 2, "_aria_chan_select", 0))
@@ -16509,8 +16548,21 @@ fn _lower_select(l: Lowerer) -> LT {
         ll = _lemit(ll, new_inst(OpLabel, 0, next_lbl.temp, 0, "", 0))
         ai = ai + 1
     }
-    // Default arm (index == -1)
-    if has_default && default_start > 0 {
+    // Default arm (index == -1) — also handles the `timeout(d)` arm since the
+    // runtime returns index=-1 when its timeout fires. timeout + default in the
+    // same select aren't well-defined; timeout wins.
+    if has_timeout && timeout_body_start > 0 {
+        saved_pos := ll.pos
+        ll = _lset_pos(ll, timeout_body_start)
+        if _lk(ll) == "\{" {
+            ll = _lower_block(ll)
+        } else {
+            arm_result := _lower_expr(ll)
+            ll = arm_result.l
+            ll = _lemit(ll, new_inst(OpStore, result_nt.temp, arm_result.temp, 0, "", 0))
+        }
+        ll = _lset_pos(ll, saved_pos)
+    } else if has_default && default_start > 0 {
         saved_pos := ll.pos
         ll = _lset_pos(ll, default_start)
         if _lk(ll) == "\{" {
