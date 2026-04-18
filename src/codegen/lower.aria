@@ -2478,9 +2478,25 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
     // --- Binding ---
 
     if nk == "Binding" {
-        // s1=name, b1=is_mut, c0=value
+        // s1=name, b1=is_mut, c0=value, s2=type-annotation-source-text
         result := _lower_expr_node(ll, node.c0)
         ll = result.l
+        // Propagate `[T]` annotation so empty-array-init `mut b: [i64] = []`
+        // and follow-up `b.append(...)` carry an Array type id (otherwise
+        // string interp formatter falls through to OpIntToStr and prints the
+        // pointer numerically).
+        if node.s2.len() > 2 && node.s2.charAt(0) == "[" && node.s2.charAt(node.s2.len() - 1) == "]" && _lget_type(ll, result.temp) == 0 {
+            elem_name := node.s2.substring(1, node.s2.len() - 1)
+            elem_tid := resolve_type_name(ll.store, elem_name)
+            if elem_tid == 12 {
+                ll = _lset_type(ll, result.temp, 13)
+            } else if elem_tid > 0 {
+                arr_info := TypeInfo{kind: TyArray, name: "", type_id: elem_tid, type_id2: 0, param_start: 0, param_count: 0}
+                sar := store_add_canonical(ll.store, arr_info)
+                ll = _lset_store(ll, sar.store)
+                ll = _lset_type(ll, result.temp, sar.id)
+            }
+        }
         // Tuple destructuring binding: s1="$tuple", s2=comma-separated names.
         // RHS is a Tuple allocation — FieldGet per element into separate env
         // slots so callers like `(lo, hi) := mm(...)` resolve `lo` and `hi`.
@@ -6368,6 +6384,7 @@ fn _lower_mut_binding(l: Lowerer) -> Lowerer {
     // Check for type annotation to infer str type
     mut is_str_type := false
     mut is_option_type := false
+    mut annotated_arr_tid := 0
     if _lk(ll) == ":" {
         ll = _ladv(ll)
         if _lk(ll) == "IDENT" && _lcur(ll).text == "str" {
@@ -6380,6 +6397,28 @@ fn _lower_mut_binding(l: Lowerer) -> Lowerer {
             probe := ll.pos + 1
             if probe < ll.tokens.len() && ll.tokens[probe].name == "?" {
                 is_option_type = true
+            }
+        }
+        // `[T]` array annotation — propagate so empty-array-init `mut b: [i64] = []`
+        // and subsequent `b.append(...)` results carry the correct array type.
+        // Without this, interp formatter falls through to OpIntToStr and the
+        // pointer is printed instead of `[1, 2, 3]`.
+        if _lk(ll) == "[" {
+            elem_pos := ll.pos + 1
+            close_pos := ll.pos + 2
+            if close_pos < ll.tokens.len() &&
+               ll.tokens[elem_pos].name == "IDENT" &&
+               ll.tokens[close_pos].name == "]" {
+                elem_name := ll.tokens[elem_pos].text
+                elem_tid := resolve_type_name(ll.store, elem_name)
+                if elem_tid == 12 {
+                    annotated_arr_tid = 13  // [str] sentinel
+                } else if elem_tid > 0 {
+                    arr_info := TypeInfo{kind: TyArray, name: "", type_id: elem_tid, type_id2: 0, param_start: 0, param_count: 0}
+                    sar := store_add_canonical(ll.store, arr_info)
+                    ll = _lset_store(ll, sar.store)
+                    annotated_arr_tid = sar.id
+                }
             }
         }
         ll = _skip_type_l(ll)
@@ -6396,6 +6435,9 @@ fn _lower_mut_binding(l: Lowerer) -> Lowerer {
     }
     if is_option_type {
         ll = _lset_type(ll, result.temp, 201)
+    }
+    if annotated_arr_tid > 0 && _lget_type(ll, result.temp) == 0 {
+        ll = _lset_type(ll, result.temp, annotated_arr_tid)
     }
     ll = _lenv_add(ll, name, result.temp)
     return ll
@@ -6972,6 +7014,34 @@ fn _lower_expr(l: Lowerer) -> LT {
                         did_module_call = true
                     }
                 } else {
+                    // Built-in primitive type constants: i64.MAX / i64.MIN / u8.MAX / ...
+                    // Without this they'd fall through to the unknown-identifier
+                    // warning and emit 0 (so `assert i64.MAX == i64.MAX` would
+                    // still pass with both sides being 0 — silently wrong).
+                    mut prim_const_val := 0
+                    mut prim_const_hit := false
+                    if recv_name == "i64" && method == "MAX" { prim_const_val = 9223372036854775807; prim_const_hit = true }
+                    if recv_name == "i64" && method == "MIN" { prim_const_val = 0 - 9223372036854775807 - 1; prim_const_hit = true }
+                    if recv_name == "i32" && method == "MAX" { prim_const_val = 2147483647; prim_const_hit = true }
+                    if recv_name == "i32" && method == "MIN" { prim_const_val = 0 - 2147483648; prim_const_hit = true }
+                    if recv_name == "i16" && method == "MAX" { prim_const_val = 32767; prim_const_hit = true }
+                    if recv_name == "i16" && method == "MIN" { prim_const_val = 0 - 32768; prim_const_hit = true }
+                    if recv_name == "i8"  && method == "MAX" { prim_const_val = 127; prim_const_hit = true }
+                    if recv_name == "i8"  && method == "MIN" { prim_const_val = 0 - 128; prim_const_hit = true }
+                    if recv_name == "u32" && method == "MAX" { prim_const_val = 4294967295; prim_const_hit = true }
+                    if recv_name == "u16" && method == "MAX" { prim_const_val = 65535; prim_const_hit = true }
+                    if recv_name == "u8"  && method == "MAX" { prim_const_val = 255; prim_const_hit = true }
+                    if (recv_name == "u32" || recv_name == "u16" || recv_name == "u8" || recv_name == "u64") && method == "MIN" { prim_const_val = 0; prim_const_hit = true }
+                    if prim_const_hit {
+                        nt := _lnew_temp(l)
+                        ll = nt.l
+                        ll = _lemit(ll, new_inst(OpConst, nt.temp, prim_const_val, 0, "", 0))
+                        ll = _lset_type(ll, nt.temp, 1)
+                        ll = _lset_pos(ll, l.pos + 3)
+                        left = nt.temp
+                        did_module_call = true
+                    }
+                    if did_module_call == false {
                     // Module-qualified const: `module.CONST`. The pre-scan
                     // registers lib consts by bare name, so look up `method`.
                     cv := _lconst_lookup(l, method)
@@ -6983,7 +7053,36 @@ fn _lower_expr(l: Lowerer) -> LT {
                         ll = _lset_pos(ll, l.pos + 3)
                         left = nt.temp
                         did_module_call = true
+                    } else {
+                        // Type-qualified no-data variant: `ParseError.Empty`
+                        // where the receiver isn't a binding. Construct the
+                        // variant directly so we don't emit a spurious
+                        // "unresolved identifier 'ParseError'" warning.
+                        mvtag := _variant_tag(l.registry, method)
+                        if mvtag > 0 {
+                            mvparent := _variant_parent(l.registry, method)
+                            if variant_data_count(mvparent, mvtag) == 0 {
+                                nt := _lnew_temp(l)
+                                ll = nt.l
+                                if sum_has_data(mvparent) {
+                                    alloc_sz := sum_alloc_size(mvparent)
+                                    ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, mvparent.name, 0))
+                                    st_id := _struct_type_id(ll.registry, mvparent.name)
+                                    if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+                                    tag_nt := _lnew_temp(ll)
+                                    ll = tag_nt.l
+                                    ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, mvtag, 0, "", 0))
+                                    ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                                } else {
+                                    ll = _lemit(ll, new_inst(OpConst, nt.temp, mvtag, 0, "", 0))
+                                }
+                                ll = _lset_pos(ll, l.pos + 3)
+                                left = nt.temp
+                                did_module_call = true
+                            }
+                        }
                     }
+                    }  // close: if did_module_call == false (after prim_const block)
                 }
             }
         }
@@ -17396,14 +17495,64 @@ fn _lower_match_node(l: Lowerer, node: Expr) -> LT {
                             sfi = sfi + 1
                         }
                     } else {
-                        // Tuple pattern: Circle(r), Rect(w, h)
+                        // Tuple pattern: Circle(r), Rect(w, h), Solid(Rgb(r,g,b))
                         mut dfi := 0
                         mut dslot := 1
                         while dfi < pat.list_count {
                             field_node := pool_get(ll.pool, pat.list_start + dfi)
                             fname := field_node.s1
+                            fkind := expr_kind_name(field_node.kind)
                             ftype := variant_field_type(dvparent, dvtag, dfi)
-                            if fname != "_" {
+                            // Detect nested variant pattern: inner is Ident or Call whose name is a variant.
+                            // Compare inner tag, recurse into sub-args.
+                            mut nested_vt := 0
+                            if fkind == "Ident" || fkind == "Call" || fkind == "MethodCall" {
+                                nested_vt = _variant_tag(ll.registry, fname)
+                            }
+                            if nested_vt > 0 {
+                                inner_nt := _lnew_temp(ll)
+                                ll = inner_nt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, inner_nt.temp, subj.temp, dslot, "", 0))
+                                inner_tag_val := _lnew_temp(ll)
+                                ll = inner_tag_val.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, inner_tag_val.temp, inner_nt.temp, 0, "_tag", 0))
+                                inner_tag_c := _lnew_temp(ll)
+                                ll = inner_tag_c.l
+                                ll = _lemit(ll, new_inst(OpConst, inner_tag_c.temp, nested_vt, 0, "", 0))
+                                inner_cmp := _lnew_temp(ll)
+                                ll = inner_cmp.l
+                                ll = _lemit(ll, new_inst(OpEq, inner_cmp.temp, inner_tag_val.temp, inner_tag_c.temp, "", 0))
+                                ll = _lemit(ll, new_inst(OpBranchFalse, 0, inner_cmp.temp, next_lbl.temp, "", 0))
+                                if (fkind == "Call" || fkind == "MethodCall") && field_node.list_count > 0 {
+                                    nv_parent := _variant_parent(ll.registry, fname)
+                                    mut nbi := 0
+                                    mut nslot := 1
+                                    while nbi < field_node.list_count {
+                                        nb_arg := pool_get(ll.pool, field_node.list_start + nbi)
+                                        nb_name := nb_arg.s1
+                                        nb_kind := expr_kind_name(nb_arg.kind)
+                                        nb_ft := variant_field_type(nv_parent, nested_vt, nbi)
+                                        if nb_kind == "Ident" && nb_name != "_" {
+                                            if nb_ft == 12 {
+                                                ibnt := _lnew_str_temp(ll)
+                                                ll = ibnt.l
+                                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, inner_nt.temp, nslot, "", 0))
+                                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp + 1, inner_nt.temp, nslot + 1, "", 0))
+                                                ll = _lset_type(ll, ibnt.temp, 12)
+                                                ll = _lenv_add(ll, nb_name, ibnt.temp)
+                                            } else {
+                                                ibnt := _lnew_temp(ll)
+                                                ll = ibnt.l
+                                                ll = _lemit(ll, new_inst(OpFieldGet, ibnt.temp, inner_nt.temp, nslot, "", 0))
+                                                if nb_ft > 0 { ll = _lset_type(ll, ibnt.temp, nb_ft) }
+                                                ll = _lenv_add(ll, nb_name, ibnt.temp)
+                                            }
+                                        }
+                                        if nb_ft == 12 { nslot = nslot + 2 } else { nslot = nslot + 1 }
+                                        nbi = nbi + 1
+                                    }
+                                }
+                            } else if fname != "_" {
                                 if ftype == 12 {
                                     fld_nt := _lnew_str_temp(ll)
                                     ll = fld_nt.l

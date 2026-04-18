@@ -1788,15 +1788,26 @@ fn _parse_mut(p: Parser) -> PR {
     mut pp := _adv(p)
     name := _cur(pp).text
     pp = _adv(pp)
+    // Capture the type annotation source so codegen can propagate it to the
+    // initial-value temp (needed for `mut b: [i64] = []` so subsequent
+    // .append() results inherit the array type for interp/format dispatch).
+    // Encoded as the raw source token sequence joined into s2.
+    mut type_str := ""
     if _ck(pp) == ":" {
         pp = _adv(pp)
+        ann_start := pp.pos
         pp = _skip_type(pp)
+        mut ann_i := ann_start
+        while ann_i < pp.pos {
+            type_str = type_str + pp.tokens[ann_i].text
+            ann_i = ann_i + 1
+        }
         pp = _expect(pp, "=")
     } else { pp = _expect(pp, ":=") }
     val := _parse_expr(pp, 0)
     val_idx := _pidx(val.p)
     pp = _padd(val.p, val.e)
-    PR{p: pp, e: Expr{kind: EkBinding, s1: name, s2: "", b1: true, b2: false,
+    PR{p: pp, e: Expr{kind: EkBinding, s1: name, s2: type_str, b1: true, b2: false,
                        c0: val_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
 }
 
@@ -2664,17 +2675,46 @@ fn _parse_pattern(p: Parser) -> PR {
         // Check for destructure: Name(x, y) or Name{x: p}
         if _ck(pp) == "(" {
             pp = _adv(pp)
-            list_start := _pidx(pp)
+            // Parse sub-patterns into local buffers FIRST (their nested
+            // children get padded to the pool during recursion). Only AFTER
+            // all subs are parsed do we padd the sub Exprs themselves
+            // consecutively — guarantees the outer's list_start indexes
+            // its direct children, not children of the first nested pattern.
+            mut sub_e_0 := mk_ident("", span)
+            mut sub_e_1 := mk_ident("", span)
+            mut sub_e_2 := mk_ident("", span)
+            mut sub_e_3 := mk_ident("", span)
+            mut sub_e_4 := mk_ident("", span)
+            mut sub_e_5 := mk_ident("", span)
+            mut sub_e_6 := mk_ident("", span)
+            mut sub_e_7 := mk_ident("", span)
             mut count := 0
             while _ck(pp) != ")" && _ck(pp) != "EOF" {
                 pp = _skip_nl(pp)
                 sub := _parse_pattern(pp)
-                pp = _padd(sub.p, sub.e)
+                pp = sub.p
+                if count == 0 { sub_e_0 = sub.e }
+                if count == 1 { sub_e_1 = sub.e }
+                if count == 2 { sub_e_2 = sub.e }
+                if count == 3 { sub_e_3 = sub.e }
+                if count == 4 { sub_e_4 = sub.e }
+                if count == 5 { sub_e_5 = sub.e }
+                if count == 6 { sub_e_6 = sub.e }
+                if count == 7 { sub_e_7 = sub.e }
                 count = count + 1
                 pp = _skip_nl(pp)
                 if _ck(pp) == "," { pp = _adv(pp) }
             }
             pp = _expect(pp, ")")
+            list_start := _pidx(pp)
+            if count > 0 { pp = _padd(pp, sub_e_0) }
+            if count > 1 { pp = _padd(pp, sub_e_1) }
+            if count > 2 { pp = _padd(pp, sub_e_2) }
+            if count > 3 { pp = _padd(pp, sub_e_3) }
+            if count > 4 { pp = _padd(pp, sub_e_4) }
+            if count > 5 { pp = _padd(pp, sub_e_5) }
+            if count > 6 { pp = _padd(pp, sub_e_6) }
+            if count > 7 { pp = _padd(pp, sub_e_7) }
             return PR{p: pp, e: Expr{kind: EkCall, s1: name, s2: "", b1: false, b2: false,
                                       c0: 0, c1: 0, c2: 0, list_start: list_start, list_count: count, span: span}}
         }
