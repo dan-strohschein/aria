@@ -599,6 +599,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     // Extended channel/task ops
     p = p.append("declare " + si64 + " @_aria_chan_try_recv(i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_chan_recv_ok(i64)" + nl)
+    p = p.append("declare void @_aria_scope_enter()" + nl)
+    p = p.append("declare void @_aria_scope_exit()" + nl)
     p = p.append("declare " + si64 + " @_aria_chan_select(i64, i64)" + nl)
     p = p.append("declare i64 @_aria_spawn2(i64, i64)" + nl)
     p = p.append("declare i64 @_aria_task_await2(i64)" + nl)
@@ -893,6 +895,8 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare void @_aria_chan_close(i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_chan_try_recv(i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_chan_recv_ok(i64)" + nl)
+    h = h.append("declare void @_aria_scope_enter()" + nl)
+    h = h.append("declare void @_aria_scope_exit()" + nl)
     h = h.append("declare " + si64 + " @_aria_chan_select(i64, i64)" + nl)
     h = h.append("declare i64 @_aria_mutex_new()" + nl)
     h = h.append("declare void @_aria_mutex_lock(i64)" + nl)
@@ -2828,6 +2832,16 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         ch_v := "%call_cc_ch_" + i2s(idx)
         gg = _lg_emit(gg, ch_v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_chan_close(i64 " + ch_v + ")")
+        return gg
+    }
+
+    if name == "_aria_scope_enter" {
+        gg = _lg_emit(gg, "call void @_aria_scope_enter()")
+        return gg
+    }
+
+    if name == "_aria_scope_exit" {
+        gg = _lg_emit(gg, "call void @_aria_scope_exit()")
         return gg
     }
 

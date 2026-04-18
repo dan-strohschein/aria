@@ -16307,60 +16307,23 @@ fn _lower_scope(l: Lowerer) -> LT {
     }
     ll = _ladv(ll)  // skip {
     ll = _lskip_nl(ll)
-    // Track task handles spawned within this scope (up to 8)
-    mut task_count := 0
-    mut task_0 := 0
-    mut task_1 := 0
-    mut task_2 := 0
-    mut task_3 := 0
-    mut task_4 := 0
-    mut task_5 := 0
-    mut task_6 := 0
-    mut task_7 := 0
-    mut last_temp := 0
+    // scope_enter pushes a thread-local frame. Every _aria_spawn inside
+    // registers its task with the current frame, so nested spawns (in
+    // for/while loops, in called functions) are tracked dynamically —
+    // the old 8-slot lexical tracker missed them. scope_exit awaits all
+    // tasks in the frame and pops. Task handles are idempotent-join
+    // trackers, so explicit `t.await()` + scope_exit don't double-join.
+    enter_nt := _lnew_temp(ll)
+    ll = enter_nt.l
+    ll = _lemit(ll, new_inst(OpCall, enter_nt.temp, 0, 0, "_aria_scope_enter", 0))
     while _lk(ll) != rb && _lk(ll) != "EOF" {
-        // Check if statement starts with spawn
-        if _lk(ll) == "spawn" {
-            result := _lower_spawn(ll)
-            ll = result.l
-            // Save task handle
-            if task_count == 0 { task_0 = result.temp }
-            if task_count == 1 { task_1 = result.temp }
-            if task_count == 2 { task_2 = result.temp }
-            if task_count == 3 { task_3 = result.temp }
-            if task_count == 4 { task_4 = result.temp }
-            if task_count == 5 { task_5 = result.temp }
-            if task_count == 6 { task_6 = result.temp }
-            if task_count == 7 { task_7 = result.temp }
-            task_count = task_count + 1
-            last_temp = result.temp
-        } else {
-            ll = _lower_stmt(ll)
-        }
+        ll = _lower_stmt(ll)
         ll = _lskip_nl(ll)
     }
     if _lk(ll) == rb { ll = _ladv(ll) }
-    // Auto-join: await all spawned tasks
-    mut ti := 0
-    while ti < task_count {
-        mut th := 0
-        if ti == 0 { th = task_0 }
-        if ti == 1 { th = task_1 }
-        if ti == 2 { th = task_2 }
-        if ti == 3 { th = task_3 }
-        if ti == 4 { th = task_4 }
-        if ti == 5 { th = task_5 }
-        if ti == 6 { th = task_6 }
-        if ti == 7 { th = task_7 }
-        // Only auto-join non-detached tasks (type 1, not type 18)
-        th_type := _lget_type(ll, th)
-        if th_type != 18 {
-            nt := _lnew_temp(ll)
-            ll = nt.l
-            ll = _lemit(ll, new_inst(OpCall, nt.temp, th, 1, "_aria_task_await", 1))
-        }
-        ti = ti + 1
-    }
+    exit_nt := _lnew_temp(ll)
+    ll = exit_nt.l
+    ll = _lemit(ll, new_inst(OpCall, exit_nt.temp, 0, 0, "_aria_scope_exit", 0))
     // Result is the last expression temp (or 0)
     result_nt := _lnew_temp(ll)
     ll = result_nt.l

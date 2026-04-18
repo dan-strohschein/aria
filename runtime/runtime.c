@@ -2446,6 +2446,63 @@ struct _aria_spawn_arg {
     aria_int env_ptr;
 };
 
+// Task handle wrapper. Wraps a pthread with a once-only join so both the
+// user's explicit `t.await()` and the enclosing scope's implicit join can
+// call await(handle) without double-joining or use-after-free.
+struct _aria_task_ref {
+    pthread_t thread;
+    pthread_mutex_t lock;
+    int joined;
+    aria_int result;
+};
+
+// Scope frame — a dynamic list of tasks spawned under `scope { ... }`.
+// _aria_scope_exit() awaits each entry in order. The stack is thread-local
+// so nested scopes in spawned threads don't tangle with the parent's list.
+struct _aria_scope_frame {
+    struct _aria_task_ref **tasks;
+    int count;
+    int cap;
+};
+
+#define _ARIA_SCOPE_MAX_DEPTH 64
+static _Thread_local struct _aria_scope_frame _aria_scope_stack[_ARIA_SCOPE_MAX_DEPTH];
+static _Thread_local int _aria_scope_top = 0;
+
+static void _aria_scope_register(struct _aria_task_ref *t) {
+    if (_aria_scope_top == 0) return;
+    struct _aria_scope_frame *f = &_aria_scope_stack[_aria_scope_top - 1];
+    if (f->count == f->cap) {
+        int ncap = f->cap == 0 ? 8 : f->cap * 2;
+        f->tasks = (struct _aria_task_ref **)realloc(f->tasks, ncap * sizeof(struct _aria_task_ref *));
+        f->cap = ncap;
+    }
+    f->tasks[f->count++] = t;
+}
+
+void _aria_scope_enter(void) {
+    if (_aria_scope_top >= _ARIA_SCOPE_MAX_DEPTH) return;
+    struct _aria_scope_frame *f = &_aria_scope_stack[_aria_scope_top++];
+    f->tasks = NULL;
+    f->count = 0;
+    f->cap = 0;
+}
+
+// Forward decl — implementation below.
+aria_int _aria_task_await(aria_int handle);
+
+void _aria_scope_exit(void) {
+    if (_aria_scope_top == 0) return;
+    struct _aria_scope_frame *f = &_aria_scope_stack[--_aria_scope_top];
+    for (int i = 0; i < f->count; i++) {
+        _aria_task_await((aria_int)f->tasks[i]);
+    }
+    free(f->tasks);
+    f->tasks = NULL;
+    f->count = 0;
+    f->cap = 0;
+}
+
 static void *_aria_spawn_trampoline(void *arg) {
     struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)arg;
     aria_int result = sa->fn_ptr(sa->env_ptr);
@@ -2458,23 +2515,36 @@ aria_int _aria_spawn(aria_int fn_ptr, aria_int env_ptr) {
     struct _aria_spawn_arg *sa = (struct _aria_spawn_arg *)malloc(sizeof(struct _aria_spawn_arg));
     sa->fn_ptr = (aria_int (*)(aria_int))fn_ptr;
     sa->env_ptr = env_ptr;
-    pthread_t *th = (pthread_t *)malloc(sizeof(pthread_t));
-    if (pthread_create(th, NULL, _aria_spawn_trampoline, sa) != 0) {
+    struct _aria_task_ref *t = (struct _aria_task_ref *)malloc(sizeof(struct _aria_task_ref));
+    pthread_mutex_init(&t->lock, NULL);
+    t->joined = 0;
+    t->result = 0;
+    if (pthread_create(&t->thread, NULL, _aria_spawn_trampoline, sa) != 0) {
         free(sa);
-        free(th);
+        free(t);
         return -1;
     }
-    return (aria_int)th;
+    _aria_scope_register(t);
+    return (aria_int)t;
 }
 
-// Wait for task to finish, return its result.
+// Wait for task to finish, return its result. Safe to call more than once
+// (second call returns the cached result without re-joining).
 aria_int _aria_task_await(aria_int handle) {
     if (handle <= 0) return -1;
-    pthread_t *th = (pthread_t *)handle;
-    void *retval = NULL;
-    pthread_join(*th, &retval);
-    free(th);
-    return (aria_int)retval;
+    struct _aria_task_ref *t = (struct _aria_task_ref *)handle;
+    pthread_mutex_lock(&t->lock);
+    if (!t->joined) {
+        pthread_mutex_unlock(&t->lock);
+        void *retval = NULL;
+        pthread_join(t->thread, &retval);
+        pthread_mutex_lock(&t->lock);
+        t->result = (aria_int)retval;
+        t->joined = 1;
+    }
+    aria_int r = t->result;
+    pthread_mutex_unlock(&t->lock);
+    return r;
 }
 
 // --- Channel (mutex-protected ring buffer) ---
