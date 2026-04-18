@@ -16368,6 +16368,12 @@ fn _lower_select(l: Lowerer) -> LT {
     mut arm_end_1 := 0
     mut arm_end_2 := 0
     mut arm_end_3 := 0
+    // Per-arm channel temps so the dispatch side can check chan elem type
+    // (TY_CHAN_STR=21) and unbox the {ptr,len} box into a str-temp pair.
+    mut ch_temp_0 := 0
+    mut ch_temp_1 := 0
+    mut ch_temp_2 := 0
+    mut ch_temp_3 := 0
     mut default_start := 0
     mut default_end := 0
     // timeout-arm state (ex09 form: `timeout(d) => body` or spec `after d => body`).
@@ -16438,6 +16444,10 @@ fn _lower_select(l: Lowerer) -> LT {
             if ch_count == 1 { bind_name_1 = bname }
             if ch_count == 2 { bind_name_2 = bname }
             if ch_count == 3 { bind_name_3 = bname }
+            if ch_count == 0 { ch_temp_0 = ch_expr.temp }
+            if ch_count == 1 { ch_temp_1 = ch_expr.temp }
+            if ch_count == 2 { ch_temp_2 = ch_expr.temp }
+            if ch_count == 3 { ch_temp_3 = ch_expr.temp }
             if _lk(ll) == "=>" { ll = _ladv(ll) }
             ll = _lskip_nl(ll)
             // Record arm body position
@@ -16518,8 +16528,24 @@ fn _lower_select(l: Lowerer) -> LT {
         if ai == 1 { bname = bind_name_1 }
         if ai == 2 { bname = bind_name_2 }
         if ai == 3 { bname = bind_name_3 }
+        mut arm_ch_temp := 0
+        if ai == 0 { arm_ch_temp = ch_temp_0 }
+        if ai == 1 { arm_ch_temp = ch_temp_1 }
+        if ai == 2 { arm_ch_temp = ch_temp_2 }
+        if ai == 3 { arm_ch_temp = ch_temp_3 }
+        mut bind_temp := val_nt.temp
+        if arm_ch_temp != 0 && _lget_type(ll, arm_ch_temp) == 21 {
+            // chan[str]: val_nt.temp points at the {ptr,len} box — unbox
+            // into a str-temp pair so the arm body sees a real str.
+            str_nt := _lnew_str_temp(ll)
+            ll = str_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp, val_nt.temp, 0, "_ptr", 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, str_nt.temp + 1, val_nt.temp, 1, "_len", 0))
+            ll = _lset_type(ll, str_nt.temp, 12)
+            bind_temp = str_nt.temp
+        }
         if bname != "" && bname != "_" {
-            ll = _lenv_add(ll, bname, val_nt.temp)
+            ll = _lenv_add(ll, bname, bind_temp)
         }
         // Lower arm body by re-positioning to saved tokens
         mut arm_s := 0
