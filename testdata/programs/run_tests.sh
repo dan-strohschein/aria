@@ -39,10 +39,20 @@ for f in "$DIR"/*.aria; do
         continue
     fi
 
-    # Skip tests with external requirements
+    # Skip tests with external requirements — unless the feature is
+    # explicitly enabled via ARIA_TEST_FEATURES="a,b,c".
     if [ -n "$test_requires" ]; then
-        SKIP=$((SKIP + 1))
-        continue
+        enabled=0
+        if [ -n "$ARIA_TEST_FEATURES" ]; then
+            IFS=',' read -ra _feats <<< "$ARIA_TEST_FEATURES"
+            for _f in "${_feats[@]}"; do
+                if [ "$_f" = "$test_requires" ]; then enabled=1; fi
+            done
+        fi
+        if [ "$enabled" -eq 0 ]; then
+            SKIP=$((SKIP + 1))
+            continue
+        fi
     fi
 
     # Determine build command

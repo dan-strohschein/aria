@@ -230,10 +230,53 @@ fn json_get_bool(v: JsonValue, key: str) -> bool {
 // JSON Parser
 // ============================================================
 
+// JsonError is raised by `decode`. `offset` is the byte index of the
+// error site; `line`/`col` are 1-based and derived from the source text.
+pub struct JsonError {
+    message: str
+    offset: i64
+    line: i64
+    col: i64
+}
+
+// Parse-state token. err_pos = -1 signals "no error so far"; any
+// non-negative value is the byte offset of the first failure and all
+// subsequent callers short-circuit on it.
 struct _JP {
     pool: _JPool
     pos: i64
     val: JsonValue
+    err_msg: str
+    err_pos: i64
+}
+
+fn _jp_ok(pool: _JPool, pos: i64, val: JsonValue) -> _JP {
+    _JP{pool: pool, pos: pos, val: val, err_msg: "", err_pos: 0 - 1}
+}
+
+fn _jp_err(pool: _JPool, pos: i64, msg: str) -> _JP {
+    // Error path returns a null sentinel so callers that ignore the
+    // error channel (json_parse) still get a valid JsonValue back.
+    sentinel := JsonValue{id: 0, pool: pool}
+    _JP{pool: pool, pos: pos, val: sentinel, err_msg: msg, err_pos: pos}
+}
+
+fn _jp_is_err(p: _JP) -> bool = p.err_pos >= 0
+
+fn _jp_pos_to_line_col(src: str, offset: i64) -> [i64] {
+    mut line := 1
+    mut col := 1
+    mut i := 0
+    while i < offset && i < src.len() {
+        if src.charAt(i) == "\n" {
+            line = line + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        i = i + 1
+    }
+    [0, line, col]
 }
 
 fn json_parse(input: str) -> JsonValue {
@@ -244,11 +287,34 @@ fn json_parse(input: str) -> JsonValue {
     return r.val
 }
 
+// decode: fallible parse. Rejects trailing garbage and reports the
+// first error with byte offset + line/col.
+pub fn decode(input: str) -> JsonValue!JsonError {
+    if input.len() == 0 {
+        return err(JsonError{message: "empty input", offset: 0, line: 1, col: 1})
+    }
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jp_value(pool, input, 0)
+    if _jp_is_err(r) {
+        lc := _jp_pos_to_line_col(input, r.err_pos)
+        return err(JsonError{message: r.err_msg, offset: r.err_pos, line: lc[1], col: lc[2]})
+    }
+    // Trailing non-whitespace after the value is an error.
+    tail := _jp_skip_ws(input, r.pos)
+    if tail < input.len() {
+        lc := _jp_pos_to_line_col(input, tail)
+        return err(JsonError{message: "trailing content after value", offset: tail, line: lc[1], col: lc[2]})
+    }
+    r.val
+}
+
+pub fn encode(v: JsonValue) -> str = json_emit(v)
+
 fn _jp_value(pool: _JPool, src: str, pos: i64) -> _JP {
     p := _jp_skip_ws(src, pos)
     if p >= src.len() {
-        r := _jv_null(pool)
-        return _JP{pool: r.pool, pos: p, val: r.val}
+        return _jp_err(pool, p, "unexpected end of input")
     }
     ch := src.charAt(p)
     lb := "\{"
@@ -257,21 +323,29 @@ fn _jp_value(pool: _JPool, src: str, pos: i64) -> _JP {
     if ch == lb { return _jp_object(pool, src, p) }
     if ch == "[" { return _jp_array(pool, src, p) }
     if ch == "t" {
-        r := _jv_bool(pool, true)
-        return _JP{pool: r.pool, pos: p + 4, val: r.val}
+        if p + 4 <= src.len() && src.substring(p, p + 4) == "true" {
+            r := _jv_bool(pool, true)
+            return _jp_ok(r.pool, p + 4, r.val)
+        }
+        return _jp_err(pool, p, "invalid literal; expected 'true'")
     }
     if ch == "f" {
-        r := _jv_bool(pool, false)
-        return _JP{pool: r.pool, pos: p + 5, val: r.val}
+        if p + 5 <= src.len() && src.substring(p, p + 5) == "false" {
+            r := _jv_bool(pool, false)
+            return _jp_ok(r.pool, p + 5, r.val)
+        }
+        return _jp_err(pool, p, "invalid literal; expected 'false'")
     }
     if ch == "n" {
-        r := _jv_null(pool)
-        return _JP{pool: r.pool, pos: p + 4, val: r.val}
+        if p + 4 <= src.len() && src.substring(p, p + 4) == "null" {
+            r := _jv_null(pool)
+            return _jp_ok(r.pool, p + 4, r.val)
+        }
+        return _jp_err(pool, p, "invalid literal; expected 'null'")
     }
     if ch == "-" || _jp_is_digit(ch) { return _jp_number(pool, src, p) }
 
-    r := _jv_null(pool)
-    return _JP{pool: r.pool, pos: p, val: r.val}
+    return _jp_err(pool, p, "unexpected character")
 }
 
 fn _jp_skip_ws(src: str, pos: i64) -> i64 {
@@ -285,13 +359,14 @@ fn _jp_skip_ws(src: str, pos: i64) -> i64 {
 }
 
 fn _jp_string(pool: _JPool, src: str, pos: i64) -> _JP {
+    start := pos
     mut p := pos + 1
     mut result := ""
     while p < src.len() {
         ch := src.charAt(p)
         if ch == "\"" {
             r := _jv_string(pool, result)
-            return _JP{pool: r.pool, pos: p + 1, val: r.val}
+            return _jp_ok(r.pool, p + 1, r.val)
         }
         if ch == "\\" {
             p = p + 1
@@ -313,8 +388,8 @@ fn _jp_string(pool: _JPool, src: str, pos: i64) -> _JP {
         }
         p = p + 1
     }
-    r := _jv_string(pool, result)
-    return _JP{pool: r.pool, pos: p, val: r.val}
+    // Reached end of input without closing quote.
+    _jp_err(pool, start, "unterminated string")
 }
 
 fn _jp_number(pool: _JPool, src: str, pos: i64) -> _JP {
@@ -342,13 +417,14 @@ fn _jp_number(pool: _JPool, src: str, pos: i64) -> _JP {
     text := src.substring(pos, p)
     if is_float {
         r := _jv_float(pool, text)
-        return _JP{pool: r.pool, pos: p, val: r.val}
+        return _jp_ok(r.pool, p, r.val)
     }
     r := _jv_int(pool, _jp_parse_int(text))
-    return _JP{pool: r.pool, pos: p, val: r.val}
+    return _jp_ok(r.pool, p, r.val)
 }
 
 fn _jp_object(pool: _JPool, src: str, pos: i64) -> _JP {
+    start := pos
     mut p := _jp_skip_ws(src, pos + 1)
     mut pl := pool
     rb := "\}"
@@ -357,60 +433,90 @@ fn _jp_object(pool: _JPool, src: str, pos: i64) -> _JP {
 
     if p < src.len() && src.charAt(p) == rb {
         r := _jv_object(pl, keys, val_ids)
-        return _JP{pool: r.pool, pos: p + 1, val: r.val}
+        return _jp_ok(r.pool, p + 1, r.val)
     }
     mut running := true
+    mut pending_err := _jp_ok(pl, p, JsonValue{id: 0, pool: pl})
     while running {
         p = _jp_skip_ws(src, p)
-        kr := _jp_string(pl, src, p)
-        pl = kr.pool
-        key := json_str_val(kr.val)
-        p = _jp_skip_ws(src, kr.pos)
-        if p < src.len() && src.charAt(p) == ":" { p = p + 1 }
-        vr := _jp_value(pl, src, p)
-        pl = vr.pool
-        p = vr.pos
-        keys = keys.append(key)
-        val_ids = val_ids.append(vr.val.id)
-        p = _jp_skip_ws(src, p)
-        if p < src.len() && src.charAt(p) == "," {
-            p = p + 1
-        } else {
+        if p >= src.len() {
+            pending_err = _jp_err(pl, start, "unterminated object")
             running = false
+        } else if src.charAt(p) != "\"" {
+            pending_err = _jp_err(pl, p, "expected string key in object")
+            running = false
+        } else {
+            kr := _jp_string(pl, src, p)
+            if _jp_is_err(kr) { pending_err = kr; running = false }
+            else {
+                pl = kr.pool
+                key := json_str_val(kr.val)
+                p = _jp_skip_ws(src, kr.pos)
+                if p >= src.len() || src.charAt(p) != ":" {
+                    pending_err = _jp_err(pl, p, "expected ':' after key")
+                    running = false
+                } else {
+                    p = p + 1
+                    vr := _jp_value(pl, src, p)
+                    if _jp_is_err(vr) { pending_err = vr; running = false }
+                    else {
+                        pl = vr.pool
+                        p = vr.pos
+                        keys = keys.append(key)
+                        val_ids = val_ids.append(vr.val.id)
+                        p = _jp_skip_ws(src, p)
+                        if p < src.len() && src.charAt(p) == "," { p = p + 1 }
+                        else { running = false }
+                    }
+                }
+            }
         }
     }
+    if _jp_is_err(pending_err) { return pending_err }
     p = _jp_skip_ws(src, p)
-    if p < src.len() && src.charAt(p) == rb { p = p + 1 }
+    if p >= src.len() {
+        return _jp_err(pl, start, "unterminated object")
+    }
+    if src.charAt(p) != rb {
+        return _jp_err(pl, p, "expected '}' or ',' in object")
+    }
+    p = p + 1
     r := _jv_object(pl, keys, val_ids)
-    return _JP{pool: r.pool, pos: p, val: r.val}
+    _jp_ok(r.pool, p, r.val)
 }
 
 fn _jp_array(pool: _JPool, src: str, pos: i64) -> _JP {
+    start := pos
     mut p := _jp_skip_ws(src, pos + 1)
     mut pl := pool
     mut ids := [0]
 
     if p < src.len() && src.charAt(p) == "]" {
         r := _jv_array(pl, ids)
-        return _JP{pool: r.pool, pos: p + 1, val: r.val}
+        return _jp_ok(r.pool, p + 1, r.val)
     }
     mut running := true
+    mut pending_err := _jp_ok(pl, p, JsonValue{id: 0, pool: pl})
     while running {
         vr := _jp_value(pl, src, p)
-        pl = vr.pool
-        p = vr.pos
-        ids = ids.append(vr.val.id)
-        p = _jp_skip_ws(src, p)
-        if p < src.len() && src.charAt(p) == "," {
-            p = p + 1
-        } else {
-            running = false
+        if _jp_is_err(vr) { pending_err = vr; running = false }
+        else {
+            pl = vr.pool
+            p = vr.pos
+            ids = ids.append(vr.val.id)
+            p = _jp_skip_ws(src, p)
+            if p < src.len() && src.charAt(p) == "," { p = p + 1 }
+            else { running = false }
         }
     }
+    if _jp_is_err(pending_err) { return pending_err }
     p = _jp_skip_ws(src, p)
-    if p < src.len() && src.charAt(p) == "]" { p = p + 1 }
+    if p >= src.len() || src.charAt(p) != "]" {
+        return _jp_err(pl, start, "unterminated array")
+    }
+    p = p + 1
     r := _jv_array(pl, ids)
-    return _JP{pool: r.pool, pos: p, val: r.val}
+    _jp_ok(r.pool, p, r.val)
 }
 
 fn _jp_parse_int(s: str) -> i64 {
@@ -559,4 +665,171 @@ fn json_new_string(s: str) -> JsonValue {
     pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
     r := _jv_string(pool, s)
     return r.val
+}
+
+// ---- Short-name aliases ----
+// These are the canonical public names used by decode/encode tests.
+// Keep them as single-line wrappers so there's one implementation.
+
+pub fn json_null() -> JsonValue = json_new_null()
+pub fn json_bool(b: bool) -> JsonValue = json_new_bool(b)
+pub fn json_int(n: i64) -> JsonValue = json_new_int(n)
+pub fn json_str(s: str) -> JsonValue = json_new_string(s)
+
+// ---- Empty containers ----
+
+pub fn json_obj() -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jv_object(pool, [""], [0])
+    r.val
+}
+
+pub fn json_arr() -> JsonValue {
+    pool := _jpool_init()
+    pool = _jpool_add(pool, JSON_NULL, 0, "", 0, 0)
+    r := _jv_array(pool, [0])
+    r.val
+}
+
+// ---- Container builders ----
+// Each JsonValue owns its own _JPool. Merging a value built in one
+// pool into a container in another requires copying the subtree.
+//
+// _jpool_copy_value walks the source value and re-allocates every
+// reachable node into `dst`, returning the new root id. This is the
+// single place pool-crossing is implemented; put/push both rely on it.
+
+struct _JVid {
+    pool: _JPool
+    id: i64
+}
+
+fn _jpool_copy_value(dst: _JPool, v: JsonValue) -> _JVid {
+    k := v.pool.kinds[v.id]
+    if k == JSON_NULL {
+        r := _jv_null(dst)
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_BOOL {
+        b := v.pool.ints[v.id] != 0
+        r := _jv_bool(dst, b)
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_INT {
+        r := _jv_int(dst, v.pool.ints[v.id])
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_FLOAT {
+        r := _jv_float(dst, v.pool.strs[v.id])
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_STRING {
+        r := _jv_string(dst, v.pool.strs[v.id])
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_ARRAY {
+        src := v.pool.strs[v.id]
+        mut acc := dst
+        mut new_ids := [0]
+        if src.len() > 0 {
+            parts := src.split(",")
+            mut i := 1
+            while i < parts.len() {
+                child := JsonValue{id: _jp_parse_int(parts[i]), pool: v.pool}
+                c := _jpool_copy_value(acc, child)
+                acc = c.pool
+                new_ids = new_ids.append(c.id)
+                i = i + 1
+            }
+        }
+        r := _jv_array(acc, new_ids)
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    if k == JSON_OBJECT {
+        encoded := v.pool.strs[v.id]
+        mut acc := dst
+        mut keys := [""]
+        mut vals := [0]
+        sep_idx := encoded.indexOf("\x00")
+        if sep_idx >= 0 {
+            keys_part := encoded.substring(0, sep_idx)
+            vals_part := encoded.substring(sep_idx + 1, encoded.len())
+            if keys_part.len() > 0 {
+                ks := keys_part.split("\x01")
+                vs := vals_part.split(",")
+                mut i := 1
+                while i < ks.len() {
+                    src_child := JsonValue{id: _jp_parse_int(vs[i]), pool: v.pool}
+                    c := _jpool_copy_value(acc, src_child)
+                    acc = c.pool
+                    keys = keys.append(ks[i])
+                    vals = vals.append(c.id)
+                    i = i + 1
+                }
+            }
+        }
+        r := _jv_object(acc, keys, vals)
+        return _JVid{pool: r.pool, id: r.val.id}
+    }
+    // Unknown kind: treat as null
+    r := _jv_null(dst)
+    _JVid{pool: r.pool, id: r.val.id}
+}
+
+// _jp_decode_object_pairs: decode the keys/vals storage of an object
+// into parallel arrays. Used by both the public builders and any
+// future mutators that need to round-trip pair lists.
+struct _JOP {
+    keys: [str]
+    vals: [i64]
+}
+
+fn _jp_decode_object_pairs(v: JsonValue) -> _JOP {
+    encoded := v.pool.strs[v.id]
+    mut keys := [""]
+    mut vals := [0]
+    sep_idx := encoded.indexOf("\x00")
+    if sep_idx >= 0 {
+        keys_part := encoded.substring(0, sep_idx)
+        vals_part := encoded.substring(sep_idx + 1, encoded.len())
+        if keys_part.len() > 0 {
+            ks := keys_part.split("\x01")
+            vs := vals_part.split(",")
+            mut i := 1
+            while i < ks.len() {
+                keys = keys.append(ks[i])
+                vals = vals.append(_jp_parse_int(vs[i]))
+                i = i + 1
+            }
+        }
+    }
+    _JOP{keys: keys, vals: vals}
+}
+
+pub fn json_obj_put(o: JsonValue, key: str, v: JsonValue) -> JsonValue {
+    pairs := _jp_decode_object_pairs(o)
+    copy := _jpool_copy_value(o.pool, v)
+    new_keys := pairs.keys.append(key)
+    new_vals := pairs.vals.append(copy.id)
+    r := _jv_object(copy.pool, new_keys, new_vals)
+    r.val
+}
+
+pub fn json_arr_push(a: JsonValue, v: JsonValue) -> JsonValue {
+    // Decode existing child ids from the array's storage.
+    encoded := a.pool.strs[a.id]
+    mut ids := [0]
+    if encoded.len() > 0 {
+        parts := encoded.split(",")
+        mut i := 1
+        while i < parts.len() {
+            ids = ids.append(_jp_parse_int(parts[i]))
+            i = i + 1
+        }
+    }
+    copy := _jpool_copy_value(a.pool, v)
+    new_ids := ids.append(copy.id)
+    r := _jv_array(copy.pool, new_ids)
+    r.val
 }
