@@ -42,3 +42,7 @@ struct Server {
 fn Server_listen_and_serve(self: Server) -> i64!str {
     0
 }
+
+fn Server_shutdown(self: Server, timeout: i64) -> i64!str {
+    0
+}
