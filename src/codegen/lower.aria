@@ -12462,7 +12462,14 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         if _lk(ll) == ")" { ll = _ladv(ll) }
         return LT{l: ll, temp: obj}
     }
-    // Unknown method — skip args, return 0
+    // Unknown method. If the receiver type is known, this violates the trait
+    // bound (no implicit fallback per spec pillar #5) — hard error + abort.
+    // Empty obj_sname means the receiver type couldn't be determined (e.g.,
+    // generic body lowered before monomorphization) — keep as warning.
+    if obj_sname != "" {
+        println("error: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
+        _ariaExit(1)
+    }
     println("warning: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
     while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
     if _lk(ll) == ")" { ll = _ladv(ll) }
