@@ -2024,6 +2024,30 @@ fn _parse_prefix(p: Parser) -> PR {
         span := _pspan(p)
         mut pp := _adv(p)
         lb := "\{"
+        // Channel constructor: chan[T]() or chan[T](cap)
+        // Emit EkChanNew{c0: elem_type_node, c1: cap_expr_node (0 for unbuffered)}
+        // so the lowerer can dispatch this even when the containing block
+        // is AST-walked (e.g. `entry`). Without this, the call lands as
+        // Call(Index(Ident("chan"), T), [cap]) which has no meaning.
+        if name == "chan" && _ck(pp) == "[" {
+            pp = _adv(pp)  // skip [
+            elem_ty := _parse_type(pp)
+            elem_idx := _pidx(elem_ty.p)
+            pp = _padd(elem_ty.p, elem_ty.e)
+            if _ck(pp) == "]" { pp = _adv(pp) }
+            mut cap_idx := 0
+            if _ck(pp) == "(" {
+                pp = _adv(pp)  // skip (
+                if _ck(pp) != ")" {
+                    cexpr := _parse_expr(pp, 0)
+                    cap_idx = _pidx(cexpr.p)
+                    pp = _padd(cexpr.p, cexpr.e)
+                }
+                if _ck(pp) == ")" { pp = _adv(pp) }
+            }
+            return PR{p: pp, e: Expr{kind: EkChanNew, s1: "", s2: "", b1: false, b2: false,
+                                       c0: elem_idx, c1: cap_idx, c2: 0, list_start: 0, list_count: 0, span: span}}
+        }
         // Only parse struct literal if name starts with uppercase (type names are PascalCase)
         if _ck(pp) == lb && _is_upper_start(name) { return _parse_struct_lit(pp, name, span) }
         // Method ref: Type::method — rewrite as qualified name Type_method

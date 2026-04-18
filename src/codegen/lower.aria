@@ -2073,6 +2073,30 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         return _lower_block_node_result(ll, node)
     }
 
+    // --- Concurrency (Spawn / Scope / Select / ChanNew / ChanRecv) ---
+    // These were added as AST kinds (Stage A) but the rich lowering logic
+    // lives in the token-walking helpers (_lower_spawn / _lower_scope /
+    // _lower_select, plus the `chan[T](cap)` special-case in _lower_primary).
+    // Rather than duplicate that logic here, we seek to the node's starting
+    // token (at the `spawn` / `scope` / `select` / `chan` keyword) and let
+    // the token dispatchers run. They advance pos past the construct on exit,
+    // which is exactly what the outer AST walker expects.
+    if nk == "Spawn" || nk == "Scope" || nk == "Select" {
+        tp := _find_tok_pos(ll, node.span.offset)
+        ll = _lset_pos(ll, tp)
+        if nk == "Spawn" { return _lower_spawn(ll) }
+        if nk == "Scope" { return _lower_scope(ll) }
+        return _lower_select(ll)
+    }
+    if nk == "ChanNew" || nk == "ChanRecv" {
+        // Re-lower at the token position — _lower_primary recognizes
+        // `chan[T](cap)` and the channel-recv `<-` operator (the latter
+        // only appears contextually inside select arms today).
+        tp := _find_tok_pos(ll, node.span.offset)
+        ll = _lset_pos(ll, tp)
+        return _lower_primary(ll)
+    }
+
     // --- If ---
 
     if nk == "If" {
@@ -16010,8 +16034,12 @@ fn _lower_spawn(l: Lowerer) -> LT {
 
     ll = _lfinish_func(ll)
 
-    // Restore outer function state at body_end.
-    ll = Lowerer{tokens: ll.tokens, pos: body_end, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
+    // Restore outer function state. Position stays at ll.pos — the thunk's
+    // body lowering advanced past the final `}` (block) or past the trailing
+    // `)` (call-expression), which is exactly where the outer caller expects
+    // to continue. Using the pre-scan `body_end` would rewind to the closing
+    // token and re-lower it as part of the outer expression.
+    ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
                  table: ll.table, file: ll.file, module: ll.module,
                  current_func: saved_func,
                  temp_counter: saved_temp, label_counter: saved_label,
