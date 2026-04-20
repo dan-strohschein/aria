@@ -51,7 +51,11 @@ fn _expect(p: Parser, expected: str) -> Parser {
     if _ck(p) == expected { return _adv(p) }
     tok := _cur(p)
     span := new_span("", tok.line, tok.col, tok.offset, tok.text.len())
-    Parser{tokens: p.tokens, pos: p.pos, pool: p.pool,
+    // On mismatch: record diagnostic AND advance one token so callers that
+    // re-enter _expect in a loop cannot spin on the same position.
+    next_pos := p.pos
+    if _ck(p) != "EOF" { next_pos = p.pos + 1 }
+    Parser{tokens: p.tokens, pos: next_pos, pool: p.pool,
            diagnostics: bag_add_error(p.diagnostics, E0001, "expected " + expected + ", got " + _ck(p), span)}
 }
 
