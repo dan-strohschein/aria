@@ -1557,9 +1557,11 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 return LT{l: ll, temp: nt.temp}
             }
         }
-        // Check for variant (tag-only sum type)
+        // Check for variant (tag-only sum type). `_variant_tag` returns 0
+        // for "not a variant" (1-based), so we must gate on `> 0` — using
+        // `>= 0` matched everything and masked fn-as-value references below.
         vtag := _variant_tag(ll.registry, name)
-        if vtag >= 0 {
+        if vtag > 0 {
             vparent := _variant_parent(ll.registry, name)
             if sum_has_data(vparent) {
                 // Data sum type variant — allocate struct with tag
@@ -19533,9 +19535,13 @@ fn _lower_trampolines(l: Lowerer) -> Lowerer {
                     }
                     pi = pi + 1
                 }
-                // Trampoline takes 1 extra arg (env_ptr) prepended
+                // Trampoline takes 1 extra arg (env_ptr) prepended.
+                // Normalize unit (14) to 0 so llvm.aria emits a void signature
+                // matching the `ret void` we emit for void user fns below.
                 total_args := 1 + abi_args
-                ll = _lset_func(ll, new_ir_func(tramp_name, total_args, sig.return_type))
+                mut tramp_ret := sig.return_type
+                if tramp_ret == 14 { tramp_ret = 0 }
+                ll = _lset_func(ll, new_ir_func(tramp_name, total_args, tramp_ret))
                 // Emit OpArg for each param (arg 0 = env_ptr, unused)
                 mut ai := 0
                 while ai < total_args {

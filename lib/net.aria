@@ -1,7 +1,7 @@
 mod net
 
 // ============================================================
-// HTTP types for Aria (stub)
+// HTTP types + minimal router/server for Aria
 // ============================================================
 
 struct Request {
@@ -18,19 +18,70 @@ struct Response {
     body:    str
 }
 
-struct Router {
-    routes: [str]
+// --- Response helpers ---
+
+fn response(status: i64, body: str) -> Response {
+    Response { status: status, headers: [""], body: body }
 }
 
-fn Router_new() -> Router = Router { routes: [""] }
+fn response_json(status: i64, json_body: str) -> Response {
+    hdrs := [""].append("Content-Type: application/json")
+    Response { status: status, headers: hdrs, body: json_body }
+}
+
+// --- Router ---
+//
+// Parallel arrays are used instead of `[(str, str, fn)]` because the current
+// codegen doesn't support tuple-in-array cleanly. Entry i in `methods`,
+// `paths`, and `handlers` together form one route.
+
+struct Router {
+    methods:  [str]
+    paths:    [str]
+    handlers: [fn(Request) -> Response]
+}
+
+fn Router_new() -> Router {
+    default := fn(r: Request) -> Response { response(404, "Not Found") }
+    Router { methods: [""], paths: [""], handlers: [default] }
+}
 
 fn Router_get(self: Router, path: str, handler: fn(Request) -> Response) -> Router {
-    Router { routes: self.routes.append("GET:" + path) }
+    Router {
+        methods:  self.methods.append("GET"),
+        paths:    self.paths.append(path),
+        handlers: self.handlers.append(handler),
+    }
 }
 
 fn Router_post(self: Router, path: str, handler: fn(Request) -> Response) -> Router {
-    Router { routes: self.routes.append("POST:" + path) }
+    Router {
+        methods:  self.methods.append("POST"),
+        paths:    self.paths.append(path),
+        handlers: self.handlers.append(handler),
+    }
 }
+
+// Look up a route. Returns the matching index (>=1) or 0 for miss.
+fn Router_find(self: Router, method: str, path: str) -> i64 {
+    mut i := 1
+    while i < self.methods.len() {
+        if self.methods[i] == method && self.paths[i] == path { return i }
+        i = i + 1
+    }
+    0
+}
+
+fn Router_dispatch(self: Router, req: Request) -> Response {
+    idx := Router_find(self, req.method, req.path)
+    if idx == 0 { return response(404, "Not Found") }
+    // Two-step assign is required: inline `self.handlers[idx](req)`
+    // currently miscompiles on the subscript-then-call path.
+    h := self.handlers[idx]
+    h(req)
+}
+
+// --- Server ---
 
 struct Server {
     addr:          str
@@ -39,7 +90,135 @@ struct Server {
     write_timeout: i64
 }
 
+// Parse an HTTP request from a raw wire string. Minimal: method, path,
+// optional `?query`, and body after the first CRLFCRLF.
+fn _parse_request(raw: str) -> Request {
+    mut method := ""
+    mut full_path := ""
+    mut body := ""
+    mut headers_raw := ""
+
+    header_end := raw.indexOf("\r\n\r\n")
+    mut header_section := raw
+    if header_end >= 0 {
+        header_section = raw.substring(0, header_end)
+        body = raw.substring(header_end + 4, raw.len())
+    }
+
+    first_end := header_section.indexOf("\r\n")
+    mut request_line := header_section
+    if first_end >= 0 {
+        request_line = header_section.substring(0, first_end)
+        headers_raw = header_section.substring(first_end + 2, header_section.len())
+    }
+
+    parts := request_line.split(" ")
+    if parts.len() > 0 { method = parts[0] }
+    if parts.len() > 1 { full_path = parts[1] }
+
+    mut path := full_path
+    mut query := ""
+    qidx := full_path.indexOf("?")
+    if qidx >= 0 {
+        path = full_path.substring(0, qidx)
+        query = full_path.substring(qidx + 1, full_path.len())
+    }
+
+    Request {
+        method: method,
+        path: path,
+        body: body,
+        headers: [headers_raw],
+        query: query,
+    }
+}
+
+fn _status_text(code: i64) -> str {
+    if code == 200 { return "OK" }
+    if code == 201 { return "Created" }
+    if code == 204 { return "No Content" }
+    if code == 400 { return "Bad Request" }
+    if code == 401 { return "Unauthorized" }
+    if code == 403 { return "Forbidden" }
+    if code == 404 { return "Not Found" }
+    if code == 405 { return "Method Not Allowed" }
+    if code == 500 { return "Internal Server Error" }
+    "OK"
+}
+
+fn _serialize_response(resp: Response) -> str {
+    mut r := "HTTP/1.1 " + resp.status.toStr() + " " + _status_text(resp.status) + "\r\n"
+    r = r + "Content-Length: " + resp.body.len().toStr() + "\r\n"
+    mut i := 1
+    while i < resp.headers.len() {
+        r = r + resp.headers[i] + "\r\n"
+        i = i + 1
+    }
+    r = r + "Connection: close\r\n\r\n"
+    r = r + resp.body
+    r
+}
+
+// Split "host:port" into host and port. Returns (host, port) via a small
+// helper struct because the current codegen doesn't lower tuple returns
+// on str+i64 reliably.
+struct _HostPort { host: str, port: i64 }
+
+fn _parse_addr(addr: str) -> _HostPort {
+    cidx := addr.indexOf(":")
+    if cidx < 0 { return _HostPort { host: addr, port: 80 } }
+    host := addr.substring(0, cidx)
+    port_str := addr.substring(cidx + 1, addr.len())
+    // Manual digit accumulation — avoids the Result-returning .to(i64)
+    // conversion wrapper and keeps this lib dependency-free.
+    mut port := 0
+    mut i := 0
+    while i < port_str.len() {
+        ch := port_str.charAt(i)
+        if ch == "0" { port = port * 10 }
+        else if ch == "1" { port = port * 10 + 1 }
+        else if ch == "2" { port = port * 10 + 2 }
+        else if ch == "3" { port = port * 10 + 3 }
+        else if ch == "4" { port = port * 10 + 4 }
+        else if ch == "5" { port = port * 10 + 5 }
+        else if ch == "6" { port = port * 10 + 6 }
+        else if ch == "7" { port = port * 10 + 7 }
+        else if ch == "8" { port = port * 10 + 8 }
+        else if ch == "9" { port = port * 10 + 9 }
+        i = i + 1
+    }
+    _HostPort { host: host, port: port }
+}
+
+// Bind and serve. Blocks until an accept error occurs. Returns 0 on
+// clean shutdown, non-zero on socket/bind/listen failure.
 fn Server_listen_and_serve(self: Server) -> i64!str {
+    hp := _parse_addr(self.addr)
+    sock := _ariaTcpSocket()
+    if sock < 0 { return err("failed to create socket") }
+    br := _ariaTcpBind(sock, hp.host, hp.port)
+    if br < 0 {
+        _ariaTcpClose(sock)
+        return err("failed to bind " + self.addr)
+    }
+    lr := _ariaTcpListen(sock, 128)
+    if lr < 0 {
+        _ariaTcpClose(sock)
+        return err("failed to listen")
+    }
+    loop {
+        client := _ariaTcpAccept(sock)
+        if client < 0 { break }
+        raw := _ariaTcpRead(client, 65536)
+        if raw.len() > 0 {
+            req := _parse_request(raw)
+            resp := Router_dispatch(self.router, req)
+            wire := _serialize_response(resp)
+            _ariaTcpWrite(client, wire)
+        }
+        _ariaTcpClose(client)
+    }
+    _ariaTcpClose(sock)
     0
 }
 
