@@ -778,7 +778,9 @@ fn _builtin_effect(name: str) -> str {
     if name == "_ariaExec" || name == "_ariaGetenv" || name == "_ariaExit" ||
        name == "_ariaTimeNow" || name == "_ariaSleep" { return "Io" }
     // Network operations
-    if name == "_ariaTcpConnect" || name == "_ariaTcpListen" || name == "_ariaTcpAccept" || name == "_ariaTcpRead" || name == "_ariaTcpWrite" || name == "_ariaTcpClose" { return "Net" }
+    if name == "_ariaTcpConnect" || name == "_ariaTcpListen" || name == "_ariaTcpAccept" || name == "_ariaTcpRead" || name == "_ariaTcpWrite" || name == "_ariaTcpClose" || name == "_ariaTcpAcceptTimeout" { return "Net" }
+    if name == "_ariaSignalInstall" || name == "_ariaSignalWait" || name == "_ariaSignalFired" { return "Io" }
+    if name == "_ariaPgFieldType" || name == "_ariaPgResultErrorField" { return "Net" }
     if name == "_ariaPgConnect" || name == "_ariaPgQuery" || name == "_ariaPgExec" || name == "_ariaPgClose" { return "Net" }
     if name == "_ariaHttpGet" || name == "_ariaHttpPost" || name == "_ariaHttpRequest" { return "Net" }
     // Async operations

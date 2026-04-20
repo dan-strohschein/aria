@@ -141,6 +141,7 @@ type DbError =
     | TxFailed
     | NotFound
     | Unavailable
+    | Constraint(str)
 
 struct Connection {
     handle: i64
@@ -231,4 +232,153 @@ fn query_all(tx: Transaction, sql: str) -> [str] with [Io] {
 fn close(conn: Connection) -> bool {
     _ariaPgClose(conn.handle)
     true
+}
+
+// ============================================================
+// Pool — connection pool for concurrent request handlers
+// ============================================================
+//
+// Tier 1: fakes pooling with a single shared libpq connection. Real pooling
+// (N pre-opened conns, round-robin handoff with a mutex) is a future upgrade
+// — the API is stable so callers won't change when it lands.
+
+struct Pool {
+    url:      str
+    max_conn: i64
+    handle:   i64
+}
+
+fn Pool_connect(url: str, max_conn: i64) -> Pool!DbError with [Io] {
+    if _ariaPgAvailable() == 0 { return err(DbError.Unavailable) }
+    h := _ariaPgConnect(url)
+    if h == 0 { return err(DbError.Unavailable) }
+    if _ariaPgStatus(h) != 1 {
+        _ariaPgClose(h)
+        return err(DbError.ConnectionFailed)
+    }
+    Pool { url: url, max_conn: max_conn, handle: h }
+}
+
+fn Pool_close(self: Pool) -> bool with [Io] {
+    _ariaPgClose(self.handle)
+    true
+}
+
+// Acquire a connection, run `body`, and release. With the Tier 1 single-
+// conn backing this is really "hand the singleton conn to the closure".
+// The generic payload T is fixed at Connection for now to sidestep callback
+// monomorphization edge cases — handlers return their domain value through
+// a second step (e.g. `with_conn(...).and_then(fn c -> User ...)` or
+// direct query_one calls on the conn they receive).
+fn Pool_with_conn(self: Pool, body: fn(Connection) -> Connection!DbError) -> Connection!DbError with [Io] {
+    conn := Connection { handle: self.handle }
+    body(conn)
+}
+
+// --- Connection row/exec API used by handlers ---
+
+// Execute a non-SELECT statement. Returns affected-row count on success.
+// Maps SQLSTATE "23xxx" (integrity constraint violation) to Constraint(msg)
+// so callers can return 409 without parsing error text themselves.
+fn Connection_exec(c: Connection, sql: str, params: [str]) -> i64!DbError with [Io] {
+    if c.handle == 0 { return err(DbError.ConnectionFailed) }
+    r := _ariaPgExecParams(c.handle, sql, params)
+    status := _ariaPgResultStatus(r)
+    if status != 0 {
+        sqlstate := _ariaPgResultErrorField(r, 67)  // 'C' = SQLSTATE
+        msg      := _ariaPgResultError(r)
+        _ariaPgClear(r)
+        if sqlstate.len() >= 2 && sqlstate.startsWith("23") {
+            return err(DbError.Constraint(msg))
+        }
+        return err(DbError.QueryFailed)
+    }
+    nrows := _ariaPgNrows(r)
+    _ariaPgClear(r)
+    nrows
+}
+
+// Query exactly one row and decode it via derive(Json). The row is rendered
+// as a JSON object and handed to the caller as a plain string — callers
+// invoke `<T>.parse(json_str)` (which maps to the derive-generated
+// `<T>_from_json`) to get the typed value. Keeps the FFI surface simple
+// without depending on generic-method monomorphization inside the stdlib.
+// Returns NotFound when the query produced zero rows, QueryFailed on SQL
+// errors.
+fn Connection_query_one_json(c: Connection, sql: str, params: [str]) -> str!DbError with [Io] {
+    if c.handle == 0 { return err(DbError.ConnectionFailed) }
+    r := _ariaPgExecParams(c.handle, sql, params)
+    status := _ariaPgResultStatus(r)
+    if status != 0 {
+        _ariaPgClear(r)
+        return err(DbError.QueryFailed)
+    }
+    nrows := _ariaPgNrows(r)
+    if nrows == 0 {
+        _ariaPgClear(r)
+        return err(DbError.NotFound)
+    }
+    json_str := _row_to_json(r, 0)
+    _ariaPgClear(r)
+    json_str
+}
+
+// --- Internal helpers ---
+
+// Build `{"col": val, "col2": val2}` from a PG result row. Uses PQftype
+// to decide bare vs. quoted: bool/int/float emit bare, everything else
+// (text, timestamp, uuid, etc.) goes through json.escape.
+fn _row_to_json(result: i64, row: i64) -> str with [Io] {
+    ncols := _ariaPgNcols(result)
+    mut out := "\{"
+    mut i := 0
+    while i < ncols {
+        if i > 0 { out = out + "," }
+        fname := _ariaPgFieldName(result, i)
+        ftype := _ariaPgFieldType(result, i)
+        out = out + "\"" + fname + "\":"
+        if _ariaPgIsNull(result, row, i) == 1 {
+            out = out + "null"
+        } else {
+            val := _ariaPgGetValue(result, row, i)
+            if _is_bare_pg_type(ftype) {
+                // bool comes back as "t"/"f" from libpq text mode
+                if ftype == 16 {
+                    if val == "t" { out = out + "true" } else { out = out + "false" }
+                } else {
+                    out = out + val
+                }
+            } else {
+                out = out + _json_quote(val)
+            }
+        }
+        i = i + 1
+    }
+    out + "\}"
+}
+
+fn _is_bare_pg_type(oid: i64) -> bool {
+    // bool (16), bytea-no (17 is bytea — NOT bare), int2 (21), int4 (23),
+    // int8 (20), float4 (700), float8 (701), numeric (1700 — pg delivers
+    // as text, but it's safe to inline when parseable as a JSON number).
+    oid == 16 || oid == 20 || oid == 21 || oid == 23 ||
+    oid == 700 || oid == 701 || oid == 1700
+}
+
+fn _json_quote(s: str) -> str {
+    // Escape per JSON spec: \\, \", \n, \r, \t. Control chars below 0x20
+    // aren't emitted by libpq for text columns in normal usage; skip them.
+    mut out := "\""
+    mut i := 0
+    while i < s.len() {
+        c := s.charAt(i)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    out + "\""
 }

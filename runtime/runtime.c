@@ -2414,6 +2414,106 @@ aria_int _aria_pg_is_null(aria_int r, aria_int row, aria_int col) { return 1; }
 void _aria_pg_clear(aria_int r) {}
 #endif  // ARIA_HAS_LIBPQ
 
+// --- Signals ---
+// Async-signal-safe: the handler only touches a sig_atomic_t array indexed
+// by signal number. _aria_signal_wait polls the flags with a short sleep so
+// the caller's thread blocks without burning a core.
+#ifndef _WIN32
+#include <signal.h>
+#include <poll.h>
+#endif
+
+#define ARIA_NSIG 64
+static volatile sig_atomic_t g_sig_fired[ARIA_NSIG];
+
+#ifndef _WIN32
+static void _aria_sig_handler(int sig) {
+    if (sig >= 0 && sig < ARIA_NSIG) g_sig_fired[sig] = 1;
+}
+#endif
+
+aria_int _aria_signal_install(aria_int sig) {
+#ifdef _WIN32
+    return -1;
+#else
+    if (sig < 0 || sig >= ARIA_NSIG) return -1;
+    struct sigaction sa;
+    sa.sa_handler = _aria_sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction((int)sig, &sa, NULL) < 0) return -1;
+    return 0;
+#endif
+}
+
+aria_int _aria_signal_fired(aria_int sig) {
+    if (sig < 0 || sig >= ARIA_NSIG) return 0;
+    if (g_sig_fired[sig]) { g_sig_fired[sig] = 0; return 1; }
+    return 0;
+}
+
+// Block until any signal in `sigs_arr` (Aria [i64] handle) is fired.
+// Returns the signal number that fired, or -1 on error.
+aria_int _aria_signal_wait(aria_int sigs_arr) {
+#ifdef _WIN32
+    return -1;
+#else
+    aria_int *header = (aria_int *)sigs_arr;
+    aria_int n = header[0];
+    aria_int *data = (aria_int *)header[2];
+    while (1) {
+        for (aria_int i = 0; i < n; i++) {
+            aria_int s = data[i];
+            if (s >= 0 && s < ARIA_NSIG && g_sig_fired[s]) {
+                g_sig_fired[s] = 0;
+                return s;
+            }
+        }
+        struct timespec ts = {0, 50 * 1000 * 1000};  // 50ms
+        nanosleep(&ts, NULL);
+    }
+#endif
+}
+
+// Accept with a millisecond timeout. Uses poll() on POSIX. Returns:
+//   >= 0 : new client fd
+//   -1   : error
+//   -2   : timeout (no connection within deadline)
+aria_int _aria_tcp_accept_timeout(aria_int fd, aria_int ms) {
+#ifdef _WIN32
+    return _aria_tcp_accept(fd);
+#else
+    struct pollfd pfd;
+    pfd.fd = (int)fd;
+    pfd.events = POLLIN;
+    int rc = poll(&pfd, 1, (int)ms);
+    if (rc == 0) return -2;
+    if (rc < 0) return -1;
+    return _aria_tcp_accept(fd);
+#endif
+}
+
+// --- Postgres extras (Tier 2 hooks; stubbed when libpq is absent) ---
+#ifdef ARIA_HAS_LIBPQ
+aria_int _aria_pg_field_type(aria_int result, aria_int col) {
+    if (result == 0) return 0;
+    return (aria_int)PQftype((PGresult *)result, (int)col);
+}
+struct _aria_str _aria_pg_result_error_field(aria_int result, aria_int code) {
+    if (result == 0) { struct _aria_str s = {"", 0}; return s; }
+    char *v = PQresultErrorField((PGresult *)result, (int)code);
+    if (!v) { struct _aria_str s = {"", 0}; return s; }
+    aria_int vlen = (aria_int)strlen(v);
+    char *r = (char *)malloc((size_t)(vlen + 1));
+    memcpy(r, v, (size_t)(vlen + 1));
+    struct _aria_str s = {r, vlen};
+    return s;
+}
+#else
+aria_int _aria_pg_field_type(aria_int r, aria_int c) { return 0; }
+struct _aria_str _aria_pg_result_error_field(aria_int r, aria_int code) { struct _aria_str s = {"", 0}; return s; }
+#endif
+
 // --- Concurrency ---
 
 #ifdef _WIN32

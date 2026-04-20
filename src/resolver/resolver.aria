@@ -253,6 +253,11 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaTcpClose", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTcpPeerAddr", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTcpSetTimeout", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaTcpAcceptTimeout", SkBuiltin)
+    // Signals
+    rr = _add_builtin(rr, "_ariaSignalInstall", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSignalWait", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaSignalFired", SkBuiltin)
     // PostgreSQL
     rr = _add_builtin(rr, "_ariaPgAvailable", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgConnect", SkBuiltin)
@@ -269,6 +274,8 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaPgGetValue", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgIsNull", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgClear", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaPgFieldType", SkBuiltin)
+    rr = _add_builtin(rr, "_ariaPgResultErrorField", SkBuiltin)
     // Concurrency
     rr = _add_builtin(rr, "_ariaSpawn", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTaskAwait", SkBuiltin)

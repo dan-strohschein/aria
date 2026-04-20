@@ -25,3 +25,28 @@ fn signal(name: str) -> i64 {
     if name == "SIGTERM" { return 15 }
     0
 }
+
+// --- Signal constants + async-signal-safe wait API ---
+// `signal_install(sig)` arms a handler that records delivery in a
+// sig_atomic_t flag; `signal_wait([sigs])` blocks with 50ms polling
+// until one of the listed signals fires, returning its number.
+// `signal_fired(sig)` is a non-blocking check-and-clear used by the
+// TCP accept loop in lib/net.aria to break gracefully.
+const SIGHUP:  i64 = 1
+const SIGINT:  i64 = 2
+const SIGQUIT: i64 = 3
+const SIGTERM: i64 = 15
+const SIGUSR1: i64 = 30
+const SIGUSR2: i64 = 31
+
+fn signal_install(sig: i64) -> i64 with [Io] {
+    _ariaSignalInstall(sig)
+}
+
+fn signal_wait(sigs: [i64]) -> i64 with [Io] {
+    _ariaSignalWait(sigs)
+}
+
+fn signal_fired(sig: i64) -> bool with [Io] {
+    _ariaSignalFired(sig) == 1
+}

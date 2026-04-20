@@ -1,0 +1,57 @@
+// test-files: ../../lib/net.aria router_path_params_test.aria
+// test-expect: router_path_params_test passed
+use net
+
+fn handle_root(r: net.Request) -> net.Response {
+    net.response(200, "root")
+}
+
+fn handle_user(r: net.Request) -> net.Response {
+    id := net.Request_param(r, "id")
+    net.response(200, "user:" + id)
+}
+
+fn handle_post_user(r: net.Request) -> net.Response {
+    id := net.Request_param(r, "id")
+    slug := net.Request_param(r, "slug")
+    net.response(200, "post:" + id + "/" + slug)
+}
+
+entry {
+    router := net.Router_new()
+    router = net.Router_get(router, "/",                      handle_root)
+    router = net.Router_get(router, "/users/:id",             handle_user)
+    router = net.Router_get(router, "/users/:id/posts/:slug", handle_post_user)
+
+    empty_params: [str] = []
+
+    // Literal root
+    r1 := net.Request{method: "GET", path: "/", body: "", headers: [""], query: "", params: empty_params}
+    resp1 := net.Router_dispatch(router, r1)
+    assert resp1.status == 200
+    assert resp1.body == "root"
+
+    // Single param capture
+    r2 := net.Request{method: "GET", path: "/users/42", body: "", headers: [""], query: "", params: empty_params}
+    resp2 := net.Router_dispatch(router, r2)
+    assert resp2.status == 200
+    assert resp2.body == "user:42"
+
+    // Multiple params
+    r3 := net.Request{method: "GET", path: "/users/7/posts/hello", body: "", headers: [""], query: "", params: empty_params}
+    resp3 := net.Router_dispatch(router, r3)
+    assert resp3.status == 200
+    assert resp3.body == "post:7/hello"
+
+    // Mismatched segment count misses
+    r4 := net.Request{method: "GET", path: "/users/42/edit", body: "", headers: [""], query: "", params: empty_params}
+    resp4 := net.Router_dispatch(router, r4)
+    assert resp4.status == 404
+
+    // Wrong method misses
+    r5 := net.Request{method: "POST", path: "/users/42", body: "", headers: [""], query: "", params: empty_params}
+    resp5 := net.Router_dispatch(router, r5)
+    assert resp5.status == 404
+
+    println("router_path_params_test passed")
+}

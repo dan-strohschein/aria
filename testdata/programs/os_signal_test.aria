@@ -1,0 +1,17 @@
+// test-expect: os_signal_test passed
+use os
+
+entry {
+    // Install SIGUSR1; non-blocking check should be false.
+    r := os.signal_install(os.SIGUSR1)
+    assert r == 0
+    assert os.signal_fired(os.SIGUSR1) == false
+
+    // Install SIGTERM + SIGINT as well — idempotent, no effect on USR1.
+    os.signal_install(os.SIGTERM)
+    os.signal_install(os.SIGINT)
+    assert os.signal_fired(os.SIGUSR1) == false
+    assert os.signal_fired(os.SIGTERM) == false
+
+    println("os_signal_test passed")
+}

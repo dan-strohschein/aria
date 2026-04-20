@@ -5066,6 +5066,12 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaTcpClose" { return "_aria_tcp_close" }
     if name == "_ariaTcpPeerAddr" { return "_aria_tcp_peer_addr" }
     if name == "_ariaTcpSetTimeout" { return "_aria_tcp_set_timeout" }
+    if name == "_ariaTcpAcceptTimeout" { return "_aria_tcp_accept_timeout" }
+    if name == "_ariaSignalInstall" { return "_aria_signal_install" }
+    if name == "_ariaSignalWait" { return "_aria_signal_wait" }
+    if name == "_ariaSignalFired" { return "_aria_signal_fired" }
+    if name == "_ariaPgFieldType" { return "_aria_pg_field_type" }
+    if name == "_ariaPgResultErrorField" { return "_aria_pg_result_error_field" }
     if name == "_ariaPgAvailable" { return "_aria_pg_available" }
     if name == "_ariaPgConnect" { return "_aria_pg_connect" }
     if name == "_ariaPgClose" { return "_aria_pg_close" }
@@ -5116,6 +5122,7 @@ fn _builtin_runtime_name(name: str) -> str {
 fn _builtin_return_type(name: str) -> i64 {
     if name == "_ariaReadFile" || name == "_ariaGetenv" || name == "_ariaTcpRead" ||
        name == "_ariaTcpPeerAddr" || name == "_ariaPgError" || name == "_ariaPgResultError" ||
+       name == "_ariaPgResultErrorField" ||
        name == "_ariaPgFieldName" || name == "_ariaPgGetValue" || name == "i2s" ||
        name == "_ariaSha256Hex" || name == "_ariaSbBuild" {
         return 12
@@ -9518,6 +9525,53 @@ fn _lower_primary(l: Lowerer) -> LT {
                 ll = _lset_type(ll, nt.temp, 1)
                 return LT{l: ll, temp: nt.temp}
             }
+            if name == "_ariaTcpAcceptTimeout" {
+                ll = _ladv(ll)  // skip (
+                fd_arg := _lower_expr(ll)
+                ll = fd_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                ms_arg := _lower_expr(ll)
+                ll = ms_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, fd_arg.temp, 2, "_aria_tcp_accept_timeout", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSignalInstall" {
+                ll = _ladv(ll)  // skip (
+                sig_arg := _lower_expr(ll)
+                ll = sig_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, sig_arg.temp, 1, "_aria_signal_install", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSignalWait" {
+                ll = _ladv(ll)  // skip (
+                arr_arg := _lower_expr(ll)
+                ll = arr_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, arr_arg.temp, 1, "_aria_signal_wait", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaSignalFired" {
+                ll = _ladv(ll)  // skip (
+                sig_arg := _lower_expr(ll)
+                ll = sig_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, sig_arg.temp, 1, "_aria_signal_fired", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
 
             // --- PostgreSQL ---
             if name == "_ariaPgAvailable" {
@@ -9706,6 +9760,34 @@ fn _lower_primary(l: Lowerer) -> LT {
                 nt := _lnew_temp(ll)
                 ll = nt.l
                 ll = _lemit(ll, new_inst(OpCall, nt.temp, arg.temp, 1, "_aria_pg_clear", 0))
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgFieldType" {
+                ll = _ladv(ll)  // skip (
+                res_arg := _lower_expr(ll)
+                ll = res_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                col_arg := _lower_expr(ll)
+                ll = col_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_arg.temp, 2, "_aria_pg_field_type", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
+            if name == "_ariaPgResultErrorField" {
+                ll = _ladv(ll)  // skip (
+                res_arg := _lower_expr(ll)
+                ll = res_arg.l
+                if _lk(ll) == "," { ll = _ladv(ll) }
+                code_arg := _lower_expr(ll)
+                ll = code_arg.l
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_str_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, res_arg.temp, 2, "_aria_pg_result_error_field", 12))
+                ll = _lset_type(ll, nt.temp, 12)
                 return LT{l: ll, temp: nt.temp}
             }
 

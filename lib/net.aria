@@ -10,6 +10,20 @@ struct Request {
     body:    str
     headers: [str]
     query:   str
+    // Path parameters captured by the router for `:name` segments. Stored
+    // as a flat [key, val, key, val, ...] to sidestep map-generics issues.
+    // Read via `Request_param(r, key)`; missing returns "".
+    params:  [str]
+}
+
+// Look up a path parameter by name. Returns "" on miss.
+fn Request_param(r: Request, key: str) -> str {
+    mut i := 0
+    while i + 1 < r.params.len() {
+        if r.params[i] == key { return r.params[i + 1] }
+        i = i + 2
+    }
+    ""
 }
 
 struct Response {
@@ -62,32 +76,88 @@ fn Router_post(self: Router, path: str, handler: fn(Request) -> Response) -> Rou
     }
 }
 
-// Look up a route. Returns the matching index (>=1) or 0 for miss.
-fn Router_find(self: Router, method: str, path: str) -> i64 {
-    mut i := 1
-    while i < self.methods.len() {
-        if self.methods[i] == method && self.paths[i] == path { return i }
+struct _RouteMatch {
+    idx:    i64
+    params: [str]
+}
+
+// Match a template segment like `:id` against a concrete path segment,
+// returning the captured (key, val) to append if it was a capture, else
+// empty strings when the segments match literally, else {"", ""} with
+// matched=false to signal mismatch.
+fn _match_segment(tmpl: str, part: str) -> _RouteMatch {
+    if tmpl.len() > 0 && tmpl.charAt(0) == ":" {
+        key := tmpl.substring(1, tmpl.len())
+        mut p: [str] = []
+        p = p.append(key)
+        p = p.append(part)
+        return _RouteMatch { idx: 1, params: p }
+    }
+    if tmpl == part { return _RouteMatch { idx: 1, params: [] } }
+    _RouteMatch { idx: 0, params: [] }
+}
+
+fn _match_route(template: str, path: str) -> _RouteMatch {
+    t_parts := template.split("/")
+    p_parts := path.split("/")
+    if t_parts.len() != p_parts.len() { return _RouteMatch { idx: 0, params: [] } }
+    mut captured: [str] = []
+    mut i := 0
+    while i < t_parts.len() {
+        m := _match_segment(t_parts[i], p_parts[i])
+        if m.idx == 0 { return _RouteMatch { idx: 0, params: [] } }
+        mut j := 0
+        while j < m.params.len() {
+            captured = captured.append(m.params[j])
+            j = j + 1
+        }
         i = i + 1
     }
-    0
+    _RouteMatch { idx: 1, params: captured }
+}
+
+// Look up a route. Returns the matching index (>=1) + captured params, or 0 for miss.
+fn Router_find(self: Router, method: str, path: str) -> _RouteMatch {
+    mut i := 1
+    while i < self.methods.len() {
+        if self.methods[i] == method {
+            m := _match_route(self.paths[i], path)
+            if m.idx == 1 { return _RouteMatch { idx: i, params: m.params } }
+        }
+        i = i + 1
+    }
+    _RouteMatch { idx: 0, params: [] }
 }
 
 fn Router_dispatch(self: Router, req: Request) -> Response {
-    idx := Router_find(self, req.method, req.path)
-    if idx == 0 { return response(404, "Not Found") }
+    m := Router_find(self, req.method, req.path)
+    if m.idx == 0 { return response(404, "Not Found") }
+    // Build a new Request with params populated.
+    req_with_params := Request {
+        method:  req.method,
+        path:    req.path,
+        body:    req.body,
+        headers: req.headers,
+        query:   req.query,
+        params:  m.params,
+    }
     // Two-step assign is required: inline `self.handlers[idx](req)`
     // currently miscompiles on the subscript-then-call path.
-    h := self.handlers[idx]
-    h(req)
+    h := self.handlers[m.idx]
+    h(req_with_params)
 }
 
 // --- Server ---
 
 struct Server {
-    addr:          str
-    router:        Router
-    read_timeout:  i64
-    write_timeout: i64
+    addr:             str
+    router:           Router
+    read_timeout:     i64
+    write_timeout:    i64
+    // Signals that trigger graceful shutdown. When any listed signal fires
+    // (via os.signal_install earlier), the accept loop breaks cleanly.
+    // Empty list = no signal handling; accept blocks indefinitely.
+    shutdown_signals: [i64]
 }
 
 // Parse an HTTP request from a raw wire string. Minimal: method, path,
@@ -124,12 +194,14 @@ fn _parse_request(raw: str) -> Request {
         query = full_path.substring(qidx + 1, full_path.len())
     }
 
+    empty_params: [str] = []
     Request {
         method: method,
         path: path,
         body: body,
         headers: [headers_raw],
         query: query,
+        params: empty_params,
     }
 }
 
@@ -206,8 +278,28 @@ fn Server_listen_and_serve(self: Server) -> i64!str {
         _ariaTcpClose(sock)
         return err("failed to listen")
     }
+    has_signals := self.shutdown_signals.len() > 0
     loop {
-        client := _ariaTcpAccept(sock)
+        // If shutdown signals are configured, accept with a 200ms timeout so
+        // the loop can check the fired-flag between iterations. Otherwise
+        // block indefinitely in the kernel (simpler / zero overhead).
+        mut client := 0 - 1
+        if has_signals {
+            client = _ariaTcpAcceptTimeout(sock, 200)
+            if client == 0 - 2 {
+                // Timeout — check shutdown signals.
+                mut si := 0
+                mut fired := false
+                while si < self.shutdown_signals.len() {
+                    if _ariaSignalFired(self.shutdown_signals[si]) == 1 { fired = true }
+                    si = si + 1
+                }
+                if fired { break }
+                continue
+            }
+        } else {
+            client = _ariaTcpAccept(sock)
+        }
         if client < 0 { break }
         raw := _ariaTcpRead(client, 65536)
         if raw.len() > 0 {
