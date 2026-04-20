@@ -1,1111 +1,2316 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
 @module codegen
 @lang aria
+@version 0.1.0
+@deps [checker, diagnostic, lexer, parser, resolver]
 @aid_version 0.2
-@purpose IR lowering, LLVM IR generation, ARM64 emission, and Mach-O linking
-@depends [lexer, parser, resolver, checker, diagnostic]
-
----
-
-@type IrOp
-@kind sum
-@variants
-  OpConst — Integer constant
-  OpConstStr — String constant reference
-  OpAdd — Integer addition
-  OpSub — Integer subtraction
-  OpMul — Integer multiplication
-  OpDiv — Integer division
-  OpMod — Integer modulo
-  OpNeg — Integer negation
-  OpEq — Equality comparison
-  OpNeq — Inequality comparison
-  OpLt — Less than
-  OpGt — Greater than
-  OpLte — Less than or equal
-  OpGte — Greater than or equal
-  OpAnd — Logical AND
-  OpOr — Logical OR
-  OpNot — Logical NOT
-  OpBitAnd — Bitwise AND
-  OpBitOr — Bitwise OR
-  OpBitXor — Bitwise XOR
-  OpShl — Shift left
-  OpShr — Shift right
-  OpCall — Direct function call
-  OpCallIndirect — Indirect function call (closures)
-  OpFnRef — Function reference (for closures)
-  OpRet — Return with value
-  OpRetVoid — Return void
-  OpArg — Function argument reference
-  OpLocal — Local variable reference
-  OpStore — Store to local
-  OpLoad — Load from local
-  OpFieldGet — Struct field read
-  OpFieldSet — Struct field write
-  OpAlloc — Heap allocation
-  OpArrayNew — Create new array
-  OpArrayGet — Array element read
-  OpArraySet — Array element write
-  OpArrayLen — Array length
-  OpArrayAppend — Array append
-  OpStrLen — String length
-  OpStrConcat — String concatenation
-  OpStrEq — String equality
-  OpStrCmp — Lexicographic string comparison returning -1/0/1 (for <,<=,>,>=)
-  OpStrCharAt — Character at index
-  OpStrSubstring — Substring extraction
-  OpStrContains — String contains check
-  OpStrStartsWith — String starts-with check
-  OpStrEndsWith — String ends-with check
-  OpStrIndexOf — String index-of
-  OpStrTrim — String trim
-  OpStrReplace — String replace
-  OpStrToLower — String to lowercase
-  OpStrToUpper — String to uppercase
-  OpStrSplit — String split
-  OpIntToStr — Integer to string conversion
-  OpStrToInt — String to integer conversion
-  OpMapNew — Create new map
-  OpMapSet — Map set key-value
-  OpMapGet — Map get by key
-  OpMapContains — Map contains key check
-  OpMapLen — Map length
-  OpMapKeys — Map keys
-  OpSetNew — Create new set
-  OpSetAdd — Set add element
-  OpSetContains — Set contains check
-  OpSetLen — Set length
-  OpSetValues — Set values
-  OpSetRemove — Set remove element
-  OpJump — Unconditional jump
-  OpBranchTrue — Branch if true
-  OpBranchFalse — Branch if false
-  OpLabel — Label definition
-  OpTraitObject — Create trait object
-  OpVtableCall — Virtual dispatch call
-  OpArraySlice — Array slice operation
-  OpNop — No operation
-@source_file src/codegen/ir.aria
-@source_line 11
-
----
-
-@type IrInst
-@kind struct
-@fields
-  op: IrOp — Operation code
-  dest: i64 — Destination temp register
-  arg1: i64 — First argument (temp or immediate)
-  arg2: i64 — Second argument
-  s1: str — String argument (function names, string constants)
-  type_id: i64 — Type ID for typed operations
-@source_file src/codegen/ir.aria
-@source_line 168
 
 ---
 
 @type IrFunc
 @kind struct
 @fields
-  name: str — Function name
-  param_count: i64 — Number of parameters
-  insts: [IrInst] — Instruction list
-  return_type: i64 — Return type ID
-  local_count: i64 — Number of local variables
-  temp_types: [i64] — Type IDs for temporaries
-@source_file src/codegen/ir.aria
-@source_line 185
+  name: str
+  param_count: i64
+  insts: [IrInst]
+  return_type: i64
+  local_count: i64
+  temp_types: [i64]
+@source_file ir.aria
+@source_line 199
+
+---
+
+@type IrInst
+@kind struct
+@fields
+  op: IrOp
+  dest: i64
+  arg1: i64
+  arg2: i64
+  s1: str
+  type_id: i64
+@source_file ir.aria
+@source_line 182
 
 ---
 
 @type IrModule
 @kind struct
 @fields
-  funcs: [IrFunc] — All functions
-  string_constants: [str] — String constant pool
-  entry_func: str — Entry function name
-  test_count: i64 — Number of test functions
-  test_names: [str] — Test function names
-  extern_names: [str] — External function names
-  extern_param_counts: [i64] — External function param counts
-  extern_ret_types: [str] — External function return types
-  extern_libs: [str] — External library names
-@source_file src/codegen/ir.aria
-@source_line 219
+  funcs: [IrFunc]
+  string_constants: [str]
+  entry_func: str
+  test_count: i64
+  test_names: [str]
+  extern_names: [str]
+  extern_param_counts: [i64]
+  extern_ret_types: [str]
+  extern_libs: [str]
+  closure_count: i64
+  fn_index_keys: [str]
+  fn_index_vals: [i64]
+  global_names: [str]
+  global_inits: [i64]
+@source_file ir.aria
+@source_line 245
 
 ---
 
-@type Lowerer
-@kind struct
-@fields
-  tokens: [Token] — Token stream
-  pos: i64 — Current position
-  store: TypeStore — Type store from checker
-  registry: TypeRegistry — Type registry from checker
-  treg: TraitRegistry — Trait registry from checker
-  pool: NodePool — AST node pool
-  table: SymbolTable — Symbol table
-  file: str — Source file path
-  module: IrModule — Module being built
-  current_func: IrFunc — Current function being lowered
-  temp_counter: i64 — Next temp register ID
-  label_counter: i64 — Next label ID
-  env_names: [str] — Variable name environment
-  env_slots: [i64] — Variable slot mapping
-  loop_start: i64 — Current loop start label
-  loop_end: i64 — Current loop end label
-@source_file src/codegen/lower.aria
-@source_line 19
+@type IrOp
+@kind union
+@variants
+  | OpConst
+  | OpConstStr
+  | OpAdd
+  | OpSub
+  | OpMul
+  | OpDiv
+  | OpMod
+  | OpNeg
+  | OpEq
+  | OpNeq
+  | OpLt
+  | OpGt
+  | OpLte
+  | OpGte
+  | OpAnd
+  | OpOr
+  | OpNot
+  | OpBitAnd
+  | OpBitOr
+  | OpBitXor
+  | OpShl
+  | OpShr
+  | OpCall
+  | OpCallIndirect
+  | OpFnRef
+  | OpRet
+  | OpRetVoid
+  | OpArg
+  | OpLocal
+  | OpStore
+  | OpLoad
+  | OpFieldGet
+  | OpFieldSet
+  | OpAlloc
+  | OpArrayNew
+  | OpArrayGet
+  | OpArraySet
+  | OpArrayLen
+  | OpArrayAppend
+  | OpArrayContains
+  | OpStrLen
+  | OpStrConcat
+  | OpStrEq
+  | OpStrCmp
+  | OpStrCharAt
+  | OpStrSubstring
+  | OpStrContains
+  | OpStrStartsWith
+  | OpStrEndsWith
+  | OpStrIndexOf
+  | OpStrTrim
+  | OpStrReplace
+  | OpStrToLower
+  | OpStrToUpper
+  | OpStrSplit
+  | OpStrIsAlphanum
+  | OpStrRepeat
+  | OpIntToStr
+  | OpStrToInt
+  | OpFloatToInt
+  | OpMapNew
+  | OpMapSet
+  | OpMapGet
+  | OpMapContains
+  | OpMapLen
+  | OpMapKeys
+  | OpSetNew
+  | OpSetAdd
+  | OpSetContains
+  | OpSetLen
+  | OpSetValues
+  | OpSetRemove
+  | OpJump
+  | OpBranchTrue
+  | OpBranchFalse
+  | OpLabel
+  | OpTraitObject
+  | OpVtableCall
+  | OpArraySlice
+  | OpGlobalLoad
+  | OpGlobalStore
+  | OpNop
+@source_file ir.aria
+@source_line 11
 
 ---
 
 @type LT
 @kind struct
 @fields
-  l: Lowerer — Updated lowerer state
-  temp: i64 — Result temp register
-@source_file src/codegen/lower.aria
-@source_line 67
-
----
-
-@type LlvmGen
-@kind struct
-@fields
-  parts: [str] — LLVM IR text parts
-  label_counter: i64 — Next label ID
-  last_was_term: bool — Whether last instruction was a terminator
-@source_file src/codegen/llvm.aria
-@source_line 176
+  l: Lowerer
+  temp: i64
+@source_file lower.aria
+@source_line 54
 
 ---
 
 @type LT_label
 @kind struct
 @fields
-  g: LlvmGen — Updated generator state
-  id: i64 — Generated label ID
-@source_file src/codegen/llvm.aria
+  g: LlvmGen
+  id: i64
+@source_file llvm.aria
+@source_line 252
+
+---
+
+@type LlvmGen
+@kind struct
+@fields
+  parts: [str]
+  label_counter: i64
+  last_was_term: bool
+  gc_is_root: [i64]
+  gc_slot: [i64]
+  gc_root_count: i64
+@source_file llvm.aria
 @source_line 198
 
 ---
 
-@type Emitter
+@type Lowerer
 @kind struct
 @fields
-  code: [i64] — Machine code words
-  label_offsets: [i64] — Label to code offset mapping
-  pending_branches: [PendingBranch] — Unresolved branches
-  pending_calls: [PendingCall] — Unresolved call targets
-  pending_strings: [PendingString] — Unresolved string references
-  frame_size: i64 — Stack frame size
-  temp_count: i64 — Number of temp registers
-@source_file src/codegen/emit.aria
-@source_line 11
-
----
-
-@type PendingBranch
-@kind struct
-@fields
-  code_index: i64 — Position in code array
-  label_id: i64 — Target label
-  is_cond: bool — Whether conditional
-  cond: i64 — Condition code
-  reg: i64 — Register for CBZ/CBNZ
-  is_cbz: bool — CBZ vs CBNZ
-@source_file src/codegen/emit.aria
-@source_line 21
-
----
-
-@type PendingCall
-@kind struct
-@fields
-  code_index: i64 — Position in code array
-  target_name: str — Target function name
-@source_file src/codegen/emit.aria
-@source_line 33
-
----
-
-@type PendingString
-@kind struct
-@fields
-  code_index: i64 — Position in code array
-  string_id: i64 — String constant ID
-  dest_temp: i64 — Destination temp
-  str_len: i64 — String length
-@source_file src/codegen/emit.aria
-@source_line 41
-
----
-
-@type RuntimeFunc
-@kind struct
-@fields
-  name: str — Runtime function name
-  code: [i64] — ARM64 machine code
-@source_file src/codegen/runtime.aria
-@source_line 14
-
----
-
-@fn generate_from_source
-@sig (source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag
-@calls [tokenize, build_decl_index, resolve, check, lower, generate_llvm_ir]
-@source_file src/codegen/codegen.aria
+  tokens: [Token]
+  pos: i64
+  store: TypeStore
+  registry: TypeRegistry
+  treg: TraitRegistry
+  pool: NodePool
+  table: SymbolTable
+  file: str
+  module: IrModule
+  current_func: IrFunc
+  temp_counter: i64
+  label_counter: i64
+  env_names: [str]
+  env_slots: [i64]
+  loop_start: i64
+  loop_end: i64
+  const_names: [str]
+  const_vals: [i64]
+  const_str_names: [str]
+  const_str_vals: [str]
+  temp_types: [i64]
+  is_result: [i64]
+  fn_error_type: i64
+  defer_starts: [i64]
+  defer_ends: [i64]
+@source_file lower.aria
 @source_line 19
 
 ---
 
-@fn generate_from_module
-@sig (m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag
-@source_file src/codegen/codegen.aria
-@source_line 49
+@fn _arith_op
+@sig (k: str) -> IrOp
+@params
+  k: str
+@source_file lower.aria
+@source_line 774
 
 ---
 
-@fn generate_from_sources
-@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
-@calls [generate_from_source]
-@source_file src/codegen/codegen.aria
-@source_line 121
+@fn _array_elem_type
+@purpose Get the element type of an array type.
+@sig (store: TypeStore, arr_type: i64) -> i64
+@params
+  store: TypeStore
+  arr_type: i64
+@calls [store_get, type_kind_name]
+@source_file lower.aria
+@source_line 504
 
 ---
 
-@fn check_sources
-@sig (files: [str]) -> DiagnosticBag
-@calls [tokenize, build_decl_index, resolve, check]
-@source_file src/codegen/codegen.aria
-@source_line 165
+@fn _base_generic_name
+@purpose Given a specialized struct name like "Pair_i64_str", return "Pair" by stripping the first `_` suffix whose base half nam
+@sig (name: str) -> str
+@params
+  name: str
+@calls [str.charAt, str.len, str.substring]
+@source_file lower.aria
+@source_line 12706
 
 ---
 
-@fn generate_tests_from_sources
-@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
-@source_file src/codegen/codegen.aria
-@source_line 194
+@fn _build_gc_tables
+@purpose Replaces the original O(temps × insts) recomputation that ran for EVERY _is_gc_root / _gc_slot_for_temp / _gc_root_coun
+@sig (f: IrFunc) -> LlvmGen
+@params
+  f: IrFunc
+@calls [IrFunc.insts.len, _get_temp_type, _is_definitely_scalar_op, ir_op_name]
+@source_file llvm.aria
+@source_line 269
 
 ---
 
-@fn generate_bench_from_sources
-@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag
-@source_file src/codegen/codegen.aria
-@source_line 228
+@fn _builtin_return_type
+@sig (name: str) -> i64
+@params
+  name: str
+@source_file lower.aria
+@source_line 5095
 
 ---
 
-@fn ir_op_name
-@sig (op: IrOp) -> str
-@source_file src/codegen/ir.aria
+@fn _builtin_runtime_name
+@sig (name: str) -> str
+@params
+  name: str
+@source_file lower.aria
+@source_line 5024
+
+---
+
+@fn _check_duplicate_decls
+@sig (index: DeclIndex) -> DiagnosticBag
+@params
+  index: DeclIndex
+@calls [DeclIndex.decls.len, bag_add_error, decl_kind_name, new_bag, new_span]
+@source_file codegen.aria
+@source_line 81
+
+---
+
+@fn _cmp_op
+@sig (k: str) -> IrOp
+@params
+  k: str
+@source_file lower.aria
+@source_line 783
+
+---
+
+@fn _cmp_or_logic_op
+@sig (k: str) -> IrOp
+@params
+  k: str
+@source_file lower.aria
+@source_line 798
+
+---
+
+@fn _collect_called_names
+@purpose Collect all function names called by OpCall instructions
+@sig (m: IrModule) -> [str]
+@params
+  m: IrModule
+@calls [IrModule.funcs.len, _name_in_list, ir_op_name]
+@source_file llvm.aria
+@source_line 381
+
+---
+
+@fn _expr_start_offset
+@purpose Find the leftmost token offset of an expression (for positioning token stream)
+@sig (pool: NodePool, idx: i64) -> i64
+@params
+  pool: NodePool
+  idx: i64
+@calls [_expr_start_offset, expr_kind_name, pool_get]
+@source_file lower.aria
+@source_line 1235
+
+---
+
+@fn _extract_str_result
+@sig (g: LlvmGen, res_name: str, dest: i64, idx: i64, prefix: str) -> LlvmGen
+@params
+  g: LlvmGen
+  res_name: str
+  dest: i64
+  idx: i64
+  prefix: str
+@calls [_lg_emit, _str_ret_type, _t, i2s]
+@source_file llvm.aria
+@source_line 2210
+
+---
+
+@fn _fall
+@sig (n: i64) -> str
+@params
+  n: i64
+@calls [i2s]
+@source_file llvm.aria
+@source_line 364
+
+---
+
+@fn _field_index
+@sig (reg: TypeRegistry, struct_name: str, field_name: str) -> i64
+@params
+  reg: TypeRegistry
+  struct_name: str
+  field_name: str
+@calls [reg_find_struct]
+@source_file lower.aria
+@source_line 12658
+
+---
+
+@fn _field_index_any
+@purpose Search all struct defs for a field name and return its memory-level slot index WARNING: Ambiguous if multiple structs ha
+@sig (reg: TypeRegistry, field_name: str) -> i64
+@params
+  reg: TypeRegistry
+  field_name: str
+@calls [TypeRegistry.struct_defs.len, _field_index]
+@source_file lower.aria
+@source_line 12681
+
+---
+
+@fn _find_tok_pos
+@purpose Find token position whose offset >= the given source offset.
+@sig (l: Lowerer, offset: i64) -> i64
+@params
+  l: Lowerer
+  offset: i64
+@calls [Lowerer.tokens.len]
+@source_file lower.aria
+@source_line 1216
+
+---
+
+@fn _fn_index_insert
+@purpose Insert (name, val) into the parallel sorted arrays at the correct position.
+@sig (keys: [str], vals: [i64], name: str, val: i64) -> IrModule
+@params
+  keys: [str]
+  vals: [i64]
+  name: str
+  val: i64
+@calls [_sentinel_func, keys.len]
+@source_file ir.aria
+@source_line 280
+
+---
+
+@fn _gc_frame_update
+@purpose After storing a value to a temp, update its GC frame slot if it's a root.
+@sig (g: LlvmGen, f: IrFunc, temp: i64, val: str, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  f: IrFunc
+  temp: i64
+  val: str
+  idx: i64
+@calls [_lg_emit, _lg_is_root, _lg_slot_for, i2s]
+@source_file llvm.aria
+@source_line 159
+
+---
+
+@fn _gc_root_count_for_func
+@sig (f: IrFunc) -> i64
+@params
+  f: IrFunc
+@calls [_is_gc_root]
+@source_file llvm.aria
+@source_line 146
+
+---
+
+@fn _gc_slot_for_temp
+@purpose Map a temp to its GC frame slot index (-1 if not a root)
+@sig (f: IrFunc, temp: i64) -> i64
+@params
+  f: IrFunc
+  temp: i64
+@calls [_is_gc_root]
+@source_file llvm.aria
+@source_line 172
+
+---
+
+@fn _gen_binop
+@sig (g: LlvmGen, llvm_op: str, inst: IrInst) -> LlvmGen
+@params
+  g: LlvmGen
+  llvm_op: str
+  inst: IrInst
+@calls [_lg_emit, _t, i2s]
+@source_file llvm.aria
+@source_line 2224
+
+---
+
+@fn _gen_call
+@sig (g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  m: IrModule
+  f: IrFunc
+  inst: IrInst
+  idx: i64
+@calls [_extract_str_result, _lg_emit, _lg_emit_term, _mangle_user_fn, _str_ret_type, _struct_i64_i64, _t, i2s, mod_find_func]
+@source_file llvm.aria
+@source_line 2339
+
+---
+
+@fn _gen_cmp
+@sig (g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  cmp_op: str
+  inst: IrInst
+  idx: i64
+@calls [_lg_emit, _t, i2s]
+@source_file llvm.aria
+@source_line 2236
+
+---
+
+@fn _gen_fcmp
+@sig (g: LlvmGen, cmp_op: str, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  cmp_op: str
+  inst: IrInst
+  idx: i64
+@calls [_lg_emit, _t, i2s]
+@source_file llvm.aria
+@source_line 3110
+
+---
+
+@fn _gen_float_binop
+@sig (g: LlvmGen, llvm_op: str, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  llvm_op: str
+  inst: IrInst
+  idx: i64
+@calls [_lg_emit, _t, i2s]
+@source_file llvm.aria
+@source_line 3092
+
+---
+
+@fn _gen_function
+@sig (m: IrModule, f: IrFunc) -> [str]
+@params
+  m: IrModule
+  f: IrFunc
+@calls [IrFunc.insts.len, IrModule.extern_names.len, _build_gc_tables, _gen_inst, _lb, _lg_emit_term, _lg_install_gc, _lg_new, _mangle_user_fn, _nl, _rb, _struct_i64_i64, _t, i2s, ir_op_name]
+@source_file llvm.aria
+@source_line 1063
+
+---
+
+@fn _gen_inst
+@sig (g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  m: IrModule
+  f: IrFunc
+  inst: IrInst
+  idx: i64
+@calls [_extract_str_result, _fall, _gc_frame_update, _gen_binop, _gen_call, _gen_cmp, _gen_fcmp, _gen_float_binop, _gen_str_binop_returning_i64, _gen_str_binop_returning_str, _lbl, _lg_emit, _lg_emit_label, _lg_emit_term, _lg_fresh_label, _lg_is_root, _lg_slot_for, _mangle_user_fn, _str_ret_type, _struct_i64_i64, _t, _v, i2s, ir_op_name]
+@source_file llvm.aria
+@source_line 1238
+
+---
+
+@fn _gen_str_binop_returning_i64
+@sig (g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  func_name: str
+  inst: IrInst
+  idx: i64
+@calls [_lg_emit, _t, i2s]
+@source_file llvm.aria
+@source_line 2271
+
+---
+
+@fn _gen_str_binop_returning_str
+@sig (g: LlvmGen, func_name: str, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  func_name: str
+  inst: IrInst
+  idx: i64
+@calls [_extract_str_result, _lg_emit, _str_ret_type, _t, i2s]
+@source_file llvm.aria
+@source_line 2250
+
+---
+
+@fn _gen_str_eq_inline
+@purpose Inline StrEq: length-first check avoids memcmp call for most comparisons
+@sig (g: LlvmGen, inst: IrInst, idx: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  inst: IrInst
+  idx: i64
+@calls [_lg_emit, _lg_emit_label, _lg_emit_term, _lg_fresh_label, _t, i2s]
+@source_file llvm.aria
+@source_line 2292
+
+---
+
+@fn _generate_llvm_ir_target
+@sig (m: IrModule, target: str) -> str
+@params
+  m: IrModule
+  target: str
+@calls [IrModule.extern_names.len, IrModule.funcs.len, IrModule.global_names.len, IrModule.string_constants.len, _collect_called_names, _gen_function, _join, _lb, _llvm_escape_str, _mangle_user_fn, _name_in_list, _nl, _rb, _str_ret_type, _struct_i64_i64, _target_datalayout, _target_triple, i2s]
+@source_file llvm.aria
+@source_line 447
+
+---
+
+@fn _generate_llvm_ir_to_file_target
+@purpose Streaming variant: write LLVM IR to file in chunks.
+@sig (m: IrModule, path: str, target: str) with [Fs]
+@params
+  m: IrModule
+  path: str
+  target: str
+@calls [IrModule.extern_names.len, IrModule.funcs.len, IrModule.global_names.len, IrModule.string_constants.len, _ariaAppendFile, _ariaWriteFile, _collect_called_names, _gen_function, _join, _lb, _llvm_escape_str, _mangle_user_fn, _name_in_list, _nl, _rb, _str_ret_type, _struct_i64_i64, _target_datalayout, _target_triple, i2s]
+@source_file llvm.aria
+@source_line 764
+@effects [Fs]
+
+---
+
+@fn _get_temp_type
+@sig (f: IrFunc, temp: i64) -> i64
+@params
+  f: IrFunc
+  temp: i64
+@calls [IrFunc.temp_types.len]
+@source_file llvm.aria
 @source_line 88
 
 ---
 
-@fn new_inst
-@sig (op: IrOp, dest: i64, arg1: i64, arg2: i64, s1: str, tid: i64) -> IrInst
-@source_file src/codegen/ir.aria
-@source_line 180
+@fn _ir_i2s
+@purpose Simple i64 to string for IR validation messages
+@sig (n: i64) -> str
+@params
+  n: i64
+@source_file ir.aria
+@source_line 490
 
 ---
 
-@fn new_ir_func
-@sig (name: str, param_count: i64, ret_type: i64) -> IrFunc
-@source_file src/codegen/ir.aria
-@source_line 197
+@fn _is_cont_l
+@purpose Expression continuation check
+@sig (k: str) -> bool
+@params
+  k: str
+@source_file lower.aria
+@source_line 813
 
 ---
 
-@fn func_add_inst
-@sig (f: IrFunc, inst: IrInst) -> IrFunc
-@source_file src/codegen/ir.aria
-@source_line 200
+@fn _is_def_op
+@sig (op: IrOp) -> bool
+@params
+  op: IrOp
+@calls [ir_op_name]
+@source_file ir.aria
+@source_line 411
 
 ---
 
-@fn func_set_locals
-@sig (f: IrFunc, count: i64) -> IrFunc
-@source_file src/codegen/ir.aria
-@source_line 205
+@fn _is_definitely_scalar_op
+@purpose Determine if a temp is definitely scalar by checking its defining IR instruction.
+@sig (op: str) -> bool
+@params
+  op: str
+@source_file llvm.aria
+@source_line 101
 
 ---
 
-@fn func_set_temp_types
-@sig (f: IrFunc, types: [i64]) -> IrFunc
-@source_file src/codegen/ir.aria
-@source_line 210
+@fn _is_float_type
+@sig (t: i64) -> bool
+@params
+  t: i64
+@source_file lower.aria
+@source_line 810
 
 ---
 
-@fn func_inst_count
-@sig (f: IrFunc) -> i64
-@source_file src/codegen/ir.aria
-@source_line 215
-
----
-
-@fn new_ir_module
-@sig () -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 232
-
----
-
-@fn mod_add_func
-@sig (m: IrModule, f: IrFunc) -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 236
-
----
-
-@fn mod_add_string
-@sig (m: IrModule, s: str) -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 240
-
----
-
-@fn mod_add_extern
-@sig (m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 244
-
----
-
-@fn mod_set_entry
-@sig (m: IrModule, name: str) -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 249
-
----
-
-@fn mod_add_test
-@sig (m: IrModule, name: str) -> IrModule
-@source_file src/codegen/ir.aria
-@source_line 253
-
----
-
-@fn mod_find_string
-@sig (m: IrModule, s: str) -> i64
-@source_file src/codegen/ir.aria
-@source_line 257
-
----
-
-@fn mod_func_count
-@sig (m: IrModule) -> i64
-@source_file src/codegen/ir.aria
-@source_line 266
-
----
-
-@fn mod_find_func
-@sig (m: IrModule, name: str) -> IrFunc
-@source_file src/codegen/ir.aria
-@source_line 268
-
----
-
-@fn _lskip_pub
-@sig (l: Lowerer) -> Lowerer
-@source_file src/codegen/lower.aria
+@fn _is_gc_root
+@purpose Check if a temp is a potential GC root (not definitely scalar)
+@sig (f: IrFunc, temp: i64) -> bool
+@params
+  f: IrFunc
+  temp: i64
+@calls [IrFunc.insts.len, _get_temp_type, _is_definitely_scalar_op, ir_op_name]
+@source_file llvm.aria
 @source_line 114
+
+---
+
+@fn _is_jump_op
+@sig (op: IrOp) -> bool
+@params
+  op: IrOp
+@calls [ir_op_name]
+@source_file ir.aria
+@source_line 408
+
+---
+
+@fn _is_named_type
+@purpose Check if a type_id represents a named/struct type (not a builtin)
+@sig (store: TypeStore, tid: i64) -> bool
+@params
+  store: TypeStore
+  tid: i64
+@calls [store_get, type_kind_name]
+@source_file lower.aria
+@source_line 531
+
+---
+
+@fn _is_option_or_result_type
+@sig (store: TypeStore, tid: i64) -> bool
+@params
+  store: TypeStore
+  tid: i64
+@calls [TypeStore.types.len, store_get, type_kind_name]
+@source_file lower.aria
+@source_line 630
+
+---
+
+@fn _is_option_type
+@purpose True when tid refers specifically to an Option type.
+@sig (store: TypeStore, tid: i64) -> bool
+@params
+  store: TypeStore
+  tid: i64
+@calls [TypeStore.types.len, store_get, type_kind_name]
+@source_file lower.aria
+@source_line 640
+
+---
+
+@fn _is_pipeline_method
+@purpose Array/iterator pipeline ops whose implementations live only in the token-based _lower_method_call.
+@sig (method: str) -> bool
+@params
+  method: str
+@source_file lower.aria
+@source_line 304
+
+---
+
+@fn _is_str_array_type
+@purpose Check if a type_id from the store represents [str] (array of strings)
+@sig (store: TypeStore, tid: i64) -> bool
+@params
+  store: TypeStore
+  tid: i64
+@calls [store_get, type_kind_name]
+@source_file lower.aria
+@source_line 515
+
+---
+
+@fn _is_struct_type
+@sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> bool
+@params
+  store: TypeStore
+  reg: TypeRegistry
+  tid: i64
+@calls [reg_find_struct, store_get, type_kind_name]
+@source_file lower.aria
+@source_line 648
 
 ---
 
 @fn _is_trait_object_type
 @sig (store: TypeStore, tid: i64) -> bool
-@source_file src/codegen/lower.aria
-@source_line 321
+@params
+  store: TypeStore
+  tid: i64
+@calls [TypeStore.types.len, type_kind_name]
+@source_file lower.aria
+@source_line 523
 
 ---
 
-@fn _lower_derive_display
-@sig (l: Lowerer, def: StructDef) -> Lowerer
-@source_file src/codegen/lower.aria
-@source_line 11036
+@fn _join
+@purpose Join string array into one string.
+@sig (parts: [str]) -> str
+@params
+  parts: [str]
+@calls [parts.len]
+@source_file llvm.aria
+@source_line 24
 
 ---
 
-@fn _lower_derive_default
-@sig (l: Lowerer, def: StructDef) -> Lowerer
-@source_file src/codegen/lower.aria
-@source_line 11080
+@fn _ladd_const
+@sig (l: Lowerer, name: str, val: i64) -> Lowerer
+@params
+  l: Lowerer
+  name: str
+  val: i64
+@calls [Lowerer.const_names.append, Lowerer.const_vals.append]
+@source_file lower.aria
+@source_line 420
 
 ---
 
-@fn _lower_derive_ord
-@sig (l: Lowerer, def: StructDef) -> Lowerer
-@source_file src/codegen/lower.aria
-@source_line 11113
+@fn _ladd_const_str
+@sig (l: Lowerer, name: str, val: str) -> Lowerer
+@params
+  l: Lowerer
+  name: str
+  val: str
+@calls [Lowerer.const_str_names.append, Lowerer.const_str_vals.append]
+@source_file lower.aria
+@source_line 432
 
 ---
 
-@fn _lower_derive_hash
-@sig (l: Lowerer, def: StructDef) -> Lowerer
-@source_file src/codegen/lower.aria
-@source_line 11204
+@fn _ladv
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@source_file lower.aria
+@source_line 89
+
+---
+
+@fn _lb
+@purpose Brace helpers (Aria requires escaped braces in strings)
+@sig () -> str
+@source_file llvm.aria
+@source_line 13
+
+---
+
+@fn _lbl
+@sig (n: i64) -> str
+@params
+  n: i64
+@calls [i2s]
+@source_file llvm.aria
+@source_line 363
+
+---
+
+@fn _lconst_has
+@sig (l: Lowerer, name: str) -> bool
+@params
+  l: Lowerer
+  name: str
+@calls [Lowerer.const_names.len]
+@source_file lower.aria
+@source_line 483
+
+---
+
+@fn _lconst_lookup
+@sig (l: Lowerer, name: str) -> i64
+@params
+  l: Lowerer
+  name: str
+@calls [Lowerer.const_names.len]
+@source_file lower.aria
+@source_line 465
+
+---
+
+@fn _lconst_str_has
+@sig (l: Lowerer, name: str) -> bool
+@params
+  l: Lowerer
+  name: str
+@calls [Lowerer.const_str_names.len]
+@source_file lower.aria
+@source_line 492
+
+---
+
+@fn _lconst_str_lookup
+@sig (l: Lowerer, name: str) -> str
+@params
+  l: Lowerer
+  name: str
+@calls [Lowerer.const_str_names.len]
+@source_file lower.aria
+@source_line 474
+
+---
+
+@fn _lcur
+@sig (l: Lowerer) -> Token
+@params
+  l: Lowerer
+@calls [Lowerer.tokens.len]
+@source_file lower.aria
+@source_line 79
+
+---
+
+@fn _lemit
+@sig (l: Lowerer, inst: IrInst) -> Lowerer
+@params
+  l: Lowerer
+  inst: IrInst
+@calls [func_add_inst]
+@source_file lower.aria
+@source_line 190
+
+---
+
+@fn _lenv_add
+@sig (l: Lowerer, name: str, slot: i64) -> Lowerer
+@params
+  l: Lowerer
+  name: str
+  slot: i64
+@calls [Lowerer.env_names.append, Lowerer.env_slots.append]
+@source_file lower.aria
+@source_line 256
+
+---
+
+@fn _lenv_lookup
+@sig (l: Lowerer, name: str) -> i64
+@params
+  l: Lowerer
+  name: str
+@calls [Lowerer.env_names.len]
+@source_file lower.aria
+@source_line 268
+
+---
+
+@fn _lenv_restore
+@sig (l: Lowerer, names: [str], slots: [i64]) -> Lowerer
+@params
+  l: Lowerer
+  names: [str]
+  slots: [i64]
+@source_file lower.aria
+@source_line 444
+
+---
+
+@fn _lenv_truncate
+@purpose Truncate the env back to a given size.
+@sig (l: Lowerer, new_len: i64) -> Lowerer
+@params
+  l: Lowerer
+  new_len: i64
+@calls [Lowerer.env_names.len]
+@source_file lower.aria
+@source_line 279
+
+---
+
+@fn _lfinish_func
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_sentinel_func, func_set_locals, func_set_temp_types, mod_add_func]
+@source_file lower.aria
+@source_line 228
+
+---
+
+@fn _lg_emit
+@sig (g: LlvmGen, line: str) -> LlvmGen
+@params
+  g: LlvmGen
+  line: str
+@calls [LlvmGen.parts.append]
+@source_file llvm.aria
+@source_line 211
+
+---
+
+@fn _lg_emit_label
+@sig (g: LlvmGen, label: str) -> LlvmGen
+@params
+  g: LlvmGen
+  label: str
+@calls [LlvmGen.parts.append]
+@source_file llvm.aria
+@source_line 219
+
+---
+
+@fn _lg_emit_term
+@sig (g: LlvmGen, line: str) -> LlvmGen
+@params
+  g: LlvmGen
+  line: str
+@calls [LlvmGen.parts.append]
+@source_file llvm.aria
+@source_line 215
+
+---
+
+@fn _lg_fresh_label
+@sig (g: LlvmGen) -> LT_label
+@params
+  g: LlvmGen
+@source_file llvm.aria
+@source_line 223
+
+---
+
+@fn _lg_install_gc
+@purpose Install pre-computed GC tables on the LlvmGen.
+@sig (g: LlvmGen, is_root: [i64], slot: [i64], count: i64) -> LlvmGen
+@params
+  g: LlvmGen
+  is_root: [i64]
+  slot: [i64]
+  count: i64
+@source_file llvm.aria
+@source_line 231
+
+---
+
+@fn _lg_is_root
+@purpose O(1) cached lookup — replaces the O(insts) _is_gc_root(f, temp) call.
+@sig (g: LlvmGen, temp: i64) -> bool
+@params
+  g: LlvmGen
+  temp: i64
+@calls [LlvmGen.gc_is_root.len]
+@source_file llvm.aria
+@source_line 237
+
+---
+
+@fn _lg_new
+@sig () -> LlvmGen
+@source_file llvm.aria
+@source_line 207
+
+---
+
+@fn _lg_slot_for
+@purpose O(1) cached lookup — replaces the O(temps × insts) _gc_slot_for_temp(f, temp).
+@sig (g: LlvmGen, temp: i64) -> i64
+@params
+  g: LlvmGen
+  temp: i64
+@calls [LlvmGen.gc_slot.len]
+@source_file llvm.aria
+@source_line 245
+
+---
+
+@fn _lget_type
+@sig (l: Lowerer, temp: i64) -> i64
+@params
+  l: Lowerer
+  temp: i64
+@calls [Lowerer.temp_types.len]
+@source_file lower.aria
+@source_line 723
+
+---
+
+@fn _lis_result
+@sig (l: Lowerer, temp: i64) -> bool
+@params
+  l: Lowerer
+  temp: i64
+@calls [Lowerer.is_result.len]
+@source_file lower.aria
+@source_line 764
+
+---
+
+@fn _lk
+@sig (l: Lowerer) -> str
+@params
+  l: Lowerer
+@calls [_lcur]
+@source_file lower.aria
+@source_line 87
+
+---
+
+@fn _llvm_escape_str
+@sig (s: str) -> str
+@params
+  s: str
+@calls [str.charAt, str.len]
+@source_file llvm.aria
+@source_line 58
+
+---
+
+@fn _lnew_label
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@source_file lower.aria
+@source_line 175
+
+---
+
+@fn _lnew_str_temp
+@purpose Helper: allocate 2 consecutive temp slots for a string fat pointer (ptr + len)
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [_lnew_temp]
+@source_file lower.aria
+@source_line 457
+
+---
+
+@fn _lnew_temp
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@source_file lower.aria
+@source_line 157
+
+---
+
+@fn _lower_additive
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [_arith_op, _is_float_type, _ladv, _lemit, _lget_type, _lk, _lnew_str_temp, _lnew_temp, _lower_multiplicative, _lset_type, new_inst]
+@source_file lower.aria
+@source_line 6802
+
+---
+
+@fn _lower_array_head
+@purpose Shared impl for `.first()` / `.last()`.
+@sig (l: Lowerer, obj: i64, want_first: bool) -> LT
+@params
+  l: Lowerer
+  obj: i64
+  want_first: bool
+@calls [_array_elem_type, _lemit, _lget_type, _lnew_label, _lnew_temp, _lset_store, _lset_type, new_inst, store_add_canonical]
+@source_file lower.aria
+@source_line 330
+
+---
+
+@fn _lower_assign_node
+@sig (l: Lowerer, node: Expr) -> LT
+@params
+  l: Lowerer
+  node: Expr
+@calls [_field_index, _field_index_any, _lemit, _lenv_lookup, _lget_type, _lower_expr_node, _lset_type, _struct_name_for_type, expr_kind_name, mod_find_global, new_inst, pool_get]
+@source_file lower.aria
+@source_line 4295
+
+---
+
+@fn _lower_bench
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lcur, _lemit, _lfinish_func, _lk, _lower_block, _lset_func, _lset_mod, i2s, mod_add_string, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5430
+
+---
+
+@fn _lower_blanket_method_specialized
+@purpose Lower a specific impl method — scans forward from current pos to find it Lower a blanket impl method specialized to a 
+@sig (l: Lowerer, raw_name: str, sig: FnSig, concrete_type: str, concrete_tid: i64) -> Lowerer
+@params
+  l: Lowerer
+  raw_name: str
+  sig: FnSig
+  concrete_type: str
+  concrete_tid: i64
+@calls [FnSig.param_names.len, FnSig.param_types.len, _is_str_array_type, _ladv, _lemit, _lenv_add, _lfinish_func, _lget_type, _lk, _lnew_str_temp, _lnew_temp, _lower_expr, _lower_fn_body, _lset_error_type, _lset_func, _lset_pos, _lset_type, _lskip_nl, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5755
+
+---
+
+@fn _lower_block
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_emit_drops_scoped, _ladv, _lk, _lower_stmt, _lskip_nl]
+@source_file lower.aria
+@source_line 6195
+
+---
+
+@fn _lower_block_node_result
+@purpose Lower a block node, returning the last expression's temp.
+@sig (l: Lowerer, node: Expr) -> LT
+@params
+  l: Lowerer
+  node: Expr
+@calls [_emit_defers, _emit_drops_scoped, _expr_start_offset, _find_tok_pos, _lemit, _lget_type, _lnew_temp, _lower_expr_node, _lset_pos, _lskip_nl, expr_kind_name, new_inst, pool_get]
+@source_file lower.aria
+@source_line 1343
+
+---
+
+@fn _lower_bodies
+@sig (l: Lowerer, index: DeclIndex) -> Lowerer
+@params
+  l: Lowerer
+  index: DeclIndex
+@calls [_ladv, _lk, _lower_bench, _lower_entry_ast, _lower_extern, _lower_fixture, _lower_fn_d, _lower_impl_d, _lower_test, _lset_pos, _lskip_nl, _lskip_pub, decl_index_get, decl_index_len, decl_kind_name]
+@source_file lower.aria
+@source_line 937
+
+---
+
+@fn _lower_bodies_skip_entry
+@purpose Like _lower_bodies but skips entry blocks (for test mode)
+@sig (l: Lowerer, index: DeclIndex) -> Lowerer
+@params
+  l: Lowerer
+  index: DeclIndex
+@calls [_ladv, _lk, _lower_bench, _lower_extern, _lower_fixture, _lower_fn_d, _lower_impl_d, _lower_test, _lset_pos, _lskip_nl, _lskip_pub, decl_index_get, decl_index_len, decl_kind_name]
+@source_file lower.aria
+@source_line 993
+
+---
+
+@fn _lower_call_args
+@sig (l: Lowerer, callee: i64) -> LT
+@params
+  l: Lowerer
+  callee: i64
+@calls [_ladv, _lk, _lower_expr, _lskip_nl]
+@source_file lower.aria
+@source_line 12642
+
+---
+
+@fn _lower_call_node
+@sig (l: Lowerer, node: Expr) -> LT
+@params
+  l: Lowerer
+  node: Expr
+@calls [_builtin_return_type, _builtin_runtime_name, _expr_start_offset, _find_tok_pos, _is_float_type, _is_newtype, _lemit, _lenv_lookup, _lget_type, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_expr_node, _lower_primary, _lower_string_const, _lset_is_result, _lset_mod, _lset_pos, _lset_reg, _lset_store, _lset_type, _resolve_generic_bindings, _struct_type_id, _substitute_typevars, _variant_parent, _variant_tag, fn_is_generic, mk_result_type, mod_add_string, mod_find_string, new_fn_sig, new_inst, pool_get, reg_add_fn, reg_add_mono, reg_find_fn, reg_find_mono_by_generic, reg_find_struct, store_add_canonical, store_get, sum_alloc_size, type_info_type_id, type_kind_name, variant_data_count, variant_field_type]
+@source_file lower.aria
+@source_line 4349
+
+---
+
+@fn _lower_comparison
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [_cmp_op, _is_float_type, _is_option_or_result_type, _is_option_type, _is_struct_type, _ladv, _lemit, _lget_type, _lis_result, _lk, _lnew_label, _lnew_temp, _lower_additive, _lower_struct_eq, _lset_type, _struct_name_for_type, new_inst, store_get]
+@source_file lower.aria
+@source_line 6844
+
+---
+
+@fn _lower_conversion
+@purpose Lower type conversion: .to[Type]() or .trunc[Type]()
+@sig (l: Lowerer, obj: i64, method: str, target: str) -> LT
+@params
+  l: Lowerer
+  obj: i64
+  method: str
+  target: str
+@calls [_lemit, _lget_type, _lnew_label, _lnew_temp, _lset_is_result, _lset_type, new_inst]
+@source_file lower.aria
+@source_line 10812
+
+---
+
+@fn _lower_entry
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lemit, _lfinish_func, _lk, _lnew_temp, _lower_block, _lset_func, _lset_mod, mod_set_entry, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5273
+
+---
+
+@fn _lower_entry_ast
+@sig (l: Lowerer, decl: DeclInfo) -> Lowerer
+@params
+  l: Lowerer
+  decl: DeclInfo
+@calls [_ladv, _lemit, _lfinish_func, _lk, _lnew_temp, _lower_block, _lower_block_node_result, _lset_func, _lset_mod, _lset_pos, expr_kind_name, mod_set_entry, new_inst, new_ir_func, pool_get]
+@source_file lower.aria
+@source_line 5233
+
+---
+
+@fn _lower_expr
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [Lowerer.tokens.len, _arith_op, _array_elem_type, _cmp_op, _emit_defers, _emit_result_null_guard, _field_index, _field_index_any, _field_type_id, _field_type_id_any, _is_float_type, _is_option_or_result_type, _is_option_type, _is_struct_type, _ladv, _lconst_lookup, _lcur, _lemit, _lenv_add, _lenv_lookup, _lget_type, _lis_result, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_additive, _lower_atom, _lower_call_args, _lower_comparison, _lower_conversion, _lower_expr, _lower_expr_result, _lower_method_call, _lower_module_call_tokens, _lower_multiplicative, _lower_primary, _lower_stmt, _lower_struct_eq, _lset_is_result, _lset_mod, _lset_pos, _lset_reg, _lset_type, _lskip_nl, _parse_int_literal, _struct_field_count, _struct_name_for_type, _struct_type_id, _tuple_slot, _type_name_suffix, _variant_parent, _variant_tag, fn_is_generic, mod_add_string, mod_find_string, new_inst, reg_add_bound_fn_value_ref, reg_find_field, reg_find_fn, reg_find_struct, store_get, sum_alloc_size, sum_has_data, tuple_elem_type, type_info_type_id, type_kind_name, variant_data_count, variant_field_type]
+@source_file lower.aria
+@source_line 6986
+
+---
+
+@fn _lower_expr_node
+@purpose Main AST expression dispatcher
+@sig (l: Lowerer, idx: i64) -> LT
+@params
+  l: Lowerer
+  idx: i64
+@calls [_arith_op, _array_elem_type, _base_generic_name, _cmp_op, _emit_defers, _emit_result_null_guard, _field_index, _field_index_any, _field_type_id, _field_type_id_any, _find_tok_pos, _is_float_type, _is_option_or_result_type, _is_option_type, _is_pipeline_method, _is_str_array_type, _is_struct_type, _ladv, _lconst_lookup, _lconst_str_lookup, _lcur, _lemit, _lenv_add, _lenv_lookup, _lenv_truncate, _lget_type, _lis_result, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_assign_node, _lower_block_node_result, _lower_call_node, _lower_closure_node, _lower_conversion, _lower_expr, _lower_expr_node, _lower_for_channel, _lower_for_range_node, _lower_for_range_parts, _lower_interpolated_string, _lower_match_node, _lower_method_call, _lower_method_with_args, _lower_primary, _lower_scope, _lower_select, _lower_spawn, _lower_stmt, _lower_string_const, _lower_struct_eq, _lset_is_result, _lset_loop, _lset_mod, _lset_pos, _lset_reg, _lset_store, _lset_type, _lskip_nl, _parse_duration, _parse_int_literal, _parse_size, _resolve_generic_call_name, _struct_field_count, _struct_name_for_type, _struct_type_id, _tuple_slot, _type_from_suffix, _type_name_suffix_l, _unary_op, _variant_parent, _variant_tag, _warn_unresolved, expr_kind_name, fn_is_generic, i2s, mk_tuple_type, mod_add_string, mod_find_global, mod_find_string, new_fn_sig, new_inst, new_struct_def, pool_get, reg_add_bound_fn_value_ref, reg_add_fn, reg_add_fn_value_ref, reg_add_mono, reg_add_struct, reg_find_field, reg_find_fn, reg_find_struct, resolve_type_name, store_add_canonical, store_get, sum_alloc_size, sum_has_data, tuple_elem_type, type_kind_name, variant_data_count, variant_field_type]
+@source_file lower.aria
+@source_line 1408
+
+---
+
+@fn _lower_expr_or_binding
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [Lowerer.tokens.len, _arith_op, _is_float_type, _ladv, _lcur, _lemit, _lenv_add, _lenv_lookup, _lget_type, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_block, _lower_expr, _lset_type, _lskip_nl, _variant_parent, _variant_tag, new_inst, sum_has_data, variant_field_type]
+@source_file lower.aria
+@source_line 6488
+
+---
+
+@fn _lower_expr_result
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [Lowerer.tokens.len, _arith_op, _is_float_type, _ladv, _lcur, _lemit, _lenv_add, _lenv_lookup, _lget_type, _lk, _lnew_temp, _lower_expr, _lset_type, new_inst]
+@source_file lower.aria
+@source_line 6133
+
+---
+
+@fn _lower_extern
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lcur, _lk, _lower_extern_fn, _lskip_nl]
+@source_file lower.aria
+@source_line 5334
+
+---
+
+@fn _lower_extern_fn
+@sig (l: Lowerer, lib: str) -> Lowerer
+@params
+  l: Lowerer
+  lib: str
+@calls [_ladv, _lcur, _lk, _lset_mod, _skip_type_l, mod_add_extern]
+@source_file lower.aria
+@source_line 5370
+
+---
+
+@fn _lower_fixture
+@sig (l: Lowerer, kind: str) -> Lowerer
+@params
+  l: Lowerer
+  kind: str
+@calls [_ladv, _lemit, _lfinish_func, _lk, _lower_block, _lset_func, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5461
+
+---
+
+@fn _lower_fn
+@purpose LEGACY: fn _lower_fn kept below for non-DeclIndex path
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_emit_defers, _is_str_array_type, _is_trait_object_type, _ladv, _lcur, _lemit, _lenv_add, _lfinish_func, _lget_type, _lk, _lnew_str_temp, _lnew_temp, _lower_expr, _lower_fn_body, _lset_error_type, _lset_func, _lset_type, _lskip_nl, _skip_to_next_l, fn_is_generic, new_inst, new_ir_func, reg_find_fn]
+@source_file lower.aria
+@source_line 5120
+
+---
+
+@fn _lower_fn_body
+@sig (l: Lowerer, return_type: i64) -> Lowerer
+@params
+  l: Lowerer
+  return_type: i64
+@calls [_emit_defers, _ladv, _lemit, _lget_type, _lk, _lnew_temp, _lower_expr_result, _lower_if, _lower_match, _lower_stmt, _lskip_nl, ir_op_name, new_inst]
+@source_file lower.aria
+@source_line 6052
+
+---
+
+@fn _lower_fn_body_ast
+@purpose Lower function body from AST node (called when FnDecl.c0 > 0)
+@sig (l: Lowerer, body_idx: i64, sig: FnSig) -> Lowerer
+@params
+  l: Lowerer
+  body_idx: i64
+  sig: FnSig
+@calls [_emit_defers, _lemit, _lfinish_func, _lget_type, _lnew_temp, _lower_block_node_result, _lower_expr_node, expr_kind_name, ir_op_name, new_inst, pool_get]
+@source_file lower.aria
+@source_line 1263
+
+---
+
+@fn _lower_fn_body_d
+@purpose Shared body-lowering logic for _lower_fn_d — dispatches to = expr or { block } forms
+@sig (l: Lowerer, sig: FnSig) -> Lowerer
+@params
+  l: Lowerer
+  sig: FnSig
+@calls [_emit_defers, _ladv, _lemit, _lfinish_func, _lget_type, _lk, _lnew_temp, _lower_expr, _lower_fn_body, _lskip_nl, new_inst]
+@source_file lower.aria
+@source_line 1158
+
+---
+
+@fn _lower_fn_d
+@purpose DeclInfo-aware fn lowering — jumps directly to body_start
+@sig (l: Lowerer, decl: DeclInfo) -> Lowerer
+@params
+  l: Lowerer
+  decl: DeclInfo
+@calls [_is_str_array_type, _is_trait_object_type, _lenv_add, _lnew_str_temp, _lnew_temp, _lower_fn_body_ast, _lower_fn_body_d, _lset_error_type, _lset_func, _lset_pos, _lset_type, fn_is_generic, new_fn_sig, new_ir_func, pool_get, reg_find_fn, store_get, type_kind_name]
+@source_file lower.aria
+@source_line 1072
+
+---
+
+@fn _lower_for_range_node
+@sig (l: Lowerer, var_name: str, range_node: Expr, body_idx: i64) -> LT
+@params
+  l: Lowerer
+  var_name: str
+  range_node: Expr
+  body_idx: i64
+@calls [_lower_for_range_parts]
+@source_file lower.aria
+@source_line 4235
+
+---
+
+@fn _lower_for_range_parts
+@sig (l: Lowerer, var_name: str, start_idx: i64, end_idx: i64, inclusive: bool, body_idx: i64) -> LT
+@params
+  l: Lowerer
+  var_name: str
+  start_idx: i64
+  end_idx: i64
+  inclusive: bool
+  body_idx: i64
+@calls [_lemit, _lenv_add, _lnew_label, _lnew_temp, _lower_expr_node, _lset_loop, new_inst]
+@source_file lower.aria
+@source_line 4239
+
+---
+
+@fn _lower_impl
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lcur, _lk, _lower_impl_fn, _lskip_nl, _lskip_pub]
+@source_file lower.aria
+@source_line 5937
+
+---
+
+@fn _lower_impl_d
+@purpose DeclInfo-aware impl lowering — walks AST method children
+@sig (l: Lowerer, decl: DeclInfo) -> Lowerer
+@params
+  l: Lowerer
+  decl: DeclInfo
+@calls [_ladv, _lcur, _lk, _lower_blanket_method_specialized, _lower_impl_legacy, _lower_impl_method_by_name, _lset_pos, _lset_reg, _lskip_nl, _struct_type_id, _synthesize_trait_defaults, fn_is_generic, new_generic_fn_sig, pool_get, reg_add_fn, reg_find_fn, reg_find_struct, treg_types_implementing]
+@source_file lower.aria
+@source_line 5478
+
+---
+
+@fn _lower_impl_fn
+@purpose Lower a function inside an impl block — uses qualified name Type_method
+@sig (l: Lowerer, impl_type: str) -> Lowerer
+@params
+  l: Lowerer
+  impl_type: str
+@calls [_is_str_array_type, _is_trait_object_type, _ladv, _lcur, _lemit, _lenv_add, _lfinish_func, _lget_type, _lk, _lnew_str_temp, _lnew_temp, _lower_expr, _lower_fn_body, _lset_func, _lset_type, _lskip_nl, _skip_to_next_l, fn_is_generic, new_inst, new_ir_func, reg_find_fn]
+@source_file lower.aria
+@source_line 5975
+
+---
+
+@fn _lower_impl_legacy
+@purpose Legacy impl lowering — token-walks the impl block
+@sig (l: Lowerer, impl_type: str) -> Lowerer
+@params
+  l: Lowerer
+  impl_type: str
+@calls [_ladv, _lk, _lower_impl_fn, _lskip_nl, _lskip_pub]
+@source_file lower.aria
+@source_line 5913
+
+---
+
+@fn _lower_impl_method_by_name
+@sig (l: Lowerer, impl_type: str, raw_name: str, sig: FnSig) -> Lowerer
+@params
+  l: Lowerer
+  impl_type: str
+  raw_name: str
+  sig: FnSig
+@calls [FnSig.param_names.len, FnSig.param_types.len, _is_str_array_type, _ladv, _lemit, _lenv_add, _lfinish_func, _lget_type, _lk, _lnew_str_temp, _lnew_temp, _lower_expr, _lower_fn_body, _lset_error_type, _lset_func, _lset_pos, _lset_type, _lskip_nl, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5832
+
+---
+
+@fn _lower_method_call
+@sig (l: Lowerer, obj: i64, method: str) -> LT
+@params
+  l: Lowerer
+  obj: i64
+  method: str
+@calls [_ariaExit, _array_elem_type, _base_generic_name, _is_float_type, _ladv, _lcur, _lemit, _lget_type, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_array_head, _lower_expr, _lower_string_const, _lset_is_result, _lset_mod, _lset_reg, _lset_store, _lset_type, _lskip_nl, _struct_name_for_type, _struct_type_id, _tuple_slot, _type_from_suffix, _type_name_suffix_l, fn_is_generic, i2s, mod_add_string, mod_find_func, mod_find_string, new_fn_sig, new_inst, println, reg_add_fn, reg_add_mono, reg_find_fn, reg_find_struct, store_add_canonical, store_get, str.len, treg_has_impl, tuple_elem_type, type_kind_name]
+@source_file lower.aria
+@source_line 10909
+
+---
+
+@fn _lower_multiplicative
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [_arith_op, _is_float_type, _ladv, _lemit, _lget_type, _lk, _lnew_temp, _lower_atom, _lset_type, new_inst]
+@source_file lower.aria
+@source_line 6769
+
+---
+
+@fn _lower_mut_binding
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lcur, _lenv_add, _lget_type, _lk, _lower_expr, _lset_store, _lset_type, _skip_type_l, resolve_type_name, store_add_canonical]
+@source_file lower.aria
+@source_line 6378
+
+---
+
+@fn _lower_primary
+@sig (l: Lowerer) -> LT
+@params
+  l: Lowerer
+@calls [_char_to_code, _is_float_type, _is_newtype, _ladv, _lconst_has, _lconst_lookup, _lconst_str_has, _lconst_str_lookup, _lcur, _lemit, _lenv_add, _lenv_lookup, _lget_type, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_atom, _lower_closure, _lower_expr, _lower_if, _lower_interpolated_string, _lower_make_trait_object, _lower_match, _lower_primary, _lower_scope, _lower_select, _lower_spawn, _lower_string_const, _lower_struct_lit, _lset_is_result, _lset_mod, _lset_pos, _lset_reg, _lset_store, _lset_type, _lskip_nl, _parse_duration, _parse_int_literal, _parse_size, _resolve_generic_bindings, _struct_name_for_type, _struct_type_id, _substitute_typevars, _type_name_suffix, _unary_op, _variant_parent, _variant_tag, _warn_unresolved, fn_is_generic, i2s, mk_tuple_type, mod_add_string, mod_find_string, new_fn_sig, new_inst, reg_add_fn, reg_add_fn_value_ref, reg_add_mono, reg_find_fn, reg_find_mono_by_generic, reg_find_struct, resolve_type_name, store_add_canonical, store_get, struct_is_generic, sum_alloc_size, sum_has_data, type_info_type_id, type_kind_name, variant_data_count, variant_field_type]
+@source_file lower.aria
+@source_line 8355
+
+---
+
+@fn _lower_return
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_emit_defers, _ladv, _lemit, _lget_type, _lk, _lnew_temp, _lower_expr, new_inst]
+@source_file lower.aria
+@source_line 6448
+
+---
+
+@fn _lower_source
+@sig (source: str) -> IrModule
+@params
+  source: str
+@calls [build_decl_index, check, get_tokens, lower, resolve, tokenize]
+@source_file tests.aria
+@source_line 54
+
+---
+
+@fn _lower_stmt
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [Lowerer.tokens.len, _ladv, _lappend_defer, _lcur, _lemit, _lenv_add, _lenv_lookup, _lget_type, _lk, _lnew_temp, _lower_assert, _lower_block, _lower_expr, _lower_expr_or_binding, _lower_for, _lower_if, _lower_loop, _lower_mut_binding, _lower_return, _lower_scope, _lower_select, _lower_spawn, _lower_while, _lset_pos, _skip_braces_l, _struct_name_for_type, new_inst, reg_find_fn]
+@source_file lower.aria
+@source_line 6215
+
+---
+
+@fn _lower_struct_eq
+@purpose Get struct name for a type_id using the store + registry Handles both store-based type_ids (from checker) and registry-b
+@sig (l: Lowerer, a: i64, b: i64, sname: str, result_temp: i64) -> Lowerer
+@params
+  l: Lowerer
+  a: i64
+  b: i64
+  sname: str
+  result_temp: i64
+@calls [_lemit, _lnew_str_temp, _lnew_temp, new_inst, reg_find_struct]
+@source_file lower.aria
+@source_line 543
+
+---
+
+@fn _lower_test
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lcur, _lemit, _lfinish_func, _lk, _lower_block, _lset_func, _lset_mod, i2s, mod_add_string, mod_add_test, new_inst, new_ir_func]
+@source_file lower.aria
+@source_line 5296
+
+---
+
+@fn _lset_error_type
+@sig (l: Lowerer, et: i64) -> Lowerer
+@params
+  l: Lowerer
+  et: i64
+@source_file lower.aria
+@source_line 408
+
+---
+
+@fn _lset_func
+@sig (l: Lowerer, f: IrFunc) -> Lowerer
+@params
+  l: Lowerer
+  f: IrFunc
+@source_file lower.aria
+@source_line 204
+
+---
+
+@fn _lset_is_result
+@purpose Mark temp as holding a Result pointer (from fallible call, Ok/Err ctor)
+@sig (l: Lowerer, temp: i64) -> Lowerer
+@params
+  l: Lowerer
+  temp: i64
+@calls [Lowerer.is_result.len]
+@source_file lower.aria
+@source_line 732
+
+---
+
+@fn _lset_loop
+@sig (l: Lowerer, start: i64, end_l: i64) -> Lowerer
+@params
+  l: Lowerer
+  start: i64
+  end_l: i64
+@source_file lower.aria
+@source_line 244
+
+---
+
+@fn _lset_mod
+@sig (l: Lowerer, m: IrModule) -> Lowerer
+@params
+  l: Lowerer
+  m: IrModule
+@source_file lower.aria
+@source_line 216
+
+---
+
+@fn _lset_pos
+@sig (l: Lowerer, pos: i64) -> Lowerer
+@params
+  l: Lowerer
+  pos: i64
+@source_file lower.aria
+@source_line 139
 
 ---
 
 @fn _lset_reg
 @sig (l: Lowerer, reg: TypeRegistry) -> Lowerer
-@source_file src/codegen/lower.aria
+@params
+  l: Lowerer
+  reg: TypeRegistry
+@source_file lower.aria
+@source_line 115
+
+---
+
+@fn _lset_store
+@sig (l: Lowerer, store: TypeStore) -> Lowerer
+@params
+  l: Lowerer
+  store: TypeStore
+@source_file lower.aria
 @source_line 127
 
 ---
 
-@fn _lower_trampolines
-@purpose Generates trampoline wrappers for fn-as-value refs AND bound method refs (v0.3). Regular trampolines discard env_ptr; bound trampolines extract self from env[0] and forward to the original method.
+@fn _lset_type
+@sig (l: Lowerer, temp: i64, type_id: i64) -> Lowerer
+@params
+  l: Lowerer
+  temp: i64
+  type_id: i64
+@calls [Lowerer.temp_types.append, Lowerer.temp_types.len]
+@source_file lower.aria
+@source_line 676
+
+---
+
+@fn _lskip_nl
 @sig (l: Lowerer) -> Lowerer
-@source_file src/codegen/lower.aria
-@source_line 12143
+@params
+  l: Lowerer
+@calls [_ladv, _lk]
+@source_file lower.aria
+@source_line 151
 
 ---
 
-@fn _type_name_suffix_l
-@purpose Lowerer-side type name suffix: handles TY_STRUCT_BASE+N registry IDs via _struct_name_from_type before falling back to _type_name_suffix (v0.3)
+@fn _lskip_pub
+@purpose Skip pub modifier, including optional (pkg) scope qualifier
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lk]
+@source_file lower.aria
+@source_line 102
+
+---
+
+@fn _mangle_user_fn
+@purpose Mangle user function names to avoid colliding with libc/dyld symbols (e.g.
+@sig (name: str) -> str
+@params
+  name: str
+@calls [str.startsWith]
+@source_file llvm.aria
+@source_line 371
+
+---
+
+@fn _merge_file_tokens
+@sig (base: [Token], new_toks: [Token]) -> [Token]
+@params
+  base: [Token]
+  new_toks: [Token]
+@calls [_merge_remaining, base.len, new_toks.len]
+@source_file codegen.aria
+@source_line 111
+
+---
+
+@fn _merge_remaining
+@sig (result: [Token], new_toks: [Token], start: i64) -> [Token]
+@params
+  result: [Token]
+  new_toks: [Token]
+  start: i64
+@calls [new_toks.len]
+@source_file codegen.aria
+@source_line 167
+
+---
+
+@fn _name_in_list
+@sig (name: str, list: [str]) -> bool
+@params
+  name: str
+  list: [str]
+@calls [list.len]
+@source_file llvm.aria
+@source_line 401
+
+---
+
+@fn _new_lowerer
+@sig (tokens: [Token], pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> Lowerer
+@params
+  tokens: [Token]
+  pool: NodePool
+  store: TypeStore
+  reg: TypeRegistry
+  treg: TraitRegistry
+  table: SymbolTable
+  file: str
+@calls [_sentinel_func, new_ir_module]
+@source_file lower.aria
+@source_line 61
+
+---
+
+@fn _nl
+@sig () -> str
+@source_file llvm.aria
+@source_line 15
+
+---
+
+@fn _rb
+@sig () -> str
+@source_file llvm.aria
+@source_line 14
+
+---
+
+@fn _resolve_generic_bindings
+@purpose Resolve the (TvName, concrete suffix, concrete tid) bindings for every TypeVar found by walking sig.param_types in locks
+@sig (store: TypeStore, reg: TypeRegistry, sig: FnSig, arg_types: [i64]) -> _TvPair
+@params
+  store: TypeStore
+  reg: TypeRegistry
+  sig: FnSig
+  arg_types: [i64]
+@calls [FnSig.param_names.len, FnSig.param_types.len, TypeRegistry.struct_defs.len, TypeStore.types.len, _arith_op, _array_elem_type, _base_generic_name, _cmp_op, _dedup_names, _emit_defers, _emit_drops, _emit_drops_scoped, _emit_result_null_guard, _extract_typevar_bindings, _field_index, _field_index_any, _field_type_id, _field_type_id_any, _find_tok_pos, _generate_test_runner_p, _is_float_type, _is_option_or_result_type, _is_option_type, _is_str_array_type, _is_trait_object_type, _ladv, _lconst_lookup, _lcur, _lemit, _lenv_add, _lenv_lookup, _lfinish_func, _lget_type, _lis_result, _lk, _lnew_label, _lnew_str_temp, _lnew_temp, _lower_additive, _lower_atom, _lower_block, _lower_bodies, _lower_bodies_skip_entry, _lower_call_args, _lower_comparison, _lower_conversion, _lower_derive_clone, _lower_derive_debug, _lower_derive_default, _lower_derive_display, _lower_derive_eq, _lower_derive_hash, _lower_derive_ord, _lower_derives, _lower_expr, _lower_expr_node, _lower_expr_result, _lower_fn_body, _lower_for_channel, _lower_for_range, _lower_if, _lower_if_cond, _lower_interp_to_str, _lower_match_subject, _lower_method_call, _lower_module_call_tokens, _lower_mono_fn, _lower_mono_pass, _lower_multiplicative, _lower_primary, _lower_stmt, _lower_string_const, _lower_struct_eq, _lower_trampolines, _lset_error_type, _lset_func, _lset_is_result, _lset_loop, _lset_mod, _lset_pos, _lset_reg, _lset_store, _lset_type, _lskip_nl, _new_lowerer, _parse_bin, _parse_hex, _parse_int_literal, _parse_oct, _scan_captures_ast, _scan_consts, _sentinel_struct_def, _skip_braces_l, _skip_type_l, _struct_field_count, _struct_name_for_type, _struct_name_from_type, _struct_type_id, _substitute_typevars, _type_from_suffix, _type_name_suffix, _type_name_suffix_l, _variant_parent, _variant_tag, _warn_unresolved, expr_kind_name, fn_is_generic, func_set_return_type, i2s, mk_result_type, mod_add_string, mod_find_func, mod_find_string, mod_next_closure, mod_set_entry, new_fn_sig, new_inst, new_ir_func, new_struct_def, pool_get, println, reg_add_fn, reg_add_fn_value_ref, reg_add_mono, reg_add_struct, reg_find_fn, reg_find_struct, resolve_type_name, store_add_canonical, store_get, sum_alloc_size, sum_has_data, treg_find_trait, treg_has_impl, type_info_type_id, type_kind_name, variant_data_count, variant_field_name, variant_field_type]
+@source_file lower.aria
+@source_line 12754
+
+---
+
+@fn _resolve_generic_call_name
+@purpose Resolve generic call name by matching argument types to TypeVar params.
+@sig (store: TypeStore, reg: TypeRegistry, base_name: str, sig: FnSig, arg_types: [i64]) -> str
+@params
+  store: TypeStore
+  reg: TypeRegistry
+  base_name: str
+  sig: FnSig
+  arg_types: [i64]
+@calls [_resolve_generic_bindings]
+@source_file lower.aria
+@source_line 12741
+
+---
+
+@fn _scan_consts
+@sig (l: Lowerer, index: DeclIndex) -> Lowerer
+@params
+  l: Lowerer
+  index: DeclIndex
+@calls [_ladd_const, _ladd_const_str, _ladv, _lcur, _lk, _lset_mod, _lset_pos, _lskip_nl, _lskip_pub, _skip_type_l, decl_index_get, decl_index_len, decl_kind_name, mod_add_global]
+@source_file lower.aria
+@source_line 829
+
+---
+
+@fn _sentinel_func
+@sig () -> IrFunc
+@calls [_sentinel_inst]
+@source_file ir.aria
+@source_line 208
+
+---
+
+@fn _sentinel_inst
+@sig () -> IrInst
+@source_file ir.aria
+@source_line 191
+
+---
+
+@fn _skip_to_next_l
+@sig (l: Lowerer) -> Lowerer
+@params
+  l: Lowerer
+@calls [_ladv, _lk, _lskip_nl]
+@source_file lower.aria
+@source_line 1039
+
+---
+
+@fn _str_ret_type
+@sig () -> str
+@calls [_lb, _rb]
+@source_file llvm.aria
+@source_line 2208
+
+---
+
+@fn _struct_i64_i64
+@sig () -> str
+@calls [_lb, _rb]
+@source_file llvm.aria
+@source_line 366
+
+---
+
+@fn _struct_name_for_type
 @sig (store: TypeStore, reg: TypeRegistry, tid: i64) -> str
-@source_file src/codegen/lower.aria
-@source_line 8241
+@params
+  store: TypeStore
+  reg: TypeRegistry
+  tid: i64
+@calls [_struct_name_from_type, store_get, type_kind_name]
+@source_file lower.aria
+@source_line 659
 
 ---
 
-@fn lower
-@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str) -> IrModule
-@source_file src/codegen/lower.aria
-@source_line 11247
+@fn _struct_name_from_type
+@sig (reg: TypeRegistry, type_id: i64) -> str
+@params
+  reg: TypeRegistry
+  type_id: i64
+@calls [TypeRegistry.struct_defs.len]
+@source_file lower.aria
+@source_line 12730
 
 ---
 
-@fn lower_for_tests
-@purpose Lowers for test mode with optional parallel execution (v0.4). When parallel=true, registers test fns as fn_value_refs for trampoline generation and spawns tests concurrently.
-@sig (tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool) -> IrModule
-@source_file src/codegen/lower.aria
-@source_line 12415
+@fn _synthesize_trait_defaults
+@purpose Synthesize missing default methods for `impl Trait for Type`.
+@sig (l: Lowerer, trait_name: str, impl_type: str, impl_methods: [str]) -> Lowerer
+@params
+  l: Lowerer
+  trait_name: str
+  impl_type: str
+  impl_methods: [str]
+@calls [_lower_impl_method_by_name, _lset_pos, _lset_reg, _struct_type_id, impl_methods.len, new_fn_sig, reg_add_fn, reg_find_fn, resolve_type_name, treg_find_trait]
+@source_file lower.aria
+@source_line 5633
+
+---
+
+@fn _t
+@sig (n: i64) -> str
+@params
+  n: i64
+@calls [i2s]
+@source_file llvm.aria
+@source_line 358
+
+---
+
+@fn _target_datalayout
+@sig (target: str) -> str
+@params
+  target: str
+@source_file llvm.aria
+@source_line 426
+
+---
+
+@fn _target_triple
+@purpose Cross-compilation target resolution
+@sig (target: str) -> str
+@params
+  target: str
+@source_file llvm.aria
+@source_line 415
+
+---
+
+@fn _tuple_slot
+@purpose True when tid refers to an Option/Result — either the sentinel ids 200/201 produced by Ok/Err/Some/None constructors, 
+@sig (store: TypeStore, tuple_id: i64, elem_idx: i64) -> i64
+@params
+  store: TypeStore
+  tuple_id: i64
+  elem_idx: i64
+@calls [tuple_elem_type]
+@source_file lower.aria
+@source_line 618
+
+---
+
+@fn _type_from_suffix
+@purpose Map a type-name suffix (e.g.
+@sig (store: TypeStore, reg: TypeRegistry, suffix: str) -> i64
+@params
+  store: TypeStore
+  reg: TypeRegistry
+  suffix: str
+@calls [_struct_type_id]
+@source_file lower.aria
+@source_line 12722
+
+---
+
+@fn _unary_op
+@sig (k: str) -> IrOp
+@params
+  k: str
+@source_file lower.aria
+@source_line 793
+
+---
+
+@fn _v
+@sig (n: i64) -> str
+@params
+  n: i64
+@calls [i2s]
+@source_file llvm.aria
+@source_line 362
+
+---
+
+@fn _validate_func
+@purpose Validate a single IR function: check label targets and return path
+@sig (f: IrFunc) -> [str]
+@params
+  f: IrFunc
+@calls [IrFunc.insts.len, _ir_i2s, _is_jump_op, ir_op_name]
+@source_file ir.aria
+@source_line 450
+
+---
+
+@fn _warn_unresolved
+@purpose Emit a warning for unresolved lookups during lowering (DRY: single warning format) Suppresses false positives for diagno
+@sig (l: Lowerer, kind: str, name: str)
+@params
+  l: Lowerer
+  kind: str
+  name: str
+@calls [_lcur, i2s, println, str.charAt, str.len]
+@source_file lower.aria
+@source_line 395
+
+---
+
+@fn check_sources
+@sig (files: [str]) -> DiagnosticBag with [Fs]
+@params
+  files: [str]
+@calls [_ariaReadFile, _merge_file_tokens, bag_has_errors, build_decl_index, check, files.len, get_diagnostics, get_tokens, resolve, tokenize]
+@source_file codegen.aria
+@source_line 225
+@effects [Fs]
+
+---
+
+@fn func_add_inst
+@sig (f: IrFunc, inst: IrInst) -> IrFunc
+@params
+  f: IrFunc
+  inst: IrInst
+@calls [IrFunc.insts.append]
+@source_file ir.aria
+@source_line 214
+
+---
+
+@fn func_inst_count
+@sig (f: IrFunc) -> i64
+@params
+  f: IrFunc
+@calls [IrFunc.insts.len]
+@source_file ir.aria
+@source_line 234
+
+---
+
+@fn func_set_locals
+@sig (f: IrFunc, count: i64) -> IrFunc
+@params
+  f: IrFunc
+  count: i64
+@source_file ir.aria
+@source_line 219
+
+---
+
+@fn func_set_return_type
+@sig (f: IrFunc, rt: i64) -> IrFunc
+@params
+  f: IrFunc
+  rt: i64
+@source_file ir.aria
+@source_line 229
+
+---
+
+@fn func_set_temp_types
+@sig (f: IrFunc, types: [i64]) -> IrFunc
+@params
+  f: IrFunc
+  types: [i64]
+@source_file ir.aria
+@source_line 224
+
+---
+
+@fn generate_bench_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs]
+@params
+  files: [str]
+  output_path: str
+  runtime_path: str
+@calls [_ariaReadFile, _merge_file_tokens, bag_has_errors, build_decl_index, check, files.len, generate_from_module, get_diagnostics, get_tokens, lower_for_tests, resolve, tokenize]
+@source_file codegen.aria
+@source_line 288
+@effects [Io, Fs]
+
+---
+
+@fn generate_from_module
+@sig (m: IrModule, output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs]
+@params
+  m: IrModule
+  output_path: str
+  runtime_path: str
+@calls [_ariaExec, bag_add_error, generate_llvm_ir_to_file, i2s, new_bag, new_span, println, validate_ir_module]
+@source_file codegen.aria
+@source_line 49
+@effects [Io, Fs]
+
+---
+
+@fn generate_from_source
+@sig (source: str, file: str, output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs]
+@params
+  source: str
+  file: str
+  output_path: str
+  runtime_path: str
+@calls [bag_has_errors, build_decl_index, check, generate_from_module, get_diagnostics, get_tokens, lower, resolve, tokenize]
+@source_file codegen.aria
+@source_line 19
+@effects [Io, Fs]
+
+---
+
+@fn generate_from_sources
+@sig (files: [str], output_path: str, runtime_path: str) -> DiagnosticBag with [Io, Fs]
+@params
+  files: [str]
+  output_path: str
+  runtime_path: str
+@calls [_ariaReadFile, _check_duplicate_decls, _merge_file_tokens, bag_has_errors, build_decl_index, check, files.len, generate_from_module, get_diagnostics, get_tokens, lower, resolve, tokenize]
+@source_file codegen.aria
+@source_line 177
+@effects [Io, Fs]
 
 ---
 
 @fn generate_llvm_ir
 @sig (m: IrModule) -> str
-@source_file src/codegen/llvm.aria
-@source_line 265
+@params
+  m: IrModule
+@calls [_generate_llvm_ir_target]
+@source_file llvm.aria
+@source_line 435
 
 ---
 
 @fn generate_llvm_ir_to_file
-@sig (m: IrModule, path: str) -> unit
-@source_file src/codegen/llvm.aria
-@source_line 272
-
----
-
-@fn new_emitter
-@sig () -> Emitter
-@source_file src/codegen/emit.aria
-@source_line 51
-
----
-
-@fn emit_function
-@sig (f: IrFunc) -> Emitter
-@calls [new_emitter]
-@source_file src/codegen/emit.aria
-@source_line 133
-
----
-
-@fn emitter_code
-@sig (e: Emitter) -> [i64]
-@source_file src/codegen/emit.aria
-@source_line 767
-
----
-
-@fn emitter_code_size
-@sig (e: Emitter) -> i64
-@source_file src/codegen/emit.aria
-@source_line 769
-
----
-
-@fn emitter_call_count
-@sig (e: Emitter) -> i64
-@source_file src/codegen/emit.aria
-@source_line 771
-
----
-
-@fn emitter_call_offsets
-@sig (e: Emitter) -> [i64]
-@source_file src/codegen/emit.aria
-@source_line 773
-
----
-
-@fn emitter_string_count
-@sig (e: Emitter) -> i64
-@source_file src/codegen/emit.aria
-@source_line 783
-
----
-
-@fn emitter_string_code_indices
-@sig (e: Emitter) -> [i64]
-@source_file src/codegen/emit.aria
-@source_line 785
-
----
-
-@fn emitter_string_ids
-@sig (e: Emitter) -> [i64]
-@source_file src/codegen/emit.aria
-@source_line 795
-
----
-
-@fn emitter_call_targets
-@sig (e: Emitter) -> [str]
-@source_file src/codegen/emit.aria
-@source_line 805
-
----
-
-@fn enc_movz
-@sig (rd: i64, imm16: i64, hw: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 84
-
----
-
-@fn enc_movk
-@sig (rd: i64, imm16: i64, hw: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 91
-
----
-
-@fn enc_movn
-@sig (rd: i64, imm16: i64, hw: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 97
-
----
-
-@fn enc_add_imm
-@sig (rd: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 104
-
----
-
-@fn enc_sub_imm
-@sig (rd: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 111
-
----
-
-@fn enc_cmp_imm
-@sig (rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 117
-
----
-
-@fn enc_add_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 128
-
----
-
-@fn enc_sub_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 134
-
----
-
-@fn enc_cmp_reg
-@sig (rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 140
-
----
-
-@fn enc_mul
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 146
-
----
-
-@fn enc_sdiv
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 152
-
----
-
-@fn enc_mov_reg
-@sig (rd: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 158
-
----
-
-@fn enc_and_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 164
-
----
-
-@fn enc_orr_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 170
-
----
-
-@fn enc_eor_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 176
-
----
-
-@fn enc_lsl_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 182
-
----
-
-@fn enc_asr_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 188
-
----
-
-@fn enc_neg
-@sig (rd: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 194
-
----
-
-@fn enc_cset
-@sig (rd: i64, cond: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 201
-
----
-
-@fn enc_b
-@sig (offset: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 213
-
----
-
-@fn enc_bl
-@sig (offset: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 220
-
----
-
-@fn enc_b_cond
-@sig (cond: i64, offset: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 227
-
----
-
-@fn enc_cbz
-@sig (rt: i64, offset: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 234
-
----
-
-@fn enc_cbnz
-@sig (rt: i64, offset: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 240
-
----
-
-@fn enc_ret
-@sig () -> i64
-@source_file src/codegen/arm64.aria
-@source_line 246
-
----
-
-@fn enc_br
-@sig (rn: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 249
-
----
-
-@fn enc_blr
-@sig (rn: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 255
-
----
-
-@fn enc_ldr_imm
-@sig (rt: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 266
-
----
-
-@fn enc_str_imm
-@sig (rt: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 273
-
----
-
-@fn enc_stp_pre
-@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 281
-
----
-
-@fn enc_ldp_post
-@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 289
-
----
-
-@fn enc_stp_offset
-@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 296
-
----
-
-@fn enc_ldp_offset
-@sig (rt1: i64, rt2: i64, rn: i64, imm7: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 303
-
----
-
-@fn enc_ldrb_imm
-@sig (rt: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 309
-
----
-
-@fn enc_strb_imm
-@sig (rt: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 315
-
----
-
-@fn enc_adrp
-@sig (rd: i64, imm21: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 326
-
----
-
-@fn enc_adr
-@sig (rd: i64, imm21: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 335
-
----
-
-@fn enc_nop
-@sig () -> i64
-@source_file src/codegen/arm64.aria
-@source_line 347
-
----
-
-@fn enc_svc
-@sig (imm16: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 350
-
----
-
-@fn enc_brk
-@sig (imm16: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 356
-
----
-
-@fn enc_ldrb_post
-@sig (rt: i64, rn: i64, imm9: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 367
-
----
-
-@fn enc_strb_post
-@sig (rt: i64, rn: i64, imm9: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 374
-
----
-
-@fn enc_subs_imm
-@sig (rd: i64, rn: i64, imm12: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 381
-
----
-
-@fn enc_subs_reg
-@sig (rd: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 387
-
----
-
-@fn enc_ldr_reg
-@sig (rt: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 394
-
----
-
-@fn enc_str_reg
-@sig (rt: i64, rn: i64, rm: i64) -> i64
-@source_file src/codegen/arm64.aria
-@source_line 400
-
----
-
-@fn enc_load_imm64
-@sig (rd: i64, val: i64) -> [i64]
-@source_file src/codegen/arm64.aria
-@source_line 410
-
----
-
-@fn enc_prologue
-@sig (frame_size: i64) -> [i64]
-@source_file src/codegen/arm64.aria
-@source_line 439
-
----
-
-@fn enc_epilogue
-@sig (frame_size: i64) -> [i64]
-@source_file src/codegen/arm64.aria
-@source_line 453
-
----
-
-@fn build_macho
-@sig (code_words: [i64], cstring_data: [i64], entry_offset: i64) -> [i64]
-@source_file src/codegen/macho.aria
-@source_line 542
-
----
-
-@fn buf_size
-@sig (buf: [i64]) -> i64
-@source_file src/codegen/macho.aria
-@source_line 803
-
----
-
-@fn build_exit_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 25
-
----
-
-@fn build_write_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 35
-
----
-
-@fn build_println_str_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 48
-
----
-
-@fn build_alloc_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
+@purpose Streaming variant: writes LLVM IR directly to file in chunks.
+@sig (m: IrModule, path: str) with [Fs]
+@params
+  m: IrModule
+  path: str
+@calls [_generate_llvm_ir_to_file_target]
+@source_file llvm.aria
+@source_line 442
+@effects [Fs]
+
+---
+
+@fn generate_tests_from_sources
+@sig (files: [str], output_path: str, runtime_path: str, parallel: bool) -> DiagnosticBag with [Io, Fs]
+@params
+  files: [str]
+  output_path: str
+  runtime_path: str
+  parallel: bool
+@calls [_ariaReadFile, _merge_file_tokens, bag_has_errors, build_decl_index, check, files.len, generate_from_module, get_diagnostics, get_tokens, lower_for_tests, resolve, tokenize]
+@source_file codegen.aria
+@source_line 254
+@effects [Io, Fs]
+
+---
+
+@fn ir_op_name
+@sig (op: IrOp) -> str
+@params
+  op: IrOp
+@source_file ir.aria
 @source_line 95
 
 ---
 
-@fn build_memcpy_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 130
+@fn mod_add_extern
+@sig (m: IrModule, name: str, param_count: i64, ret_type: str, lib: str) -> IrModule
+@params
+  m: IrModule
+  name: str
+  param_count: i64
+  ret_type: str
+  lib: str
+@calls [IrModule.extern_libs.append, IrModule.extern_names.append, IrModule.extern_param_counts.append, IrModule.extern_ret_types.append]
+@source_file ir.aria
+@source_line 328
 
 ---
 
-@fn build_read_file_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 148
+@fn mod_add_func
+@sig (m: IrModule, f: IrFunc) -> IrModule
+@params
+  m: IrModule
+  f: IrFunc
+@calls [IrModule.funcs.append, _fn_index_insert]
+@source_file ir.aria
+@source_line 310
 
 ---
 
-@fn build_write_binary_file_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 249
+@fn mod_add_global
+@sig (m: IrModule, name: str, init: i64) -> IrModule
+@params
+  m: IrModule
+  name: str
+  init: i64
+@calls [IrModule.global_inits.append, IrModule.global_names.append]
+@source_file ir.aria
+@source_line 357
 
 ---
 
-@fn build_int_to_str_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 355
+@fn mod_add_string
+@sig (m: IrModule, s: str) -> IrModule
+@params
+  m: IrModule
+  s: str
+@calls [IrModule.string_constants.append]
+@source_file ir.aria
+@source_line 321
 
 ---
 
-@fn build_args_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 450
+@fn mod_add_test
+@sig (m: IrModule, name: str) -> IrModule
+@params
+  m: IrModule
+  name: str
+@calls [IrModule.test_names.append]
+@source_file ir.aria
+@source_line 343
 
 ---
 
-@fn build_args_init_runtime
-@sig () -> RuntimeFunc
-@source_file src/codegen/runtime.aria
-@source_line 463
+@fn mod_find_func
+@purpose O(log N) binary search over fn_index_keys (sorted lexically).
+@sig (m: IrModule, name: str) -> IrFunc
+@params
+  m: IrModule
+  name: str
+@calls [IrModule.fn_index_keys.len, _sentinel_func]
+@source_file ir.aria
+@source_line 386
 
 ---
 
-@fn build_runtime_funcs
-@sig () -> [RuntimeFunc]
-@calls [build_exit_runtime, build_write_runtime, build_println_str_runtime, build_alloc_runtime, build_memcpy_runtime, build_read_file_runtime, build_write_binary_file_runtime, build_int_to_str_runtime, build_args_runtime, build_args_init_runtime]
-@source_file src/codegen/runtime.aria
-@source_line 563
+@fn mod_find_global
+@sig (m: IrModule, name: str) -> i64
+@params
+  m: IrModule
+  name: str
+@calls [IrModule.global_names.len]
+@source_file ir.aria
+@source_line 364
 
 ---
 
-@const X0
-@value_type i64
-@value 0
-@source_file src/codegen/arm64.aria
-@source_line 11
+@fn mod_find_string
+@sig (m: IrModule, s: str) -> i64
+@params
+  m: IrModule
+  s: str
+@calls [IrModule.string_constants.len]
+@source_file ir.aria
+@source_line 373
 
 ---
 
-@const X29
-@value_type i64
-@value 29
-@source_file src/codegen/arm64.aria
-@source_line 40
+@fn mod_func_count
+@sig (m: IrModule) -> i64
+@params
+  m: IrModule
+@calls [IrModule.funcs.len]
+@source_file ir.aria
+@source_line 382
 
 ---
 
-@const X30
-@value_type i64
-@value 30
-@source_file src/codegen/arm64.aria
-@source_line 41
+@fn mod_next_closure
+@sig (m: IrModule) -> IrModule
+@params
+  m: IrModule
+@source_file ir.aria
+@source_line 350
 
 ---
 
-@const XZR
-@value_type i64
-@value 31
-@source_file src/codegen/arm64.aria
-@source_line 42
+@fn mod_set_entry
+@sig (m: IrModule, name: str) -> IrModule
+@params
+  m: IrModule
+  name: str
+@source_file ir.aria
+@source_line 336
 
 ---
 
-@const SP
-@value_type i64
-@value 31
-@source_file src/codegen/arm64.aria
-@source_line 43
+@fn new_inst
+@sig (op: IrOp, dest: i64, arg1: i64, arg2: i64, s1: str, tid: i64) -> IrInst
+@params
+  op: IrOp
+  dest: i64
+  arg1: i64
+  arg2: i64
+  s1: str
+  tid: i64
+@source_file ir.aria
+@source_line 194
 
 ---
 
-@const COND_EQ
-@value_type i64
-@value 0
-@source_file src/codegen/arm64.aria
-@source_line 47
+@fn new_ir_func
+@sig (name: str, param_count: i64, ret_type: i64) -> IrFunc
+@params
+  name: str
+  param_count: i64
+  ret_type: i64
+@calls [_sentinel_inst]
+@source_file ir.aria
+@source_line 211
 
 ---
 
-@const COND_NE
-@value_type i64
-@value 1
-@source_file src/codegen/arm64.aria
-@source_line 48
+@fn new_ir_module
+@sig () -> IrModule
+@calls [_sentinel_func]
+@source_file ir.aria
+@source_line 269
 
 ---
 
-@const COND_GE
-@value_type i64
-@value 10
-@source_file src/codegen/arm64.aria
-@source_line 57
-
----
-
-@const COND_LT
-@value_type i64
-@value 11
-@source_file src/codegen/arm64.aria
-@source_line 58
-
----
-
-@const COND_GT
-@value_type i64
-@value 12
-@source_file src/codegen/arm64.aria
-@source_line 59
-
----
-
-@const COND_LE
-@value_type i64
-@value 13
-@source_file src/codegen/arm64.aria
-@source_line 60
-
----
-
-@const MH_MAGIC_64
-@value_type i64
-@value 0xFEEDFACF
-@source_file src/codegen/macho.aria
-@source_line 11
-
----
-
-@const PAGE_SIZE
-@value_type i64
-@value 16384
-@source_file src/codegen/macho.aria
-@source_line 37
+@fn validate_ir_module
+@purpose Validate entire IR module
+@sig (m: IrModule) -> [str]
+@params
+  m: IrModule
+@calls [IrModule.entry_func.len, IrModule.funcs.len, _validate_func, mod_find_func]
+@source_file ir.aria
+@source_line 515

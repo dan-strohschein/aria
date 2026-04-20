@@ -1,0 +1,493 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module checker_test
+@lang aria
+@version 0.1.0
+@deps [diagnostic, lexer, parser, resolver]
+@aid_version 0.2
+
+---
+
+@fn test_array_and_indexing
+@purpose Test: array and indexing
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 102
+
+---
+
+@fn test_binary_result_type
+@purpose Test: binary result type
+@sig ()
+@calls [assert, binary_result_type, new_store]
+@source_file tests.aria
+@source_line 167
+
+---
+
+@fn test_boolean_operators
+@purpose Test: boolean operators
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 130
+
+---
+
+@fn test_check_arithmetic
+@purpose Test: check arithmetic
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 191
+
+---
+
+@fn test_check_array_literal
+@purpose Test: check array literal
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 279
+
+---
+
+@fn test_check_bool_literal
+@purpose Test: check bool literal
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 181
+
+---
+
+@fn test_check_comparison
+@purpose Test: check comparison
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 196
+
+---
+
+@fn test_check_const_declaration
+@purpose Test: check const declaration
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 224
+
+---
+
+@fn test_check_entry_block
+@purpose Test: check entry block
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 255
+
+---
+
+@fn test_check_fn_sig_registered
+@purpose Test: check fn sig registered
+@sig ()
+@calls [_check_source, assert, reg_find_fn]
+@source_file tests.aria
+@source_line 248
+
+---
+
+@fn test_check_for_loop
+@purpose Test: check for loop
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 292
+
+---
+
+@fn test_check_forward_fn_call
+@purpose Test: check forward fn call
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 211
+
+---
+
+@fn test_check_if_expression
+@purpose Test: check if expression
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 284
+
+---
+
+@fn test_check_integer_literal
+@purpose Test: check integer literal
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 176
+
+---
+
+@fn test_check_logical
+@purpose Test: check logical
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 201
+
+---
+
+@fn test_check_method_call_len
+@purpose Test: check method call len
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 271
+
+---
+
+@fn test_check_parameter_types
+@purpose Test: check parameter types
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 206
+
+---
+
+@fn test_check_string_literal
+@purpose Test: check string literal
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 186
+
+---
+
+@fn test_check_struct_field_types_registered
+@purpose Test: check struct field types registered
+@sig ()
+@calls [_check_has_errors, _check_source, assert, reg_find_struct]
+@source_file tests.aria
+@source_line 229
+
+---
+
+@fn test_check_sum_type_registered
+@purpose Test: check sum type registered
+@sig ()
+@calls [_check_source, assert, reg_find_struct]
+@source_file tests.aria
+@source_line 240
+
+---
+
+@fn test_check_test_block
+@purpose Test: check test block
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 263
+
+---
+
+@fn test_check_variable_binding
+@purpose Test: check variable binding
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 216
+
+---
+
+@fn test_check_while_loop
+@purpose Test: check while loop
+@sig ()
+@calls [_check_has_errors, _check_source, assert]
+@source_file tests.aria
+@source_line 300
+
+---
+
+@fn test_const_string_declarations
+@purpose Test: const string declarations
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 94
+
+---
+
+@fn test_early_return
+@purpose Test: early return
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 112
+
+---
+
+@fn test_entry_with_fn_call
+@purpose Test: entry with fn call
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 146
+
+---
+
+@fn test_format_type_primitives
+@purpose Test: format type primitives
+@sig ()
+@calls [assert, format_type, new_store]
+@source_file tests.aria
+@source_line 58
+
+---
+
+@fn test_if_else_as_expression
+@purpose Test: if else as expression
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 74
+
+---
+
+@fn test_is_assignable_different_types
+@purpose Test: is assignable different types
+@sig ()
+@calls [assert, is_assignable, new_store]
+@source_file tests.aria
+@source_line 111
+
+---
+
+@fn test_is_assignable_never_to_anything
+@purpose Test: is assignable never to anything
+@sig ()
+@calls [assert, is_assignable, new_store]
+@source_file tests.aria
+@source_line 105
+
+---
+
+@fn test_is_assignable_same_type
+@purpose Test: is assignable same type
+@sig ()
+@calls [assert, is_assignable, new_store]
+@source_file tests.aria
+@source_line 99
+
+---
+
+@fn test_is_integer
+@purpose Test: is integer
+@sig ()
+@calls [assert, is_integer, new_store]
+@source_file tests.aria
+@source_line 85
+
+---
+
+@fn test_is_numeric
+@purpose Test: is numeric
+@sig ()
+@calls [assert, is_numeric, new_store]
+@source_file tests.aria
+@source_line 77
+
+---
+
+@fn test_large_sum_type
+@purpose Test: large sum type
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 138
+
+---
+
+@fn test_multi_decl_program
+@purpose Test: multi decl program
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 166
+
+---
+
+@fn test_mutual_function_calls
+@purpose Test: mutual function calls
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 46
+
+---
+
+@fn test_nested_calls
+@purpose Test: nested calls
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 122
+
+---
+
+@fn test_new_store_has_primitives
+@purpose Test: new store has primitives
+@sig ()
+@calls [assert, new_store, store_size]
+@source_file tests.aria
+@source_line 41
+
+---
+
+@fn test_registry_add_and_find_struct
+@purpose Test: registry add and find struct
+@sig ()
+@calls [assert, new_registry, new_struct_def, reg_add_struct, reg_find_struct]
+@source_file tests.aria
+@source_line 118
+
+---
+
+@fn test_registry_find_field
+@purpose Test: registry find field
+@sig ()
+@calls [assert, new_registry, new_struct_def, reg_add_struct, reg_find_field]
+@source_file tests.aria
+@source_line 128
+
+---
+
+@fn test_registry_find_fn
+@purpose Test: registry find fn
+@sig ()
+@calls [assert, new_fn_sig, new_registry, reg_add_fn, reg_find_fn]
+@source_file tests.aria
+@source_line 140
+
+---
+
+@fn test_resolve_type_name
+@purpose Test: resolve type name
+@sig ()
+@calls [assert, new_store, resolve_type_name]
+@source_file tests.aria
+@source_line 92
+
+---
+
+@fn test_store_get_bool
+@purpose Test: store get bool
+@sig ()
+@calls [assert, new_store, store_get, type_kind_name]
+@source_file tests.aria
+@source_line 52
+
+---
+
+@fn test_store_get_i64
+@purpose Test: store get i64
+@sig ()
+@calls [assert, new_store, store_get, type_kind_name]
+@source_file tests.aria
+@source_line 46
+
+---
+
+@fn test_string_concat_chain
+@purpose Test: string concat chain
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 54
+
+---
+
+@fn test_string_method_calls
+@purpose Test: string method calls
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 84
+
+---
+
+@fn test_struct_with_fields
+@purpose Test: struct with fields
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 36
+
+---
+
+@fn test_sum_type_and_match
+@purpose Test: sum type and match
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 28
+
+---
+
+@fn test_test_block_with_assert
+@purpose Test: test block with assert
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 156
+
+---
+
+@fn test_trait_registry_has_builtin_impls
+@purpose Test: trait registry has builtin impls
+@sig ()
+@calls [assert, new_trait_registry, populate_builtins, treg_has_impl]
+@source_file tests.aria
+@source_line 151
+
+---
+
+@fn test_type_supports_arithmetic_op
+@purpose Test: type supports arithmetic op
+@sig ()
+@calls [assert, new_store, new_trait_registry, populate_builtins, type_supports_op]
+@source_file tests.aria
+@source_line 159
+
+---
+
+@fn test_types_equal_same_id
+@purpose Test: types equal same id
+@sig ()
+@calls [assert, new_store, types_equal]
+@source_file tests.aria
+@source_line 65
+
+---
+
+@fn test_types_not_equal_different
+@purpose Test: types not equal different
+@sig ()
+@calls [assert, new_store, types_equal]
+@source_file tests.aria
+@source_line 71
+
+---
+
+@fn test_while_with_mut_and_comparison
+@purpose Test: while with mut and comparison
+@sig ()
+@calls [_sc_ok, _selfcheck, assert]
+@source_file selfcheck_tests.aria
+@source_line 64

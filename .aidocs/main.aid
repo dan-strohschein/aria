@@ -1,25 +1,32 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
 @module main
 @lang aria
+@version 0.1.0
+@deps [checker, codegen, diagnostic, lexer, parser, resolver]
 @aid_version 0.2
-@purpose CLI entry point — command parsing and pipeline orchestration
-@depends [lexer, parser, resolver, checker, codegen, diagnostic]
+
+---
+
+@const COMPILER_VERSION
+@type str
 
 ---
 
 @type Command
-@kind sum
+@kind union
 @variants
-  CmdCheck — Type-check without codegen
-  CmdBuild — Compile to executable
-  CmdRun — Build and execute
-  CmdTest — Run test blocks
-  CmdFix — Auto-fix diagnostics
-  CmdExplain — Explain an error code
-  CmdBench — Run bench blocks
-  CmdHelp — Print help text
-  CmdVersion — Print version
-  CmdUnknown — Unrecognized command
-@source_file src/main.aria
+  | CmdCheck
+  | CmdBuild
+  | CmdRun
+  | CmdTest
+  | CmdFix
+  | CmdExplain
+  | CmdBench
+  | CmdHelp
+  | CmdVersion
+  | CmdUnknown
+@source_file main.aria
 @source_line 16
 
 ---
@@ -27,133 +34,605 @@
 @type Options
 @kind struct
 @fields
-  command: Command — Parsed command
-  files: [str] — Source file paths
-  format: str — Output format (text/json)
-  target: str — Target platform
-  runtime_path: str — Runtime library path
-  parallel: bool — Run tests in parallel via spawn/await (v0.4, --parallel flag)
-@source_file src/main.aria
+  command: Command
+  files: [str]
+  format: str
+  target: str
+  runtime_path: str
+  parallel: bool
+  output_path: str
+  help_requested: bool
+  has_error: bool
+@source_file main.aria
 @source_line 30
 
 ---
 
-@const COMPILER_VERSION
-@value_type str
-@value "0.1.0-dev"
-@source_file src/main.aria
-@source_line 158
+@fn _arr_set
+@purpose Set element at index in a string array (returns new array)
+@sig (arr: [str], idx: i64, val: str) -> [str]
+@params
+  arr: [str]
+  idx: i64
+  val: str
+@calls [arr.len]
+@source_file main.aria
+@source_line 740
 
 ---
 
-@fn default_options
-@sig () -> Options
-@source_file src/main.aria
-@source_line 38
+@fn _basename
+@sig (path: str) -> str
+@params
+  path: str
+@calls [str.charAt, str.len, str.substring]
+@source_file main.aria
+@source_line 278
 
 ---
 
-@fn parse_command
-@sig (arg: str) -> Command
-@source_file src/main.aria
-@source_line 49
+@fn _determine_output_path
+@purpose Determine output path: explicit > derived from file > derived from directory > a.out
+@sig (raw_files: [str], file: str, explicit: str) -> str with [Fs]
+@params
+  raw_files: [str]
+  file: str
+  explicit: str
+@calls [_ariaIsDir, raw_files.len, str.len]
+@source_file main.aria
+@source_line 619
+@effects [Fs]
 
 ---
 
-@fn command_to_str
-@sig (cmd: Command) -> str
-@source_file src/main.aria
+@fn _dir_of
+@sig (path: str) -> str
+@params
+  path: str
+@calls [str.charAt, str.len, str.substring]
+@source_file main.aria
+@source_line 289
+
+---
+
+@fn _ends_with_aria
+@sig (s: str) -> bool
+@params
+  s: str
+@calls [str.len, str.substring]
+@source_file main.aria
+@source_line 271
+
+---
+
+@fn _error_category
+@sig (code: str) -> str
+@params
+  code: str
+@calls [str.startsWith]
+@source_file main.aria
+@source_line 978
+
+---
+
+@fn _error_explanation
+@sig (code: str) -> str
+@params
+  code: str
+@source_file main.aria
+@source_line 989
+
+---
+
+@fn _expand_dir
+@sig (path: str) -> [str] with [Fs]
+@params
+  path: str
+@calls [_ariaIsDir, _ariaListDir, _ends_with_aria, _expand_dir, str.charAt, str.len]
+@source_file main.aria
+@source_line 658
+@effects [Fs]
+
+---
+
+@fn _find_aria_home
+@sig () -> str with [Fs]
+@calls [_ariaGetenv]
+@source_file main.aria
+@source_line 383
+@effects [Fs]
+
+---
+
+@fn _is_flag
+@sig (arg: str) -> bool
+@params
+  arg: str
+@calls [str.charAt, str.len]
+@source_file main.aria
+@source_line 107
+
+---
+
+@fn _is_stdlib_module
+@purpose Known standard library modules and their file names
+@sig (name: str) -> bool
+@params
+  name: str
+@source_file main.aria
+@source_line 378
+
+---
+
+@fn _merge_file_lists
+@sig (a: [str], b: [str]) -> [str]
+@params
+  a: [str]
+  b: [str]
+@calls [_basename, b.len]
+@source_file main.aria
+@source_line 579
+
+---
+
+@fn _module_priority
+@purpose Module priority for dependency ordering: lower number = processed first.
+@sig (path: str) -> i64
+@params
+  path: str
+@calls [str.contains]
+@source_file main.aria
+@source_line 690
+
+---
+
+@fn _normalize_path
+@purpose Normalize a path by collapsing "foo/../" segments.
+@sig (path: str) -> str
+@params
+  path: str
+@source_file main.aria
+@source_line 302
+
+---
+
+@fn _opts_set_cmd
+@purpose DRY: Options setter helpers (avoid duplicating 9-field struct literal)
+@sig (o: Options, c: Command) -> Options
+@params
+  o: Options
+  c: Command
+@source_file main.aria
+@source_line 56
+
+---
+
+@fn _opts_set_error
+@sig (o: Options) -> Options
+@params
+  o: Options
+@source_file main.aria
+@source_line 72
+
+---
+
+@fn _opts_set_files
+@sig (o: Options, f: [str]) -> Options
+@params
+  o: Options
+  f: [str]
+@source_file main.aria
+@source_line 68
+
+---
+
+@fn _opts_set_format
+@sig (o: Options, v: str) -> Options
+@params
+  o: Options
+  v: str
+@source_file main.aria
+@source_line 58
+
+---
+
+@fn _opts_set_help
+@sig (o: Options) -> Options
+@params
+  o: Options
+@source_file main.aria
+@source_line 70
+
+---
+
+@fn _opts_set_output
+@sig (o: Options, v: str) -> Options
+@params
+  o: Options
+  v: str
+@source_file main.aria
 @source_line 66
 
 ---
 
-@fn parse_args
-@sig (args: [str]) -> Options
-@calls [parse_command]
-@source_file src/main.aria
-@source_line 94
+@fn _opts_set_parallel
+@sig (o: Options) -> Options
+@params
+  o: Options
+@source_file main.aria
+@source_line 64
 
 ---
 
-@fn print_version
-@sig () -> i64
-@source_file src/main.aria
-@source_line 160
+@fn _opts_set_runtime
+@sig (o: Options, v: str) -> Options
+@params
+  o: Options
+  v: str
+@source_file main.aria
+@source_line 62
 
 ---
 
-@fn print_help
-@sig () -> i64
-@source_file src/main.aria
-@source_line 167
+@fn _opts_set_target
+@sig (o: Options, v: str) -> Options
+@params
+  o: Options
+  v: str
+@source_file main.aria
+@source_line 60
 
 ---
 
-@fn expand_files
+@fn _parse_flag_value
+@sig (arg: str) -> str
+@params
+  arg: str
+@calls [str.charAt, str.len, str.substring]
+@source_file main.aria
+@source_line 110
+
+---
+
+@fn _parse_test_files_directive
+@sig (file_path: str) -> [str] with [Fs]
+@params
+  file_path: str
+@calls [_ariaReadFile, _dir_of, _normalize_path]
+@source_file main.aria
+@source_line 342
+@effects [Fs]
+
+---
+
+@fn _print_bench_help
+@sig () -> i64 with [Io]
+@calls [_print_command_header, println]
+@source_file main.aria
+@source_line 260
+@effects [Io]
+
+---
+
+@fn _print_build_help
+@sig () -> i64 with [Io]
+@calls [_print_command_header, println]
+@source_file main.aria
+@source_line 225
+@effects [Io]
+
+---
+
+@fn _print_check_help
+@sig () -> i64 with [Io]
+@calls [_print_command_header, println]
+@source_file main.aria
+@source_line 243
+@effects [Io]
+
+---
+
+@fn _print_command_header
+@sig (name: str, desc: str) with [Io]
+@params
+  name: str
+  desc: str
+@calls [println]
+@source_file main.aria
+@source_line 190
+@effects [Io]
+
+---
+
+@fn _print_diagnostics
+@sig (diags: DiagnosticBag, format: str) with [Io]
+@params
+  diags: DiagnosticBag
+  format: str
+@calls [DiagnosticBag.diagnostics.len, format_span, format_summary, println, render_json_bag, severity_to_str]
+@source_file main.aria
+@source_line 825
+@effects [Io]
+
+---
+
+@fn _print_run_help
+@sig () -> i64 with [Io]
+@calls [_print_command_header, println]
+@source_file main.aria
+@source_line 235
+@effects [Io]
+
+---
+
+@fn _print_test_help
+@sig () -> i64 with [Io]
+@calls [_print_command_header, println]
+@source_file main.aria
+@source_line 250
+@effects [Io]
+
+---
+
+@fn _resolve_and_validate_runtime
+@purpose Validate runtime path exists and return it, or print error and return ""
+@sig (runtime_path: str) -> str with [Io, Fs]
+@params
+  runtime_path: str
+@calls [_ariaReadFile, _resolve_runtime_path, println]
+@source_file main.aria
+@source_line 609
+@effects [Io, Fs]
+
+---
+
+@fn _resolve_local_modules
+@sig (files: [str]) -> [str] with [Fs]
+@params
+  files: [str]
+@calls [_ariaIsDir, _dir_of, _expand_dir, _scan_file_for_local_imports, files.len]
+@source_file main.aria
+@source_line 531
+@effects [Fs]
+
+---
+
+@fn _resolve_runtime_path
+@sig (explicit: str) -> str with [Fs]
+@params
+  explicit: str
+@calls [_ariaReadFile, _find_aria_home]
+@source_file main.aria
+@source_line 599
+@effects [Fs]
+
+---
+
+@fn _resolve_stdlib_files
+@sig (files: [str]) -> [str] with [Fs]
+@params
+  files: [str]
+@calls [_ariaReadFile, _find_aria_home, _scan_file_for_stdlib_imports, _stdlib_path, files.len]
+@source_file main.aria
+@source_line 458
+@effects [Fs]
+
+---
+
+@fn _scan_file_for_local_imports
+@sig (file_path: str) -> [str] with [Fs]
+@params
+  file_path: str
+@calls [_ariaReadFile, _is_stdlib_module]
+@source_file main.aria
+@source_line 500
+@effects [Fs]
+
+---
+
+@fn _scan_file_for_stdlib_imports
+@sig (file_path: str) -> [str] with [Fs]
+@params
+  file_path: str
+@calls [_ariaReadFile, _is_stdlib_module]
+@source_file main.aria
+@source_line 394
+@effects [Fs]
+
+---
+
+@fn _sort_by_module_priority
+@purpose Sort files by module dependency order using insertion sort
 @sig (files: [str]) -> [str]
-@source_file src/main.aria
-@source_line 337
+@params
+  files: [str]
+@calls [_arr_set, _module_priority, files.len]
+@source_file main.aria
+@source_line 715
+
+---
+
+@fn _stdlib_path
+@sig (aria_home: str, module_name: str) -> str
+@params
+  aria_home: str
+  module_name: str
+@source_file main.aria
+@source_line 391
+
+---
+
+@fn _validate_format
+@sig (v: str) -> bool
+@params
+  v: str
+@source_file main.aria
+@source_line 122
 
 ---
 
 @fn check_source
 @sig (source: str, file: str) -> DiagnosticBag
-@calls [tokenize, build_decl_index, resolve, check]
-@source_file src/main.aria
-@source_line 359
+@params
+  source: str
+  file: str
+@calls [bag_has_errors, build_decl_index, check, get_diagnostics, get_tokens, resolve, tokenize]
+@source_file main.aria
+@source_line 786
 
 ---
 
-@fn run_check
-@sig (raw_files: [str], format: str) -> i64
-@calls [expand_files, check_source, render_text, render_json_bag]
-@source_file src/main.aria
-@source_line 375
+@fn command_to_str
+@sig (cmd: Command) -> str
+@params
+  cmd: Command
+@source_file main.aria
+@source_line 94
 
 ---
 
-@fn run_build
-@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
-@calls [expand_files, generate_from_sources]
-@source_file src/main.aria
-@source_line 413
+@fn default_options
+@sig () -> Options
+@source_file main.aria
+@source_line 42
 
 ---
 
-@fn run_run
-@sig (raw_files: [str], format: str, target: str, runtime_path: str) -> i64
-@calls [run_build]
-@source_file src/main.aria
-@source_line 467
+@fn expand_files
+@sig (files: [str]) -> [str] with [Fs]
+@params
+  files: [str]
+@calls [_ariaIsDir, _expand_dir, _parse_test_files_directive, _sort_by_module_priority, files.len]
+@source_file main.aria
+@source_line 754
+@effects [Fs]
 
 ---
 
-@fn run_test
-@sig (raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64
-@calls [expand_files, generate_tests_from_sources]
-@source_file src/main.aria
-@source_line 524
+@fn parse_args
+@sig (args: [str]) -> Options with [Io]
+@params
+  args: [str]
+@calls [_is_flag, _opts_set_cmd, _opts_set_error, _opts_set_files, _opts_set_format, _opts_set_help, _opts_set_output, _opts_set_parallel, _opts_set_runtime, _opts_set_target, _parse_flag_value, _validate_format, args.len, default_options, parse_command, println]
+@source_file main.aria
+@source_line 125
+@effects [Io]
 
 ---
 
-@fn run_explain
-@sig (files: [str]) -> i64
-@calls [describe_code]
-@source_file src/main.aria
-@source_line 532
+@fn parse_command
+@sig (arg: str) -> Command
+@params
+  arg: str
+@source_file main.aria
+@source_line 77
 
 ---
 
-@fn run_fix
-@sig (raw_files: [str], format: str) -> i64
-@calls [expand_files, check_source]
-@source_file src/main.aria
-@source_line 589
+@fn print_help
+@sig () -> i64 with [Io]
+@calls [println]
+@source_file main.aria
+@source_line 197
+@effects [Io]
+
+---
+
+@fn print_version
+@sig () -> i64 with [Io]
+@calls [println]
+@source_file main.aria
+@source_line 183
+@effects [Io]
 
 ---
 
 @fn run_bench
-@sig (raw_files: [str], format: str, runtime_path: str) -> i64
-@calls [expand_files, generate_bench_from_sources]
-@source_file src/main.aria
-@source_line 625
+@sig (raw_files: [str], format: str, runtime_path: str) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+  runtime_path: str
+@calls [_ariaExec, _merge_file_lists, _print_diagnostics, _resolve_and_validate_runtime, _resolve_local_modules, _resolve_stdlib_files, bag_has_errors, expand_files, generate_bench_from_sources, println]
+@source_file main.aria
+@source_line 1040
+@effects [Io, Fs]
+
+---
+
+@fn run_build
+@sig (raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+  target: str
+  runtime_path: str
+  output_path: str
+@calls [_determine_output_path, _merge_file_lists, _print_diagnostics, _resolve_and_validate_runtime, _resolve_local_modules, _resolve_stdlib_files, bag_has_errors, bag_warning_count, expand_files, generate_from_sources, println]
+@source_file main.aria
+@source_line 851
+@effects [Io, Fs]
+
+---
+
+@fn run_check
+@sig (raw_files: [str], format: str) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+@calls [_merge_file_lists, _print_diagnostics, _resolve_local_modules, _resolve_stdlib_files, bag_has_errors, bag_warning_count, check_sources, expand_files, println]
+@source_file main.aria
+@source_line 802
+@effects [Io, Fs]
+
+---
+
+@fn run_explain
+@sig (files: [str]) -> i64 with [Io]
+@params
+  files: [str]
+@calls [_error_category, _error_explanation, describe_code, files.len, println]
+@source_file main.aria
+@source_line 945
+@effects [Io]
+
+---
+
+@fn run_fix
+@sig (raw_files: [str], format: str) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+@calls [_merge_file_lists, _resolve_local_modules, _resolve_stdlib_files, check_sources, expand_files, format_span, println]
+@source_file main.aria
+@source_line 1002
+@effects [Io, Fs]
+
+---
+
+@fn run_run
+@sig (raw_files: [str], format: str, target: str, runtime_path: str, output_path: str) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+  target: str
+  runtime_path: str
+  output_path: str
+@calls [_ariaExec, _determine_output_path, _merge_file_lists, _print_diagnostics, _resolve_and_validate_runtime, _resolve_local_modules, _resolve_stdlib_files, bag_has_errors, bag_warning_count, expand_files, generate_from_sources, println]
+@source_file main.aria
+@source_line 880
+@effects [Io, Fs]
+
+---
+
+@fn run_test
+@sig (raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64 with [Io, Fs]
+@params
+  raw_files: [str]
+  format: str
+  runtime_path: str
+  parallel: bool
+@calls [_ariaExec, _merge_file_lists, _print_diagnostics, _resolve_and_validate_runtime, _resolve_local_modules, _resolve_stdlib_files, bag_has_errors, expand_files, generate_tests_from_sources, println]
+@source_file main.aria
+@source_line 911
+@effects [Io, Fs]

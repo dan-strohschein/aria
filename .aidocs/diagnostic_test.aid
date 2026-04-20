@@ -1,0 +1,204 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module diagnostic_test
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@fn test_bag_add_error
+@purpose Test: bag add error
+@sig ()
+@calls [assert, bag_add_error, bag_error_count, bag_has_errors, bag_warning_count, new_bag, new_span]
+@source_file tests.aria
+@source_line 81
+
+---
+
+@fn test_bag_add_warning
+@purpose Test: bag add warning
+@sig ()
+@calls [assert, bag_add_warning, bag_error_count, bag_has_errors, bag_warning_count, new_bag, new_span]
+@source_file tests.aria
+@source_line 90
+
+---
+
+@fn test_bag_format_summary
+@purpose Test: bag format summary
+@sig ()
+@calls [assert, bag_add_error, bag_add_warning, format_summary, new_bag, new_span]
+@source_file tests.aria
+@source_line 109
+
+---
+
+@fn test_bag_merge
+@purpose Test: bag merge
+@sig ()
+@calls [assert, bag_add_error, bag_add_warning, bag_error_count, bag_merge, bag_warning_count, new_bag, new_span]
+@source_file tests.aria
+@source_line 119
+
+---
+
+@fn test_bag_multiple_diagnostics
+@purpose Test: bag multiple diagnostics
+@sig ()
+@calls [assert, bag_add_error, bag_add_warning, bag_error_count, bag_warning_count, new_bag, new_span]
+@source_file tests.aria
+@source_line 99
+
+---
+
+@fn test_error_code_descriptions
+@purpose Test: error code descriptions
+@sig ()
+@calls [assert, describe_code]
+@source_file tests.aria
+@source_line 133
+
+---
+
+@fn test_escape_json
+@purpose Test: escape json
+@sig ()
+@calls [_escape_json_str, assert]
+@source_file tests.aria
+@source_line 195
+
+---
+
+@fn test_format_span
+@purpose Test: format span
+@sig ()
+@calls [assert, format_span, new_span]
+@source_file tests.aria
+@source_line 23
+
+---
+
+@fn test_get_source_line
+@purpose Test: get source line
+@sig ()
+@calls [_get_source_line, assert]
+@source_file tests.aria
+@source_line 182
+
+---
+
+@fn test_new_bag_is_empty
+@purpose Test: new bag is empty
+@sig ()
+@calls [assert, bag_error_count, bag_has_errors, bag_warning_count, new_bag]
+@source_file tests.aria
+@source_line 74
+
+---
+
+@fn test_new_error_diagnostic
+@purpose Test: new error diagnostic
+@sig ()
+@calls [assert, new_error, new_span, severity_to_str]
+@source_file tests.aria
+@source_line 55
+
+---
+
+@fn test_new_warning_diagnostic
+@purpose Test: new warning diagnostic
+@sig ()
+@calls [assert, new_span, new_warning, severity_to_str]
+@source_file tests.aria
+@source_line 64
+
+---
+
+@fn test_pad_left
+@purpose Test: pad left
+@sig ()
+@calls [_pad_left, assert]
+@source_file tests.aria
+@source_line 189
+
+---
+
+@fn test_primary_label
+@purpose Test: primary label
+@sig ()
+@calls [assert, label_style_to_str, new_span, primary_label]
+@source_file tests.aria
+@source_line 39
+
+---
+
+@fn test_render_json_bag
+@purpose Test: render json bag
+@sig ()
+@calls [assert, bag_add_error, new_bag, new_span, render_json_bag]
+@source_file tests.aria
+@source_line 164
+
+---
+
+@fn test_render_json_diagnostic
+@purpose Test: render json diagnostic
+@sig ()
+@calls [assert, new_error, new_span, render_json_diagnostic]
+@source_file tests.aria
+@source_line 154
+
+---
+
+@fn test_render_text_basic
+@purpose Test: render text basic
+@sig ()
+@calls [assert, new_error, new_span, render_text]
+@source_file tests.aria
+@source_line 143
+
+---
+
+@fn test_repeat_char
+@purpose Test: repeat char
+@sig ()
+@calls [_repeat_char, assert]
+@source_file tests.aria
+@source_line 176
+
+---
+
+@fn test_secondary_label
+@purpose Test: secondary label
+@sig ()
+@calls [assert, label_style_to_str, new_span, secondary_label]
+@source_file tests.aria
+@source_line 46
+
+---
+
+@fn test_severity_to_string
+@purpose Test: severity to string
+@sig ()
+@calls [assert, severity_to_str]
+@source_file tests.aria
+@source_line 30
+
+---
+
+@fn test_span_creation
+@purpose Test: span creation
+@sig ()
+@calls [assert, new_span]
+@source_file tests.aria
+@source_line 9
+
+---
+
+@fn test_span_end_offset
+@purpose Test: span end offset
+@sig ()
+@calls [assert, new_span, span_end_offset]
+@source_file tests.aria
+@source_line 18

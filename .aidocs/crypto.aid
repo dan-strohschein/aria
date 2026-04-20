@@ -1,0 +1,37 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module crypto
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@fn crypto_hash
+@sig (data: str) -> str
+@params
+  data: str
+@calls [_ariaSha256Hex]
+@source_file crypto.aria
+@source_line 12
+
+---
+
+@fn crypto_hash_password
+@sig (password: str) -> str
+@params
+  password: str
+@calls [_ariaSha256Hex]
+@source_file crypto.aria
+@source_line 16
+
+---
+
+@fn crypto_verify
+@sig (password: str, hash_val: str) -> bool
+@params
+  password: str
+  hash_val: str
+@calls [_ariaSha256Hex]
+@source_file crypto.aria
+@source_line 20

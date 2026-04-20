@@ -1,0 +1,105 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module net
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@type Request
+@kind struct
+@fields
+  method: str
+  path: str
+  body: str
+  headers: [str]
+  query: str
+@source_file net.aria
+@source_line 7
+
+---
+
+@type Response
+@kind struct
+@fields
+  status: i64
+  headers: [str]
+  body: str
+@source_file net.aria
+@source_line 15
+
+---
+
+@type Router
+@kind struct
+@fields
+  routes: [str]
+@source_file net.aria
+@source_line 21
+
+---
+
+@type Server
+@kind struct
+@fields
+  addr: str
+  router: Router
+  read_timeout: i64
+  write_timeout: i64
+@source_file net.aria
+@source_line 35
+
+---
+
+@fn Router_get
+@sig (self: Router, path: str, handler: fn(Request) -> Response) -> Router
+@params
+  self: Router
+  path: str
+  handler: fn(Request) -> Response
+@calls [Router.routes.append]
+@source_file net.aria
+@source_line 27
+
+---
+
+@fn Router_new
+@sig () -> Router
+@source_file net.aria
+@source_line 25
+
+---
+
+@fn Router_post
+@sig (self: Router, path: str, handler: fn(Request) -> Response) -> Router
+@params
+  self: Router
+  path: str
+  handler: fn(Request) -> Response
+@calls [Router.routes.append]
+@source_file net.aria
+@source_line 31
+
+---
+
+@fn Server_listen_and_serve
+@sig (self: Server) -> i64 ! str
+@params
+  self: Server
+@errors
+  str
+@source_file net.aria
+@source_line 42
+
+---
+
+@fn Server_shutdown
+@sig (self: Server, timeout: i64) -> i64 ! str
+@params
+  self: Server
+  timeout: i64
+@errors
+  str
+@source_file net.aria
+@source_line 46

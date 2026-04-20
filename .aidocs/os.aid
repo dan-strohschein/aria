@@ -1,0 +1,45 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module os
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@fn args
+@sig () -> [str]
+@calls [_ariaArgs]
+@source_file os.aria
+@source_line 7
+
+---
+
+@fn exit
+@sig (code: i64) -> i64 with [Io]
+@params
+  code: i64
+@calls [_ariaExit]
+@source_file os.aria
+@source_line 15
+@effects [Io]
+
+---
+
+@fn getenv
+@sig (name: str) -> str with [Io]
+@params
+  name: str
+@calls [_ariaGetenv]
+@source_file os.aria
+@source_line 11
+@effects [Io]
+
+---
+
+@fn signal
+@sig (name: str) -> i64
+@params
+  name: str
+@source_file os.aria
+@source_line 20

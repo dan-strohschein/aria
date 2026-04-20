@@ -1,0 +1,330 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module parser_test
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@fn test_fn_decl_captures_generics_in_s2
+@purpose Test: fn decl captures generics in s2
+@sig ()
+@calls [_ek, _lex_parse, _no_expr, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 294
+
+---
+
+@fn test_fn_decl_has_ekparam_children
+@purpose Test: fn decl has EkParam children
+@sig ()
+@calls [_ek, _lex_parse, _no_expr, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 261
+
+---
+
+@fn test_fn_decl_self_param_is_self
+@purpose Test: fn decl self param is_self
+@sig ()
+@calls [_ek, _lex_parse, _no_expr, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 311
+
+---
+
+@fn test_parse_array_literal
+@purpose Test: parse array literal
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 122
+
+---
+
+@fn test_parse_binary_add
+@purpose Test: parse binary add
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 58
+
+---
+
+@fn test_parse_binary_mul
+@purpose Test: parse binary mul
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 64
+
+---
+
+@fn test_parse_bool_false
+@purpose Test: parse bool false
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 52
+
+---
+
+@fn test_parse_bool_true
+@purpose Test: parse bool true
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 46
+
+---
+
+@fn test_parse_comparison
+@purpose Test: parse comparison
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 82
+
+---
+
+@fn test_parse_empty_array
+@purpose Test: parse empty array
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 128
+
+---
+
+@fn test_parse_field_access
+@purpose Test: parse field access
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 100
+
+---
+
+@fn test_parse_float_literal
+@purpose Test: parse float literal
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 28
+
+---
+
+@fn test_parse_full_program_no_errors
+@purpose Test: parse full program no errors
+@sig ()
+@calls [_lex_parse, assert, bag_has_errors]
+@source_file tests.aria
+@source_line 140
+
+---
+
+@fn test_parse_function_call
+@purpose Test: parse function call
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 112
+
+---
+
+@fn test_parse_identifier
+@purpose Test: parse identifier
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 40
+
+---
+
+@fn test_parse_index
+@purpose Test: parse index
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 117
+
+---
+
+@fn test_parse_integer_literal
+@purpose Test: parse integer literal
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 22
+
+---
+
+@fn test_parse_logical_and
+@purpose Test: parse logical and
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 88
+
+---
+
+@fn test_parse_logical_or
+@purpose Test: parse logical or
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 94
+
+---
+
+@fn test_parse_method_call
+@purpose Test: parse method call
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 106
+
+---
+
+@fn test_parse_precedence_mul_before_add
+@purpose Test: parse precedence mul before add
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 70
+
+---
+
+@fn test_parse_program
+@purpose Test: parse program
+@sig ()
+@calls [_ek, _lex_parse, assert, bag_has_errors]
+@source_file tests.aria
+@source_line 134
+
+---
+
+@fn test_parse_string_literal
+@purpose Test: parse string literal
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 34
+
+---
+
+@fn test_parse_unary_negation
+@purpose Test: parse unary negation
+@sig ()
+@calls [_ek, _parse_one, assert]
+@source_file tests.aria
+@source_line 76
+
+---
+
+@fn test_pool_array_has_elements
+@purpose Test: pool: array has elements
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 219
+
+---
+
+@fn test_pool_binary_has_children
+@purpose Test: pool: binary has children
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 152
+
+---
+
+@fn test_pool_call_has_args
+@purpose Test: pool: call has args
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 174
+
+---
+
+@fn test_pool_field_access_has_receiver
+@purpose Test: pool: field access has receiver
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 197
+
+---
+
+@fn test_pool_handles_1100_function_declarations
+@purpose Test: pool handles 1100 function declarations
+@sig ()
+@calls [_i2s_test, assert, build_decl_index, decl_index_get, decl_index_len, expr_kind_name, get_tokens, pool_get, tokenize]
+@source_file tests.aria
+@source_line 393
+
+---
+
+@fn test_pool_index_has_object_and_subscript
+@purpose Test: pool: index has object and subscript
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 206
+
+---
+
+@fn test_pool_method_call_has_receiver
+@purpose Test: pool: method call has receiver
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 188
+
+---
+
+@fn test_pool_nested_binary
+@purpose Test: pool: nested binary
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 239
+
+---
+
+@fn test_pool_program_pool_is_non_empty
+@purpose Test: pool: program pool is non-empty
+@sig ()
+@calls [_lex_parse, _pool, assert, bag_has_errors, pool_size]
+@source_file tests.aria
+@source_line 232
+
+---
+
+@fn test_pool_unary_has_operand
+@purpose Test: pool: unary has operand
+@sig ()
+@calls [_ek, _parse_one, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 165
+
+---
+
+@fn test_type_decl_has_ekfield_children_for_struct
+@purpose Test: type decl has EkField children for struct
+@sig ()
+@calls [_ek, _lex_parse, _no_expr, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 341
+
+---
+
+@fn test_type_decl_has_ekvariant_children_for_sum_type
+@purpose Test: type decl has EkVariant children for sum type
+@sig ()
+@calls [_ek, _lex_parse, _no_expr, _pool, assert, pool_get]
+@source_file tests.aria
+@source_line 370

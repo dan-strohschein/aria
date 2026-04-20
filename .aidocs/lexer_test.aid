@@ -1,0 +1,349 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module lexer_test
+@lang aria
+@version 0.1.0
+@deps [diagnostic]
+@aid_version 0.2
+
+---
+
+@fn test_arrow_operators
+@purpose Test: arrow operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 164
+
+---
+
+@fn test_binary_integer
+@purpose Test: binary integer
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 89
+
+---
+
+@fn test_binding_and_assignment
+@purpose Test: binding and assignment
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 170
+
+---
+
+@fn test_bitwise_operators
+@purpose Test: bitwise operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 154
+
+---
+
+@fn test_bool_literals
+@purpose Test: bool literals
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 63
+
+---
+
+@fn test_comparison_operators
+@purpose Test: comparison operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 138
+
+---
+
+@fn test_decimal_integer
+@purpose Test: decimal integer
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 71
+
+---
+
+@fn test_delimiters
+@purpose Test: delimiters
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 196
+
+---
+
+@fn test_empty_input
+@purpose Test: empty input
+@sig ()
+@calls [_kind_at, _tok_count, assert, tokenize]
+@source_file tests.aria
+@source_line 17
+
+---
+
+@fn test_float_literal
+@purpose Test: float literal
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 101
+
+---
+
+@fn test_float_with_exponent
+@purpose Test: float with exponent
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 107
+
+---
+
+@fn test_function_declaration_tokens
+@purpose Test: function declaration tokens
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 284
+
+---
+
+@fn test_hex_integer
+@purpose Test: hex integer
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 77
+
+---
+
+@fn test_integer_with_underscores
+@purpose Test: integer with underscores
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 95
+
+---
+
+@fn test_keyword_fn
+@purpose Test: keyword fn
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 30
+
+---
+
+@fn test_keyword_list
+@purpose Test: keyword list
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 35
+
+---
+
+@fn test_kind_equality
+@purpose Test: kind equality
+@sig ()
+@calls [assert, kind_eq]
+@source_file tests.aria
+@source_line 307
+
+---
+
+@fn test_line_comment
+@purpose Test: line comment
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 214
+
+---
+
+@fn test_logical_operators
+@purpose Test: logical operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 148
+
+---
+
+@fn test_match_expression_tokens
+@purpose Test: match expression tokens
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 301
+
+---
+
+@fn test_more_keywords
+@purpose Test: more keywords
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 49
+
+---
+
+@fn test_multiline_positions
+@purpose Test: multiline positions
+@sig ()
+@calls [_tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 271
+
+---
+
+@fn test_newline_after_identifier
+@purpose Test: newline after identifier
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 224
+
+---
+
+@fn test_no_errors_for_valid_input
+@purpose Test: no errors for valid input
+@sig ()
+@calls [assert, bag_has_errors, tokenize]
+@source_file tests.aria
+@source_line 323
+
+---
+
+@fn test_no_newline_after_operator
+@purpose Test: no newline after operator
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 231
+
+---
+
+@fn test_no_newline_inside_brackets
+@purpose Test: no newline inside brackets
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 247
+
+---
+
+@fn test_no_newline_inside_parens
+@purpose Test: no newline inside parens
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 239
+
+---
+
+@fn test_octal_integer
+@purpose Test: octal integer
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 83
+
+---
+
+@fn test_pipeline_operator
+@purpose Test: pipeline operator
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 189
+
+---
+
+@fn test_punctuation
+@purpose Test: punctuation
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 204
+
+---
+
+@fn test_question_operators
+@purpose Test: question operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 176
+
+---
+
+@fn test_range_operators
+@purpose Test: range operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 183
+
+---
+
+@fn test_simple_string
+@purpose Test: simple string
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 115
+
+---
+
+@fn test_single_char_operators
+@purpose Test: single char operators
+@sig ()
+@calls [_kind_at, assert, tokenize]
+@source_file tests.aria
+@source_line 129
+
+---
+
+@fn test_single_identifier
+@purpose Test: single identifier
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 23
+
+---
+
+@fn test_string_with_escape
+@purpose Test: string with escape
+@sig ()
+@calls [_kind_at, _tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 121
+
+---
+
+@fn test_terminates_statement
+@purpose Test: terminates statement
+@sig ()
+@calls [assert, terminates_statement]
+@source_file tests.aria
+@source_line 313
+
+---
+
+@fn test_token_positions
+@purpose Test: token positions
+@sig ()
+@calls [_tok_at, assert, tokenize]
+@source_file tests.aria
+@source_line 256

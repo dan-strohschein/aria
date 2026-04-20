@@ -1,0 +1,187 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module codegen_test
+@lang aria
+@version 0.1.0
+@deps [checker, diagnostic, lexer, parser, resolver]
+@aid_version 0.2
+
+---
+
+@fn test_ir_func_add_inst
+@purpose Test: ir func add inst
+@sig ()
+@calls [assert, func_add_inst, func_inst_count, new_inst, new_ir_func]
+@source_file tests.aria
+@source_line 22
+
+---
+
+@fn test_ir_module_add_func
+@purpose Test: ir module add func
+@sig ()
+@calls [assert, mod_add_func, mod_func_count, new_ir_func, new_ir_module]
+@source_file tests.aria
+@source_line 29
+
+---
+
+@fn test_ir_module_add_string
+@purpose Test: ir module add string
+@sig ()
+@calls [assert, mod_add_string, mod_find_string, new_ir_module]
+@source_file tests.aria
+@source_line 36
+
+---
+
+@fn test_ir_module_find_func
+@purpose Test: ir module find func
+@sig ()
+@calls [assert, mod_add_func, mod_find_func, new_ir_func, new_ir_module]
+@source_file tests.aria
+@source_line 43
+
+---
+
+@fn test_ir_op_name
+@purpose Test: ir op name
+@sig ()
+@calls [assert, ir_op_name]
+@source_file tests.aria
+@source_line 15
+
+---
+
+@fn test_ir_validate_bad_jump_target
+@purpose Test: ir validate bad jump target
+@sig ()
+@calls [assert, func_add_inst, func_set_locals, mod_add_func, new_inst, new_ir_func, new_ir_module, validate_ir_module]
+@source_file tests.aria
+@source_line 183
+
+---
+
+@fn test_ir_validate_empty_module
+@purpose Test: ir validate empty module
+@sig ()
+@calls [assert, new_ir_module, validate_ir_module]
+@source_file tests.aria
+@source_line 166
+
+---
+
+@fn test_ir_validate_missing_entry
+@purpose Test: ir validate missing entry
+@sig ()
+@calls [assert, mod_set_entry, new_ir_module, validate_ir_module]
+@source_file tests.aria
+@source_line 194
+
+---
+
+@fn test_ir_validate_valid_function
+@purpose Test: ir validate valid function
+@sig ()
+@calls [assert, func_add_inst, func_set_locals, mod_add_func, new_inst, new_ir_func, new_ir_module, validate_ir_module]
+@source_file tests.aria
+@source_line 172
+
+---
+
+@fn test_lower_array_literal
+@purpose Test: lower array literal
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 154
+
+---
+
+@fn test_lower_boolean_operations
+@purpose Test: lower boolean operations
+@sig ()
+@calls [_lower_source, assert, mod_find_func]
+@source_file tests.aria
+@source_line 146
+
+---
+
+@fn test_lower_entry_block
+@purpose Test: lower entry block
+@sig ()
+@calls [_lower_source, assert, mod_find_func]
+@source_file tests.aria
+@source_line 77
+
+---
+
+@fn test_lower_fn_with_arithmetic
+@purpose Test: lower fn with arithmetic
+@sig ()
+@calls [_lower_source, assert, mod_find_func]
+@source_file tests.aria
+@source_line 70
+
+---
+
+@fn test_lower_function_call
+@purpose Test: lower function call
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 124
+
+---
+
+@fn test_lower_if_else
+@purpose Test: lower if else
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 95
+
+---
+
+@fn test_lower_multiple_functions
+@purpose Test: lower multiple functions
+@sig ()
+@calls [_lower_source, assert, mod_find_func]
+@source_file tests.aria
+@source_line 115
+
+---
+
+@fn test_lower_simple_fn
+@purpose Test: lower simple fn
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 63
+
+---
+
+@fn test_lower_string_constant
+@purpose Test: lower string constant
+@sig ()
+@calls [_lower_source, assert, mod_find_string]
+@source_file tests.aria
+@source_line 87
+
+---
+
+@fn test_lower_sum_type_match
+@purpose Test: lower sum type match
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 136
+
+---
+
+@fn test_lower_while_loop
+@purpose Test: lower while loop
+@sig ()
+@calls [_lower_source, assert, func_inst_count, mod_find_func]
+@source_file tests.aria
+@source_line 105

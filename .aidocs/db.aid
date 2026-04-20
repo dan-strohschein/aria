@@ -1,0 +1,346 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module db
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@type Connection
+@kind struct
+@fields
+  handle: i64
+@source_file db.aria
+@source_line 145
+
+---
+
+@type DbConn
+@kind struct
+@fields
+  handle: i64
+@source_file db.aria
+@source_line 23
+
+---
+
+@type DbError
+@kind union
+@purpose Named DbError to avoid clashing with fs.Error when both are imported.
+@variants
+  | ConnectionFailed
+  | QueryFailed
+  | TxFailed
+  | NotFound
+  | Unavailable
+@source_file db.aria
+@source_line 138
+
+---
+
+@type DbResult
+@kind struct
+@fields
+  handle: i64
+@source_file db.aria
+@source_line 27
+
+---
+
+@type DbRow
+@kind struct
+@fields
+  result: i64
+  row: i64
+  ncols: i64
+@source_file db.aria
+@source_line 31
+
+---
+
+@type Transaction
+@kind struct
+@fields
+  conn_handle: i64
+  active: bool
+@source_file db.aria
+@source_line 149
+
+---
+
+@fn begin
+@purpose All tx methods use the handle-based failure pattern rather than Result wrapping (cross-module fallible returns with stru
+@sig (conn: Connection) -> Transaction with [Io]
+@params
+  conn: Connection
+@calls [_ariaPgClear, _ariaPgExec, _ariaPgResultStatus]
+@source_file db.aria
+@source_line 173
+@effects [Io]
+
+---
+
+@fn close
+@sig (conn: Connection) -> bool
+@params
+  conn: Connection
+@calls [_ariaPgClose]
+@source_file db.aria
+@source_line 223
+
+---
+
+@fn commit
+@sig (tx: Transaction) -> bool with [Io]
+@params
+  tx: Transaction
+@calls [_ariaPgClear, _ariaPgExec, _ariaPgResultStatus]
+@source_file db.aria
+@source_line 189
+@effects [Io]
+
+---
+
+@fn connect
+@purpose Connect to a database.
+@sig (url: str) -> Connection ! DbError with [Io]
+@params
+  url: str
+@errors
+  DbError
+@calls [_ariaPgClose, _ariaPgConnect, _ariaPgStatus, err]
+@source_file db.aria
+@source_line 156
+@effects [Io]
+
+---
+
+@fn db_clear
+@purpose Free the result memory.
+@sig (result: DbResult)
+@params
+  result: DbResult
+@calls [_ariaPgClear]
+@source_file db.aria
+@source_line 110
+
+---
+
+@fn db_close
+@purpose Close the connection.
+@sig (conn: DbConn)
+@params
+  conn: DbConn
+@calls [_ariaPgClose]
+@source_file db.aria
+@source_line 44
+
+---
+
+@fn db_cols
+@purpose Number of columns in the result.
+@sig (result: DbResult) -> i64
+@params
+  result: DbResult
+@calls [_ariaPgNcols]
+@source_file db.aria
+@source_line 90
+
+---
+
+@fn db_connect
+@purpose Connect to PostgreSQL using a connection string.
+@sig (connstr: str) -> DbConn
+@params
+  connstr: str
+@calls [_ariaPgConnect]
+@source_file db.aria
+@source_line 38
+
+---
+
+@fn db_connected
+@purpose Check if the connection is healthy.
+@sig (conn: DbConn) -> bool
+@params
+  conn: DbConn
+@calls [_ariaPgStatus]
+@source_file db.aria
+@source_line 49
+
+---
+
+@fn db_error
+@purpose Get the last error message from the connection.
+@sig (conn: DbConn) -> str
+@params
+  conn: DbConn
+@calls [_ariaPgError]
+@source_file db.aria
+@source_line 54
+
+---
+
+@fn db_exec
+@purpose Execute a simple SQL query (no parameters).
+@sig (conn: DbConn, query: str) -> DbResult
+@params
+  conn: DbConn
+  query: str
+@calls [_ariaPgExec]
+@source_file db.aria
+@source_line 61
+
+---
+
+@fn db_field_name
+@purpose Get the name of column `col`.
+@sig (result: DbResult, col: i64) -> str
+@params
+  result: DbResult
+  col: i64
+@calls [_ariaPgFieldName]
+@source_file db.aria
+@source_line 95
+
+---
+
+@fn db_get
+@purpose Get the value at (row, col) as a string.
+@sig (result: DbResult, row: i64, col: i64) -> str
+@params
+  result: DbResult
+  row: i64
+  col: i64
+@calls [_ariaPgGetValue]
+@source_file db.aria
+@source_line 100
+
+---
+
+@fn db_is_null
+@purpose Check if the value at (row, col) is NULL.
+@sig (result: DbResult, row: i64, col: i64) -> bool
+@params
+  result: DbResult
+  row: i64
+  col: i64
+@calls [_ariaPgIsNull]
+@source_file db.aria
+@source_line 105
+
+---
+
+@fn db_ok
+@purpose Check if the result succeeded (COMMAND_OK or TUPLES_OK).
+@sig (result: DbResult) -> bool
+@params
+  result: DbResult
+@calls [_ariaPgResultStatus]
+@source_file db.aria
+@source_line 75
+
+---
+
+@fn db_query
+@purpose Execute a parameterized query ($1, $2, ...).
+@sig (conn: DbConn, query: str, params: [str]) -> DbResult
+@params
+  conn: DbConn
+  query: str
+  params: [str]
+@calls [_ariaPgExecParams]
+@source_file db.aria
+@source_line 67
+
+---
+
+@fn db_result_error
+@purpose Get the error message from a failed result.
+@sig (result: DbResult) -> str
+@params
+  result: DbResult
+@calls [_ariaPgResultError]
+@source_file db.aria
+@source_line 80
+
+---
+
+@fn db_row
+@purpose Get a row accessor for convenient column access.
+@sig (result: DbResult, row: i64) -> DbRow
+@params
+  result: DbResult
+  row: i64
+@calls [_ariaPgNcols]
+@source_file db.aria
+@source_line 117
+
+---
+
+@fn db_row_get
+@purpose Get a column value from a row.
+@sig (r: DbRow, col: i64) -> str
+@params
+  r: DbRow
+  col: i64
+@calls [_ariaPgGetValue]
+@source_file db.aria
+@source_line 123
+
+---
+
+@fn db_rows
+@purpose Number of rows in the result.
+@sig (result: DbResult) -> i64
+@params
+  result: DbResult
+@calls [_ariaPgNrows]
+@source_file db.aria
+@source_line 85
+
+---
+
+@fn exec
+@sig (tx: Transaction, sql: str, params: [str]) -> bool with [Io]
+@params
+  tx: Transaction
+  sql: str
+  params: [str]
+@calls [_ariaPgClear, _ariaPgExecParams, _ariaPgResultStatus]
+@source_file db.aria
+@source_line 181
+@effects [Io]
+
+---
+
+@fn is_connected
+@sig (c: Connection) -> bool
+@params
+  c: Connection
+@source_file db.aria
+@source_line 166
+
+---
+
+@fn query_all
+@sig (tx: Transaction, sql: str) -> [str] with [Io]
+@params
+  tx: Transaction
+  sql: str
+@calls [_ariaPgClear, _ariaPgExec, _ariaPgGetValue, _ariaPgNrows, _ariaPgResultStatus]
+@source_file db.aria
+@source_line 204
+@effects [Io]
+
+---
+
+@fn rollback
+@sig (tx: Transaction) -> bool with [Io]
+@params
+  tx: Transaction
+@calls [_ariaPgClear, _ariaPgExec]
+@source_file db.aria
+@source_line 197
+@effects [Io]

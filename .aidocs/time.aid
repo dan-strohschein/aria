@@ -1,0 +1,71 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module time
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@const m
+@type i64
+
+---
+
+@const ms
+@purpose Duration constants (milliseconds)
+@type i64
+
+---
+
+@const s
+@type i64
+
+---
+
+@type Instant
+@kind struct
+@fields
+  ns: i64
+@source_file time.aria
+@source_line 12
+
+---
+
+@fn elapsed
+@sig (start: Instant, end: Instant) -> i64
+@params
+  start: Instant
+  end: Instant
+@source_file time.aria
+@source_line 20
+
+---
+
+@fn now
+@sig () -> Instant with [Io]
+@calls [_ariaTimeNow]
+@source_file time.aria
+@source_line 16
+@effects [Io]
+
+---
+
+@fn sleep
+@sig (duration_ms: i64) with [Io]
+@params
+  duration_ms: i64
+@calls [_ariaSleep]
+@source_file time.aria
+@source_line 31
+@effects [Io]
+
+---
+
+@fn unix
+@purpose Convert monotonic ns to a "unix-ish" seconds value.
+@sig (i: Instant) -> i64
+@params
+  i: Instant
+@source_file time.aria
+@source_line 27

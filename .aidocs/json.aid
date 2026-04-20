@@ -1,0 +1,150 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module json
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@const JSON_ARRAY
+@type i64
+
+---
+
+@const JSON_BOOL
+@type i64
+
+---
+
+@const JSON_FLOAT
+@type i64
+
+---
+
+@const JSON_INT
+@type i64
+
+---
+
+@const JSON_NULL
+@purpose --- JSON Value Kinds ---
+@type i64
+
+---
+
+@const JSON_OBJECT
+@type i64
+
+---
+
+@const JSON_STRING
+@type i64
+
+---
+
+@type JsonPool
+@kind struct
+@fields
+  kinds: [i64]
+  ints: [i64]
+  strs: [str]
+  child_arrays: [i64]
+  obj_key_lists: [i64]
+@source_file json.aria
+@source_line 30
+
+---
+
+@type JsonValue
+@kind struct
+@fields
+  id: i64
+  pool: _JPool
+@source_file json.aria
+@source_line 84
+
+---
+
+@type _JPool
+@kind struct
+@fields
+  kinds: [i64]
+  ints: [i64]
+  strs: [str]
+  children: [i64]
+  key_lists: [i64]
+@source_file json.aria
+@source_line 56
+
+---
+
+@type _JV
+@kind struct
+@fields
+  val: JsonValue
+  pool: _JPool
+@source_file json.aria
+@source_line 91
+
+---
+
+@fn _jp_alloc
+@sig (pool: JsonPool, kind: i64, int_val: i64, str_val: str) -> i64
+@params
+  pool: JsonPool
+  kind: i64
+  int_val: i64
+  str_val: str
+@calls [JsonPool.kinds.len]
+@source_file json.aria
+@source_line 46
+
+---
+
+@fn _jp_new_pool
+@sig () -> JsonPool
+@source_file json.aria
+@source_line 41
+
+---
+
+@fn _jpool_add
+@sig (p: _JPool, kind: i64, iv: i64, sv: str, ch: i64, kl: i64) -> _JPool
+@params
+  p: _JPool
+  kind: i64
+  iv: i64
+  sv: str
+  ch: i64
+  kl: i64
+@source_file json.aria
+@source_line 69
+
+---
+
+@fn _jpool_id
+@sig (p: _JPool) -> i64
+@params
+  p: _JPool
+@calls [_JPool.kinds.len]
+@source_file json.aria
+@source_line 79
+
+---
+
+@fn _jpool_init
+@purpose Global singleton pool — initialized once
+@sig () -> _JPool
+@source_file json.aria
+@source_line 65
+
+---
+
+@fn _jv_null
+@sig (p: _JPool) -> _JV
+@params
+  p: _JPool
+@calls [_jp_array, _jp_decode_object_pairs, _jp_err, _jp_is_digit, _jp_is_err, _jp_number, _jp_object, _jp_ok, _jp_parse_int, _jp_pos_to_line_col, _jp_skip_ws, _jp_string, _jp_value, _jpool_add, _jpool_copy_value, _jpool_init, _json_emit_arr, _json_emit_obj, _json_escape, _jv_array, _jv_bool, _jv_float, _jv_int, _jv_null, _jv_object, _jv_string, err, input.len, json_array_get, json_array_len, json_emit, json_int_val, json_kind, json_new_bool, json_new_int, json_new_string, json_object_get, json_str_val]
+@source_file json.aria
+@source_line 96

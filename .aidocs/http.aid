@@ -1,0 +1,138 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module http
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@type HttpRequest
+@kind struct
+@fields
+  method: str
+  path: str
+  version: str
+  body: str
+  query: str
+  raw_headers: str
+@source_file http.aria
+@source_line 23
+
+---
+
+@type HttpResponse
+@kind struct
+@fields
+  status: i64
+  status_text: str
+  headers: [str]
+  body: str
+@source_file http.aria
+@source_line 34
+
+---
+
+@fn _http_status_text
+@sig (code: i64) -> str
+@params
+  code: i64
+@source_file http.aria
+@source_line 59
+
+---
+
+@fn http_add_header
+@sig (resp: HttpResponse, header: str) -> HttpResponse
+@params
+  resp: HttpResponse
+  header: str
+@calls [HttpResponse.headers.append]
+@source_file http.aria
+@source_line 54
+
+---
+
+@fn http_get_header
+@sig (req: HttpRequest, name: str) -> str
+@params
+  req: HttpRequest
+  name: str
+@calls [HttpRequest.raw_headers.charAt, HttpRequest.raw_headers.indexOf, HttpRequest.raw_headers.len, HttpRequest.raw_headers.substring]
+@source_file http.aria
+@source_line 120
+
+---
+
+@fn http_get_param
+@sig (params: [str], key: str) -> str
+@params
+  params: [str]
+  key: str
+@calls [params.len]
+@source_file http.aria
+@source_line 159
+
+---
+
+@fn http_parse_query
+@sig (query: str) -> [str]
+@params
+  query: str
+@calls [str.len, str.split]
+@source_file http.aria
+@source_line 138
+
+---
+
+@fn http_parse_request
+@sig (raw: str) -> HttpRequest
+@params
+  raw: str
+@calls [str.indexOf, str.len, str.substring]
+@source_file http.aria
+@source_line 76
+
+---
+
+@fn http_response
+@sig (status: i64, body: str) -> HttpResponse
+@params
+  status: i64
+  body: str
+@calls [_http_status_text]
+@source_file http.aria
+@source_line 43
+
+---
+
+@fn http_response_json
+@sig (status: i64, json_body: str) -> HttpResponse
+@params
+  status: i64
+  json_body: str
+@calls [_http_status_text]
+@source_file http.aria
+@source_line 48
+
+---
+
+@fn http_serialize_response
+@sig (resp: HttpResponse) -> str
+@params
+  resp: HttpResponse
+@calls [HttpResponse.body.len, HttpResponse.headers.len, HttpResponse.status.toStr]
+@source_file http.aria
+@source_line 171
+
+---
+
+@fn http_serve
+@purpose Simple serve loop — calls http_handler for each request.
+@sig (addr: str, port: i64) -> i64
+@params
+  addr: str
+  port: i64
+@calls [_ariaSpawn, _ariaTcpAccept, _ariaTcpBind, _ariaTcpClose, _ariaTcpListen, _ariaTcpRead, _ariaTcpSocket, _ariaTcpWrite, http_handler, http_parse_request, http_serialize_response, i64.toStr, println, raw.len]
+@source_file http.aria
+@source_line 192

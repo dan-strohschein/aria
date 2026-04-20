@@ -1,0 +1,236 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module fs
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@type Error
+@kind union
+@variants
+  | NotFound
+  | PermissionDenied
+  | IoFailed(str)
+@source_file fs.aria
+@source_line 14
+
+---
+
+@type File
+@kind struct
+@purpose --- File handles (value-typed for now — no real fd resource, just path) --- Matches the aspirational spec API: `with f
+@fields
+  path: str
+  mode: str
+@source_file fs.aria
+@source_line 73
+
+---
+
+@type IoError
+@kind union
+@variants
+  | NotFound
+  | PermissionDenied
+  | IoFailed(str)
+@source_file fs.aria
+@source_line 9
+
+---
+
+@type Metadata
+@kind struct
+@purpose Minimal file metadata.
+@fields
+  path: str
+  size_bytes: i64
+  exists: bool
+@source_file fs.aria
+@source_line 56
+
+---
+
+@fn File_close
+@sig (f: File) -> bool
+@params
+  f: File
+@source_file fs.aria
+@source_line 111
+
+---
+
+@fn File_lines
+@sig (f: File) -> [str] with [Fs]
+@params
+  f: File
+@calls [_ariaReadFile]
+@source_file fs.aria
+@source_line 93
+@effects [Fs]
+
+---
+
+@fn File_read_all
+@purpose Method-style names (Type_method) so `file.read_all()` dispatches correctly.
+@sig (f: File) -> str with [Fs]
+@params
+  f: File
+@calls [_ariaReadFile]
+@source_file fs.aria
+@source_line 89
+@effects [Fs]
+
+---
+
+@fn File_write
+@sig (f: File, content: str) -> bool with [Fs]
+@params
+  f: File
+  content: str
+@calls [_ariaAppendFile]
+@source_file fs.aria
+@source_line 98
+@effects [Fs]
+
+---
+
+@fn File_write_line
+@sig (f: File, content: str) -> bool with [Fs]
+@params
+  f: File
+  content: str
+@calls [_ariaAppendFile]
+@source_file fs.aria
+@source_line 104
+@effects [Fs]
+
+---
+
+@fn append
+@sig (path: str, content: str) with [Fs]
+@params
+  path: str
+  content: str
+@calls [_ariaAppendFile]
+@source_file fs.aria
+@source_line 32
+@effects [Fs]
+
+---
+
+@fn create
+@sig (path: str) -> File ! Error with [Fs]
+@params
+  path: str
+@errors
+  Error
+@calls [_ariaWriteFile]
+@source_file fs.aria
+@source_line 83
+@effects [Fs]
+
+---
+
+@fn exists
+@sig (path: str) -> bool with [Fs]
+@params
+  path: str
+@calls [_ariaFileExists]
+@source_file fs.aria
+@source_line 36
+@effects [Fs]
+
+---
+
+@fn is_dir
+@sig (path: str) -> bool with [Fs]
+@params
+  path: str
+@calls [_ariaIsDir]
+@source_file fs.aria
+@source_line 40
+@effects [Fs]
+
+---
+
+@fn list_dir
+@sig (path: str) -> [str] with [Fs]
+@params
+  path: str
+@calls [_ariaListDir]
+@source_file fs.aria
+@source_line 44
+@effects [Fs]
+
+---
+
+@fn metadata
+@sig (path: str) -> Metadata with [Fs]
+@params
+  path: str
+@calls [_ariaReadFile]
+@source_file fs.aria
+@source_line 62
+@effects [Fs]
+
+---
+
+@fn open
+@sig (path: str) -> File ! Error with [Fs]
+@params
+  path: str
+@errors
+  Error
+@calls [_ariaFileExists, err]
+@source_file fs.aria
+@source_line 78
+@effects [Fs]
+
+---
+
+@fn read
+@purpose read returns an empty string when the file is missing or unreadable.
+@sig (path: str) -> str with [Fs]
+@params
+  path: str
+@calls [_ariaReadFile]
+@source_file fs.aria
+@source_line 24
+@effects [Fs]
+
+---
+
+@fn remove
+@sig (path: str) -> bool with [Fs]
+@params
+  path: str
+@calls [_ariaRemoveFile]
+@source_file fs.aria
+@source_line 67
+@effects [Fs]
+
+---
+
+@fn walk
+@purpose walk returns the entries of `path` (non-recursive).
+@sig (path: str) -> [str] with [Fs]
+@params
+  path: str
+@calls [_ariaListDir]
+@source_file fs.aria
+@source_line 51
+@effects [Fs]
+
+---
+
+@fn write
+@sig (path: str, content: str) with [Fs]
+@params
+  path: str
+  content: str
+@calls [_ariaWriteFile]
+@source_file fs.aria
+@source_line 28
+@effects [Fs]

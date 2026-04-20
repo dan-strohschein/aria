@@ -1,213 +1,1147 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
 @module resolver
 @lang aria
+@version 0.1.0
+@deps [diagnostic, lexer, parser]
 @aid_version 0.2
-@purpose Name resolution, scope hierarchy, and symbol table construction
-@depends [lexer, parser, diagnostic]
-
----
-
-@type SymbolKind
-@kind sum
-@variants
-  SkFunction — Function declaration
-  SkType — Type declaration
-  SkEnum — Enum declaration
-  SkTrait — Trait declaration
-  SkConst — Constant declaration
-  SkVariable — Local variable binding
-  SkParameter — Function parameter
-  SkVariant — Sum type or enum variant
-  SkModule — Module name
-  SkBuiltin — Built-in symbol
-  SkNone — Sentinel / not found
-@source_file src/resolver/scope.aria
-@source_line 13
-
----
-
-@type ScopeKind
-@kind sum
-@variants
-  ScUniverse — Top-level built-in scope
-  ScModule — Module scope
-  ScFunction — Function body scope
-  ScBlock — Block scope (if, for, etc.)
-  ScNone — Sentinel
-@source_file src/resolver/scope.aria
-@source_line 72
-
----
-
-@type Symbol
-@kind struct
-@fields
-  name: str — Symbol name
-  kind: SymbolKind — Symbol classification
-  span: Span — Declaration location
-  scope_id: i64 — Scope where declared
-  is_mutable: bool — Whether binding is mutable
-  is_public: bool — Whether symbol is pub
-@source_file src/resolver/scope.aria
-@source_line 48
-
----
-
-@type Scope
-@kind struct
-@fields
-  kind: ScopeKind — Scope classification
-  parent: i64 — Parent scope ID (-1 for root)
-  name: str — Scope name (function name, module name)
-  depth: i64 — Nesting depth
-@source_file src/resolver/scope.aria
-@source_line 89
-
----
-
-@type SymbolTable
-@kind struct
-@fields
-  scopes: [Scope] — All scopes in hierarchy
-  symbols: [Symbol] — All declared symbols
-@source_file src/resolver/scope.aria
-@source_line 104
-
----
-
-@type Resolver
-@kind struct
-@fields
-  tokens: [Token] — Token stream
-  pos: i64 — Current position
-  table: SymbolTable — Symbol table being built
-  diagnostics: DiagnosticBag — Accumulated diagnostics
-  current_scope: i64 — Active scope ID
-  file: str — Source file path
-  is_public: bool — Whether current declaration is pub
-  pool: NodePool — AST node pool
-  index: DeclIndex — Declaration index
-@source_file src/resolver/resolver.aria
-@source_line 15
 
 ---
 
 @type ResolveResult
 @kind struct
 @fields
-  table: SymbolTable — Completed symbol table
-  diagnostics: DiagnosticBag — Resolution diagnostics
-@source_file src/resolver/resolver.aria
-@source_line 42
+  table: SymbolTable
+  diagnostics: DiagnosticBag
+@source_file resolver.aria
+@source_line 44
 
 ---
 
-@fn symbol_kind_name
-@sig (k: SymbolKind) -> str
-@source_file src/resolver/scope.aria
-@source_line 26
+@type Resolver
+@kind struct
+@fields
+  tokens: [Token]
+  pos: i64
+  table: SymbolTable
+  diagnostics: DiagnosticBag
+  current_scope: i64
+  file: str
+  is_public: bool
+  pool: NodePool
+  index: DeclIndex
+  closure_scope: i64
+@source_file resolver.aria
+@source_line 15
 
 ---
 
-@fn sk_eq
-@sig (a: SymbolKind, b: SymbolKind) -> bool
-@source_file src/resolver/scope.aria
-@source_line 40
+@type Scope
+@kind struct
+@fields
+  kind: ScopeKind
+  parent: i64
+  name: str
+  depth: i64
+@source_file scope.aria
+@source_line 89
 
 ---
 
-@fn new_symbol
-@sig (name: str, kind: SymbolKind, span: Span, scope_id: i64, is_mutable: bool, is_public: bool) -> Symbol
-@source_file src/resolver/scope.aria
-@source_line 67
+@type ScopeKind
+@kind union
+@variants
+  | ScUniverse
+  | ScModule
+  | ScFunction
+  | ScBlock
+  | ScNone
+@source_file scope.aria
+@source_line 72
 
 ---
 
-@fn scope_kind_name
-@sig (k: ScopeKind) -> str
-@source_file src/resolver/scope.aria
-@source_line 79
+@type StrMap
+@kind struct
+@fields
+  keys: [str]
+  vals: [i64]
+  buckets: [i64]
+  capacity: i64
+  count: i64
+@source_file scope.aria
+@source_line 179
 
 ---
 
-@fn new_scope
-@sig (kind: ScopeKind, parent: i64, name: str, depth: i64) -> Scope
-@source_file src/resolver/scope.aria
-@source_line 99
+@type Symbol
+@kind struct
+@fields
+  name: str
+  kind: SymbolKind
+  span: Span
+  scope_id: i64
+  is_mutable: bool
+  is_public: bool
+@source_file scope.aria
+@source_line 48
 
 ---
 
-@fn new_table
-@sig () -> SymbolTable
-@source_file src/resolver/scope.aria
-@source_line 109
+@type SymbolKind
+@kind union
+@variants
+  | SkFunction
+  | SkType
+  | SkEnum
+  | SkTrait
+  | SkConst
+  | SkVariable
+  | SkParameter
+  | SkVariant
+  | SkModule
+  | SkBuiltin
+  | SkNone
+@source_file scope.aria
+@source_line 13
+
+---
+
+@type SymbolTable
+@kind struct
+@fields
+  scopes: [Scope]
+  symbols: [Symbol]
+@source_file scope.aria
+@source_line 104
+
+---
+
+@fn _add_builtin
+@sig (r: Resolver, name: str, kind: SymbolKind) -> Resolver
+@params
+  r: Resolver
+  name: str
+  kind: SymbolKind
+@calls [_builtin_span, _rset_table, add_symbol, new_symbol]
+@source_file resolver.aria
+@source_line 197
+
+---
+
+@fn _add_sym
+@sig (r: Resolver, name: str, kind: SymbolKind, span: Span, is_mut: bool, is_pub: bool) -> Resolver
+@params
+  r: Resolver
+  name: str
+  kind: SymbolKind
+  span: Span
+  is_mut: bool
+  is_pub: bool
+@calls [_q, _rset_diag, _rset_table, add_symbol, bag_add_error, lookup_local, new_symbol, sk_eq]
+@source_file resolver.aria
+@source_line 148
+
+---
+
+@fn _add_sym_warn_shadow
+@sig (r: Resolver, name: str, kind: SymbolKind, span: Span, is_mut: bool) -> Resolver
+@params
+  r: Resolver
+  name: str
+  kind: SymbolKind
+  span: Span
+  is_mut: bool
+@calls [_q, _rset_table, _rwarning, add_symbol, lookup, new_symbol, sk_eq]
+@source_file resolver.aria
+@source_line 167
+
+---
+
+@fn _bucket_set
+@purpose Set a bucket value at a given index (uses AST-lowered indexed assignment)
+@sig (mut buckets: [i64], idx: i64, val: i64)
+@params
+  buckets: [i64]
+  idx: i64
+  val: i64
+@source_file scope.aria
+@source_line 287
+
+---
+
+@fn _builtin_span
+@sig () -> Span
+@calls [new_span]
+@source_file resolver.aria
+@source_line 195
+
+---
+
+@fn _char_ord
+@purpose Hash a string using DJB2 algorithm
+@sig (c: str) -> i64
+@params
+  c: str
+@source_file scope.aria
+@source_line 203
+
+---
+
+@fn _edit_distance
+@purpose Simple edit distance (Levenshtein) for short strings
+@sig (a: str, b: str) -> i64
+@params
+  a: str
+  b: str
+@calls [str.charAt, str.len]
+@source_file resolver.aria
+@source_line 1579
+
+---
+
+@fn _err_count
+@sig (result: ResolveResult) -> i64
+@params
+  result: ResolveResult
+@calls [bag_error_count]
+@source_file tests.aria
+@source_line 21
+
+---
+
+@fn _find_similar_name
+@purpose Find a similar name in scope (for "did you mean?" suggestions)
+@sig (r: Resolver, name: str) -> str
+@params
+  r: Resolver
+  name: str
+@calls [Resolver.table.symbols.len, _edit_distance]
+@source_file resolver.aria
+@source_line 1554
+
+---
+
+@fn _find_sym
+@sig (result: ResolveResult, name: str) -> Symbol
+@params
+  result: ResolveResult
+  name: str
+@calls [ResolveResult.table.symbols.len, _sentinel_symbol]
+@source_file tests.aria
+@source_line 36
+
+---
+
+@fn _has_code
+@sig (result: ResolveResult, code: str) -> bool
+@params
+  result: ResolveResult
+  code: str
+@calls [ResolveResult.diagnostics.diagnostics.len]
+@source_file tests.aria
+@source_line 25
+
+---
+
+@fn _has_errors
+@sig (result: ResolveResult) -> bool
+@params
+  result: ResolveResult
+@calls [bag_has_errors]
+@source_file tests.aria
+@source_line 19
+
+---
+
+@fn _is_decl_keyword
+@sig (k: str) -> bool
+@params
+  k: str
+@source_file resolver.aria
+@source_line 394
+
+---
+
+@fn _is_expr_continuation
+@sig (k: str) -> bool
+@params
+  k: str
+@source_file resolver.aria
+@source_line 1360
+
+---
+
+@fn _is_scope_inside
+@sig (table: SymbolTable, child_scope: i64, target_scope: i64) -> bool
+@params
+  table: SymbolTable
+  child_scope: i64
+  target_scope: i64
+@calls [SymbolTable.scopes.len]
+@source_file resolver.aria
+@source_line 1632
+
+---
+
+@fn _new_resolver
+@sig (tokens: [Token], pool: NodePool, index: DeclIndex, file: str) -> Resolver
+@params
+  tokens: [Token]
+  pool: NodePool
+  index: DeclIndex
+  file: str
+@calls [new_bag, new_table]
+@source_file resolver.aria
+@source_line 28
+
+---
+
+@fn _pass1
+@sig (r: Resolver, index: DeclIndex) -> Resolver
+@params
+  r: Resolver
+  index: DeclIndex
+@calls [_add_sym, _pass1_collect_variants, _radv, _rcur, _rk, _rset_pos, _rskip_nl, _rskip_pub, _rspan, decl_index_get, decl_index_len, decl_kind_name]
+@source_file resolver.aria
+@source_line 398
+
+---
+
+@fn _pass1_collect_variants
+@purpose Collect sum type variant names after type Foo = | Bar | Baz
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym, _radv, _rcur, _rk, _rskip_nl, _rspan]
+@source_file resolver.aria
+@source_line 521
+
+---
+
+@fn _pass2
+@sig (r: Resolver, index: DeclIndex) -> Resolver
+@params
+  r: Resolver
+  index: DeclIndex
+@calls [_radv, _resolve_const, _resolve_const_ast, _resolve_entry, _resolve_entry_ast, _resolve_fn, _resolve_fn_ast, _resolve_impl, _resolve_impl_ast, _resolve_test, _resolve_test_ast, _rk, _rset_pos, _rskip_nl, _rskip_pub, decl_index_get, decl_index_len, decl_kind_name]
+@source_file resolver.aria
+@source_line 580
+
+---
+
+@fn _pop_scope
+@sig (r: Resolver, parent: i64) -> Resolver
+@params
+  r: Resolver
+  parent: i64
+@calls [_rset_scope]
+@source_file resolver.aria
+@source_line 190
+
+---
+
+@fn _populate_builtins
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_builtin]
+@source_file resolver.aria
+@source_line 202
+
+---
+
+@fn _push_scope
+@sig (r: Resolver, kind: ScopeKind, name: str) -> Resolver
+@params
+  r: Resolver
+  kind: ScopeKind
+  name: str
+@calls [_rset_scope, _rset_table, add_scope, last_scope_id]
+@source_file resolver.aria
+@source_line 183
+
+---
+
+@fn _radv
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@source_file resolver.aria
+@source_line 66
+
+---
+
+@fn _rcur
+@sig (r: Resolver) -> Token
+@params
+  r: Resolver
+@calls [Resolver.tokens.len]
+@source_file resolver.aria
+@source_line 51
+
+---
+
+@fn _register_param_names
+@purpose Register comma-separated parameter names
+@sig (r: Resolver, params: str, span: Span) -> Resolver
+@params
+  r: Resolver
+  params: str
+  span: Span
+@calls [_add_sym_warn_shadow, str.charAt, str.len, str.substring]
+@source_file resolver.aria
+@source_line 2100
+
+---
+
+@fn _rerror
+@sig (r: Resolver, code: str, msg: str) -> Resolver
+@params
+  r: Resolver
+  code: str
+  msg: str
+@calls [_rset_diag, _rspan, bag_add_error]
+@source_file resolver.aria
+@source_line 136
+
+---
+
+@fn _resolve_block
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_pop_scope, _push_scope, _radv, _resolve_stmt, _rk, _rskip_nl]
+@source_file resolver.aria
+@source_line 991
+
+---
+
+@fn _resolve_bracket_contents
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_block, _resolve_bracket_contents, _resolve_ident, _resolve_paren_contents, _resolve_struct_lit, _rk]
+@source_file resolver.aria
+@source_line 1092
+
+---
+
+@fn _resolve_closure
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _pop_scope, _push_scope, _radv, _rcur, _resolve_expr_until_nl, _rk, _rset_closure_scope, _rspan, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 2464
+
+---
+
+@fn _resolve_const
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_expr_until_nl, _rk, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 952
+
+---
+
+@fn _resolve_const_ast
+@sig (r: Resolver, node_idx: i64) -> Resolver
+@params
+  r: Resolver
+  node_idx: i64
+@calls [_resolve_expr_node, pool_get]
+@source_file resolver.aria
+@source_line 867
+
+---
+
+@fn _resolve_entry
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_pop_scope, _push_scope, _radv, _resolve_block]
+@source_file resolver.aria
+@source_line 969
+
+---
+
+@fn _resolve_entry_ast
+@sig (r: Resolver, node_idx: i64) -> Resolver
+@params
+  r: Resolver
+  node_idx: i64
+@calls [_pop_scope, _push_scope, _resolve_expr_node, pool_get]
+@source_file resolver.aria
+@source_line 875
+
+---
+
+@fn _resolve_expr_node
+@sig (r: Resolver, idx: i64) -> Resolver
+@params
+  r: Resolver
+  idx: i64
+@calls [_add_sym, _add_sym_warn_shadow, _pop_scope, _push_scope, _register_param_names, _resolve_expr_node, _resolve_ident_by_name, _resolve_pattern_bindings, expr_kind_name, pool_get]
+@source_file resolver.aria
+@source_line 1753
+
+---
+
+@fn _resolve_expr_or_binding
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [Resolver.tokens.len, _add_sym_warn_shadow, _radv, _rcur, _resolve_expr_until_nl, _rk, _rset_pos, _rspan, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 1271
+
+---
+
+@fn _resolve_expr_until_nl
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _is_expr_continuation, _radv, _rcur, _resolve_block, _resolve_closure, _resolve_ident, _resolve_if, _resolve_match, _resolve_struct_lit, _rk, _rspan]
+@source_file resolver.aria
+@source_line 1370
+
+---
+
+@fn _resolve_fn
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym, _add_sym_warn_shadow, _pop_scope, _push_scope, _radv, _rcur, _resolve_block, _resolve_expr_until_nl, _rk, _rskip_nl, _rspan, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 651
+
+---
+
+@fn _resolve_fn_ast
+@sig (r: Resolver, node_idx: i64) -> Resolver
+@params
+  r: Resolver
+  node_idx: i64
+@calls [_add_sym, _add_sym_warn_shadow, _pop_scope, _push_scope, _radv, _rcur, _resolve_expr_node, _rk, _rset_pos, _rskip_nl, _rspan, pool_get]
+@source_file resolver.aria
+@source_line 776
+
+---
+
+@fn _resolve_for
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _pop_scope, _push_scope, _radv, _rcur, _resolve_block, _resolve_ident, _rk, _rspan]
+@source_file resolver.aria
+@source_line 2367
+
+---
+
+@fn _resolve_ident
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_find_similar_name, _is_scope_inside, _q, _radv, _rcur, _rerror, _span_file, _stdlib_module_for_name, lookup]
+@source_file resolver.aria
+@source_line 1648
+
+---
+
+@fn _resolve_ident_by_name
+@sig (r: Resolver, name: str, span: Span) -> Resolver
+@params
+  r: Resolver
+  name: str
+  span: Span
+@calls [_find_similar_name, _q, _rset_diag, _stdlib_module_for_name, bag_add_error, bag_add_warning, lookup, str.charAt, str.len]
+@source_file resolver.aria
+@source_line 1704
+
+---
+
+@fn _resolve_if
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_block, _resolve_ident, _resolve_if, _rk]
+@source_file resolver.aria
+@source_line 2194
+
+---
+
+@fn _resolve_immut_binding
+@purpose --- Resolve immutable binding: name := expr ---
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _radv, _rcur, _resolve_expr_until_nl, _rk, _rspan]
+@source_file resolver.aria
+@source_line 1254
+
+---
+
+@fn _resolve_impl
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_fn, _rk, _rskip_nl, _rskip_pub]
+@source_file resolver.aria
+@source_line 923
+
+---
+
+@fn _resolve_impl_ast
+@sig (r: Resolver, node_idx: i64) -> Resolver
+@params
+  r: Resolver
+  node_idx: i64
+@calls [_resolve_fn_ast, pool_get]
+@source_file resolver.aria
+@source_line 907
+
+---
+
+@fn _resolve_loop
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_block]
+@source_file resolver.aria
+@source_line 2424
+
+---
+
+@fn _resolve_match
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _pop_scope, _push_scope, _radv, _rcur, _resolve_block, _resolve_expr_until_nl, _resolve_ident, _rk, _rskip_nl, _rspan, lookup, sk_eq]
+@source_file resolver.aria
+@source_line 2228
+
+---
+
+@fn _resolve_mut_binding
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _radv, _rcur, _resolve_expr_until_nl, _rk, _rspan, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 1232
+
+---
+
+@fn _resolve_paren_contents
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_ident, _resolve_paren_contents, _rk]
+@source_file resolver.aria
+@source_line 1071
+
+---
+
+@fn _resolve_pattern_bindings
+@purpose Walk a pattern AST node and register bindings for destructured variables
+@sig (r: Resolver, idx: i64) -> Resolver
+@params
+  r: Resolver
+  idx: i64
+@calls [_add_sym_warn_shadow, _resolve_pattern_bindings, expr_kind_name, lookup, pool_get, sk_eq]
+@source_file resolver.aria
+@source_line 2125
+
+---
+
+@fn _resolve_source
+@sig (source: str) -> ResolveResult
+@params
+  source: str
+@calls [build_decl_index, get_tokens, resolve, tokenize]
+@source_file tests.aria
+@source_line 12
+
+---
+
+@fn _resolve_stmt
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [Resolver.tokens.len, _add_sym_warn_shadow, _radv, _rcur, _resolve_expr_or_binding, _resolve_expr_until_nl, _resolve_for, _resolve_if, _resolve_loop, _resolve_match, _resolve_mut_binding, _resolve_stmt, _resolve_while, _resolve_with, _rk, _rset_pos, _rskip_nl, _rspan]
+@source_file resolver.aria
+@source_line 1129
+
+---
+
+@fn _resolve_struct_field_value
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_block, _resolve_bracket_contents, _resolve_ident, _resolve_paren_contents, _resolve_struct_lit, _rk]
+@source_file resolver.aria
+@source_line 1039
+
+---
+
+@fn _resolve_struct_lit
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_struct_field_value, _rk, _rskip_nl]
+@source_file resolver.aria
+@source_line 1010
+
+---
+
+@fn _resolve_test
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_pop_scope, _push_scope, _radv, _resolve_block, _rk]
+@source_file resolver.aria
+@source_line 979
+
+---
+
+@fn _resolve_test_ast
+@sig (r: Resolver, node_idx: i64) -> Resolver
+@params
+  r: Resolver
+  node_idx: i64
+@calls [_pop_scope, _push_scope, _resolve_expr_node, pool_get]
+@source_file resolver.aria
+@source_line 892
+
+---
+
+@fn _resolve_while
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _resolve_block, _resolve_ident, _rk]
+@source_file resolver.aria
+@source_line 2400
+
+---
+
+@fn _resolve_with
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_add_sym_warn_shadow, _radv, _rcur, _resolve_block, _resolve_ident, _rk, _rskip_nl, _rspan]
+@source_file resolver.aria
+@source_line 2431
+
+---
+
+@fn _rk
+@sig (r: Resolver) -> str
+@params
+  r: Resolver
+@calls [_rcur]
+@source_file resolver.aria
+@source_line 58
+
+---
+
+@fn _rk2
+@sig (r: Resolver, pos: i64) -> str
+@params
+  r: Resolver
+  pos: i64
+@calls [Resolver.tokens.len]
+@source_file resolver.aria
+@source_line 60
+
+---
+
+@fn _rset_closure_scope
+@sig (r: Resolver, cs: i64) -> Resolver
+@params
+  r: Resolver
+  cs: i64
+@source_file resolver.aria
+@source_line 116
+
+---
+
+@fn _rset_diag
+@sig (r: Resolver, diag: DiagnosticBag) -> Resolver
+@params
+  r: Resolver
+  diag: DiagnosticBag
+@source_file resolver.aria
+@source_line 98
+
+---
+
+@fn _rset_pos
+@sig (r: Resolver, pos: i64) -> Resolver
+@params
+  r: Resolver
+  pos: i64
+@source_file resolver.aria
+@source_line 86
+
+---
+
+@fn _rset_public
+@sig (r: Resolver, is_public: bool) -> Resolver
+@params
+  r: Resolver
+  is_public: bool
+@source_file resolver.aria
+@source_line 110
+
+---
+
+@fn _rset_scope
+@sig (r: Resolver, scope_id: i64) -> Resolver
+@params
+  r: Resolver
+  scope_id: i64
+@source_file resolver.aria
+@source_line 104
+
+---
+
+@fn _rset_table
+@sig (r: Resolver, table: SymbolTable) -> Resolver
+@params
+  r: Resolver
+  table: SymbolTable
+@source_file resolver.aria
+@source_line 92
+
+---
+
+@fn _rskip_nl
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _rk]
+@source_file resolver.aria
+@source_line 130
+
+---
+
+@fn _rskip_pub
+@purpose Skip pub modifier, including optional (pkg) scope qualifier
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _rk]
+@source_file resolver.aria
+@source_line 73
+
+---
+
+@fn _rspan
+@sig (r: Resolver) -> Span
+@params
+  r: Resolver
+@calls [_rcur, new_span]
+@source_file resolver.aria
+@source_line 122
+
+---
+
+@fn _rwarning
+@sig (r: Resolver, code: str, msg: str) -> Resolver
+@params
+  r: Resolver
+  code: str
+  msg: str
+@calls [_rset_diag, _rspan, bag_add_warning]
+@source_file resolver.aria
+@source_line 141
+
+---
+
+@fn _same_package
+@purpose Check if child_scope is the target_scope or a descendant of it All files compiled together in a multi-file build are in 
+@sig (file_a: str, file_b: str) -> bool
+@params
+  file_a: str
+  file_b: str
+@source_file resolver.aria
+@source_line 1630
+
+---
+
+@fn _sentinel_scope
+@sig () -> Scope
+@source_file scope.aria
+@source_line 96
+
+---
+
+@fn _sentinel_symbol
+@sig () -> Symbol
+@calls [new_span]
+@source_file scope.aria
+@source_line 57
+
+---
+
+@fn _skip_type_tokens
+@sig (r: Resolver) -> Resolver
+@params
+  r: Resolver
+@calls [_radv, _rk, _skip_type_tokens]
+@source_file resolver.aria
+@source_line 2510
+
+---
+
+@fn _stdlib_module_for_name
+@purpose Returns a stdlib module name if the identifier is a known export, or ""
+@sig (name: str) -> str
+@params
+  name: str
+@source_file resolver.aria
+@source_line 1608
+
+---
+
+@fn _str_hash
+@sig (s: str) -> i64
+@params
+  s: str
+@calls [_char_ord, str.charAt, str.len]
+@source_file scope.aria
+@source_line 274
+
+---
+
+@fn _strmap_init_buckets
+@sig (cap: i64) -> [i64]
+@params
+  cap: i64
+@source_file scope.aria
+@source_line 187
+
+---
+
+@fn _strmap_rehash
+@purpose Rehash: rebuild bucket array at double capacity
+@sig (m: StrMap) -> StrMap
+@params
+  m: StrMap
+@calls [StrMap.keys.len, _bucket_set, _str_hash, _strmap_init_buckets]
+@source_file scope.aria
+@source_line 292
+
+---
+
+@fn _warn_count
+@sig (result: ResolveResult) -> i64
+@params
+  result: ResolveResult
+@calls [bag_warning_count]
+@source_file tests.aria
+@source_line 23
 
 ---
 
 @fn add_scope
 @sig (table: SymbolTable, kind: ScopeKind, parent: i64, name: str) -> SymbolTable
-@source_file src/resolver/scope.aria
+@params
+  table: SymbolTable
+  kind: ScopeKind
+  parent: i64
+  name: str
+@calls [SymbolTable.scopes.append, SymbolTable.scopes.len, new_scope]
+@source_file scope.aria
 @source_line 115
-
----
-
-@fn last_scope_id
-@sig (table: SymbolTable) -> i64
-@source_file src/resolver/scope.aria
-@source_line 127
 
 ---
 
 @fn add_symbol
 @sig (table: SymbolTable, sym: Symbol) -> SymbolTable
-@source_file src/resolver/scope.aria
+@params
+  table: SymbolTable
+  sym: Symbol
+@calls [SymbolTable.symbols.append]
+@source_file scope.aria
 @source_line 129
 
 ---
 
-@fn scope_count
+@fn last_scope_id
 @sig (table: SymbolTable) -> i64
-@source_file src/resolver/scope.aria
-@source_line 135
-
----
-
-@fn symbol_count
-@sig (table: SymbolTable) -> i64
-@source_file src/resolver/scope.aria
-@source_line 137
-
----
-
-@fn lookup_local
-@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
-@source_file src/resolver/scope.aria
-@source_line 142
+@params
+  table: SymbolTable
+@calls [SymbolTable.scopes.len]
+@source_file scope.aria
+@source_line 127
 
 ---
 
 @fn lookup
+@purpose Lookup walking the parent chain from scope_id up to universe
 @sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
-@source_file src/resolver/scope.aria
+@params
+  table: SymbolTable
+  scope_id: i64
+  name: str
+@calls [SymbolTable.scopes.len, _sentinel_symbol, lookup_local]
+@source_file scope.aria
 @source_line 157
 
 ---
 
-@fn _rskip_pub
-@sig (r: Resolver) -> Resolver
-@source_file src/resolver/resolver.aria
-@source_line 64
+@fn lookup_local
+@purpose Lookup in a specific scope only (no parent walk)
+@sig (table: SymbolTable, scope_id: i64, name: str) -> Symbol
+@params
+  table: SymbolTable
+  scope_id: i64
+  name: str
+@calls [SymbolTable.symbols.len, _sentinel_symbol]
+@source_file scope.aria
+@source_line 142
 
 ---
 
-@fn _stdlib_module_for_name
-@sig (name: str) -> str
-@source_file src/resolver/resolver.aria
-@source_line 1383
+@fn new_scope
+@sig (kind: ScopeKind, parent: i64, name: str, depth: i64) -> Scope
+@params
+  kind: ScopeKind
+  parent: i64
+  name: str
+  depth: i64
+@source_file scope.aria
+@source_line 99
+
+---
+
+@fn new_symbol
+@sig (name: str, kind: SymbolKind, span: Span, scope_id: i64, is_mutable: bool, is_public: bool) -> Symbol
+@params
+  name: str
+  kind: SymbolKind
+  span: Span
+  scope_id: i64
+  is_mutable: bool
+  is_public: bool
+@source_file scope.aria
+@source_line 67
+
+---
+
+@fn new_table
+@sig () -> SymbolTable
+@calls [_sentinel_scope, _sentinel_symbol]
+@source_file scope.aria
+@source_line 109
 
 ---
 
 @fn resolve
 @sig (tokens: [Token], index: DeclIndex, pool: NodePool, file: str) -> ResolveResult
-@calls [new_table, add_scope, add_symbol, lookup, lookup_local]
-@source_file src/resolver/resolver.aria
-@source_line 2103
+@params
+  tokens: [Token]
+  index: DeclIndex
+  pool: NodePool
+  file: str
+@calls [_builtin_span, _new_resolver, _pass1, _pass2, _populate_builtins, _push_scope, _rset_table, add_symbol, lookup_local, new_symbol]
+@source_file resolver.aria
+@source_line 2575
+
+---
+
+@fn scope_count
+@sig (table: SymbolTable) -> i64
+@params
+  table: SymbolTable
+@calls [SymbolTable.scopes.len]
+@source_file scope.aria
+@source_line 135
+
+---
+
+@fn scope_kind_name
+@sig (k: ScopeKind) -> str
+@params
+  k: ScopeKind
+@source_file scope.aria
+@source_line 79
+
+---
+
+@fn sk_eq
+@sig (a: SymbolKind, b: SymbolKind) -> bool
+@params
+  a: SymbolKind
+  b: SymbolKind
+@calls [symbol_kind_name]
+@source_file scope.aria
+@source_line 40
+
+---
+
+@fn strmap_get
+@purpose Get the value for a key using hash-based lookup, or -1 if not found.
+@sig (m: StrMap, key: str) -> i64
+@params
+  m: StrMap
+  key: str
+@calls [StrMap.buckets.len, StrMap.keys.len, _str_hash]
+@source_file scope.aria
+@source_line 343
+
+---
+
+@fn strmap_has
+@sig (m: StrMap, key: str) -> bool
+@params
+  m: StrMap
+  key: str
+@calls [strmap_get]
+@source_file scope.aria
+@source_line 361
+
+---
+
+@fn strmap_new
+@sig () -> StrMap
+@calls [_strmap_init_buckets]
+@source_file scope.aria
+@source_line 197
+
+---
+
+@fn strmap_put
+@purpose Put a key-value pair with hash-based bucket insertion.
+@sig (m: StrMap, key: str, val: i64) -> StrMap
+@params
+  m: StrMap
+  key: str
+  val: i64
+@calls [_bucket_set, _str_hash, _strmap_rehash]
+@source_file scope.aria
+@source_line 316
+
+---
+
+@fn symbol_count
+@sig (table: SymbolTable) -> i64
+@params
+  table: SymbolTable
+@calls [SymbolTable.symbols.len]
+@source_file scope.aria
+@source_line 137
+
+---
+
+@fn symbol_kind_name
+@sig (k: SymbolKind) -> str
+@params
+  k: SymbolKind
+@source_file scope.aria
+@source_line 26

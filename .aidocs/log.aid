@@ -1,0 +1,60 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module log
+@lang aria
+@version 0.1.0
+@aid_version 0.2
+
+---
+
+@fn debug
+@sig (msg: str) with [Io]
+@params
+  msg: str
+@calls [println]
+@source_file log.aria
+@source_line 25
+@effects [Io]
+
+---
+
+@fn error
+@sig (msg: str) with [Io]
+@params
+  msg: str
+@calls [eprintln]
+@source_file log.aria
+@source_line 21
+@effects [Io]
+
+---
+
+@fn info
+@sig (msg: str) with [Io]
+@params
+  msg: str
+@calls [println]
+@source_file log.aria
+@source_line 13
+@effects [Io]
+
+---
+
+@fn set_level
+@purpose Set the minimum log level (0=Debug, 1=Info, 2=Warn, 3=Error).
+@sig (level: i64) -> i64
+@params
+  level: i64
+@source_file log.aria
+@source_line 31
+
+---
+
+@fn warn
+@sig (msg: str) with [Io]
+@params
+  msg: str
+@calls [println]
+@source_file log.aria
+@source_line 17
+@effects [Io]

@@ -1,0 +1,286 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module resolver_test
+@lang aria
+@version 0.1.0
+@deps [diagnostic, lexer, parser]
+@aid_version 0.2
+
+---
+
+@fn test_add_scope_increments_count
+@purpose Test: add scope increments count
+@sig ()
+@calls [add_scope, assert, new_table, scope_count]
+@source_file tests.aria
+@source_line 59
+
+---
+
+@fn test_add_symbol_and_lookup_local
+@purpose Test: add symbol and lookup local
+@sig ()
+@calls [add_scope, add_symbol, assert, lookup_local, new_span, new_symbol, new_table]
+@source_file tests.aria
+@source_line 67
+
+---
+
+@fn test_builtin_names_resolve
+@purpose Test: builtin names resolve
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 188
+
+---
+
+@fn test_builtin_types_resolve
+@purpose Test: builtin types resolve
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 297
+
+---
+
+@fn test_duplicate_const_declaration
+@purpose Test: duplicate const declaration
+@sig ()
+@calls [_has_code, _has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 174
+
+---
+
+@fn test_duplicate_fn_declaration
+@purpose Test: duplicate fn declaration
+@sig ()
+@calls [_has_code, _has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 168
+
+---
+
+@fn test_entry_block_resolves
+@purpose Test: entry block resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 277
+
+---
+
+@fn test_for_loop_variable_resolves_in_body
+@purpose Test: for loop variable resolves in body
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 267
+
+---
+
+@fn test_forward_reference_to_fn_resolves
+@purpose Test: forward reference to fn resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 193
+
+---
+
+@fn test_lookup_local_returns_sentinel_for_missing
+@purpose Test: lookup local returns sentinel for missing
+@sig ()
+@calls [add_scope, assert, lookup_local, new_table]
+@source_file tests.aria
+@source_line 76
+
+---
+
+@fn test_lookup_stops_at_sentinel_for_unknown_name
+@purpose Test: lookup stops at sentinel for unknown name
+@sig ()
+@calls [add_scope, assert, lookup, new_table]
+@source_file tests.aria
+@source_line 94
+
+---
+
+@fn test_lookup_walks_parent_chain
+@purpose Test: lookup walks parent chain
+@sig ()
+@calls [add_scope, add_symbol, assert, lookup, new_span, new_symbol, new_table]
+@source_file tests.aria
+@source_line 83
+
+---
+
+@fn test_mut_variable_binding_resolves
+@purpose Test: mut variable binding resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 208
+
+---
+
+@fn test_nested_block_scoping
+@purpose Test: nested block scoping
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 234
+
+---
+
+@fn test_new_table_has_sentinels
+@purpose Test: new table has sentinels
+@sig ()
+@calls [assert, new_table, scope_count, symbol_count]
+@source_file tests.aria
+@source_line 53
+
+---
+
+@fn test_parameter_resolves_in_body
+@purpose Test: parameter resolves in body
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 216
+
+---
+
+@fn test_println_resolves
+@purpose Test: println resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 303
+
+---
+
+@fn test_resolve_finds_const_declaration
+@purpose Test: resolve finds const declaration
+@sig ()
+@calls [_find_sym, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 159
+
+---
+
+@fn test_resolve_finds_enum_declaration
+@purpose Test: resolve finds enum declaration
+@sig ()
+@calls [_find_sym, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 139
+
+---
+
+@fn test_resolve_finds_fn_declaration
+@purpose Test: resolve finds fn declaration
+@sig ()
+@calls [_find_sym, _has_errors, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 104
+
+---
+
+@fn test_resolve_finds_struct_declaration
+@purpose Test: resolve finds struct declaration
+@sig ()
+@calls [_find_sym, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 129
+
+---
+
+@fn test_resolve_finds_sum_type_variants
+@purpose Test: resolve finds sum type variants
+@sig ()
+@calls [_find_sym, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 120
+
+---
+
+@fn test_resolve_finds_trait_declaration
+@purpose Test: resolve finds trait declaration
+@sig ()
+@calls [_find_sym, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 149
+
+---
+
+@fn test_resolve_finds_type_declaration
+@purpose Test: resolve finds type declaration
+@sig ()
+@calls [_find_sym, _has_errors, _resolve_source, assert, symbol_kind_name]
+@source_file tests.aria
+@source_line 112
+
+---
+
+@fn test_scopes_created_for_block
+@purpose Test: scopes created for block
+@sig ()
+@calls [_resolve_source, assert, scope_count]
+@source_file tests.aria
+@source_line 257
+
+---
+
+@fn test_scopes_created_for_function
+@purpose Test: scopes created for function
+@sig ()
+@calls [_resolve_source, assert, scope_count]
+@source_file tests.aria
+@source_line 252
+
+---
+
+@fn test_shadow_warning_in_nested_scope
+@purpose Test: shadow warning in nested scope
+@sig ()
+@calls [_has_code, _resolve_source, assert]
+@source_file tests.aria
+@source_line 224
+
+---
+
+@fn test_test_block_resolves
+@purpose Test: test block resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 287
+
+---
+
+@fn test_unresolved_name_in_function_body
+@purpose Test: unresolved name in function body
+@sig ()
+@calls [_has_code, _has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 182
+
+---
+
+@fn test_use_import_registers_module_name
+@purpose Test: use import registers module name
+@sig ()
+@calls [_find_sym, _resolve_source, assert]
+@source_file tests.aria
+@source_line 244
+
+---
+
+@fn test_variable_binding_resolves
+@purpose Test: variable binding resolves
+@sig ()
+@calls [_has_errors, _resolve_source, assert]
+@source_file tests.aria
+@source_line 200

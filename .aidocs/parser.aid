@@ -1,647 +1,1625 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
 @module parser
 @lang aria
+@version 0.1.0
 @aid_version 0.2
-@purpose Recursive descent parser producing AST node pool and declaration index
-@depends [lexer, diagnostic]
-
----
-
-@type ExprKind
-@kind sum
-@variants
-  EkIntLit — Integer literal expression
-  EkFloatLit — Float literal expression
-  EkStringLit — String literal expression
-  EkBoolLit — Boolean literal expression
-  EkIdent — Identifier reference
-  EkBinary — Binary operator expression
-  EkUnary — Unary operator expression
-  EkCall — Function call
-  EkMethodCall — Method call (dot syntax)
-  EkFieldAccess — Field access (dot syntax)
-  EkIndex — Index expression (brackets)
-  EkBlock — Block expression (braces)
-  EkIf — If/else expression
-  EkMatch — Match expression
-  EkClosure — Closure expression
-  EkArray — Array literal
-  EkStruct — Struct literal
-  EkAssign — Assignment expression
-  EkBinding — Variable binding (:= or mut)
-  EkReturn — Return expression
-  EkBreak — Break expression
-  EkContinue — Continue expression
-  EkFor — For loop
-  EkWhile — While loop
-  EkLoop — Infinite loop
-  EkDefer — Defer expression
-  EkWith — With expression
-  EkTuple — Tuple expression
-  EkCatch — Catch expression
-  EkPipeline — Pipeline expression (|>)
-  EkRange — Range expression (.. or ..=)
-  EkPropagate — Error propagation (?)
-  EkAssertOk — Assert success (!)
-  EkFnDecl — Function declaration
-  EkTypeDecl — Type declaration
-  EkEnumDecl — Enum declaration
-  EkTraitDecl — Trait declaration
-  EkImplDecl — Impl block declaration
-  EkConstDecl — Constant declaration
-  EkUseDecl — Use/import declaration
-  EkParam — Function parameter
-  EkField — Struct field
-  EkVariant — Sum type / enum variant
-  EkListComp — List comprehension
-  EkYield — Yield expression
-  EkSelect — Select expression
-  EkNone — Sentinel / empty
-@source_file src/parser/ast.aria
-@source_line 13
-
----
-
-@type DeclKind
-@kind sum
-@variants
-  DkFn — Function declaration
-  DkType — Type declaration
-  DkEnum — Enum declaration
-  DkTrait — Trait declaration
-  DkImpl — Impl block
-  DkConst — Constant declaration
-  DkEntry — Entry block
-  DkTest — Test block
-  DkUse — Use/import declaration
-  DkNone — Sentinel
-@source_file src/parser/ast.aria
-@source_line 349
-
----
-
-@type Expr
-@kind struct
-@fields
-  kind: ExprKind — Node type discriminator
-  s1: str — Primary string payload (name, operator, value)
-  s2: str — Secondary string payload
-  b1: bool — Primary boolean flag
-  b2: bool — Secondary boolean flag
-  c0: i64 — Child node index 0
-  c1: i64 — Child node index 1
-  c2: i64 — Child node index 2
-  list_start: i64 — Start index into pool for child lists
-  list_count: i64 — Number of children in list
-  span: Span — Source location
-@source_file src/parser/ast.aria
-@source_line 115
-
----
-
-@type NodePool
-@kind struct
-@fields
-  nodes: [Expr] — Flat array of all AST nodes
-@source_file src/parser/ast.aria
-@source_line 133
-
----
-
-@type DeclInfo
-@kind struct
-@fields
-  kind: DeclKind — Declaration type
-  name: str — Declaration name
-  token_start: i64 — Token index where declaration starts
-  body_start: i64 — Token index where body starts
-  body_end: i64 — Token index where body ends
-  is_pub: bool — Whether declaration is public
-  node_idx: i64 — Index into NodePool
-@source_file src/parser/ast.aria
-@source_line 376
-
----
-
-@type DeclIndex
-@kind struct
-@fields
-  decls: [DeclInfo] — All top-level declarations
-@source_file src/parser/ast.aria
-@source_line 386
-
----
-
-@type ParseResult
-@kind struct
-@fields
-  index: DeclIndex — Declaration index
-  pool: NodePool — AST node pool
-  diagnostics: DiagnosticBag — Parse diagnostics
-@source_file src/parser/ast.aria
-@source_line 426
-
----
-
-@type Program
-@kind struct
-@fields
-  module_name: str — Module name from mod declaration
-  node_count: i64 — Total AST nodes parsed
-@source_file src/parser/ast.aria
-@source_line 434
-
----
-
-@type Parser
-@kind struct
-@fields
-  tokens: [Token] — Token stream from lexer
-  pos: i64 — Current token position
-  pool: NodePool — AST node accumulator
-  diagnostics: DiagnosticBag — Parse diagnostics
-@source_file src/parser/parser.aria
-@source_line 8
-
----
-
-@type PR
-@kind struct
-@fields
-  p: Parser — Updated parser state
-  e: Expr — Parsed expression result
-@source_file src/parser/parser.aria
-@source_line 69
 
 ---
 
 @type BindingPower
 @kind struct
 @fields
-  left: i64 — Left binding power
-  right: i64 — Right binding power
-@source_file src/parser/precedence.aria
+  left: i64
+  right: i64
+@source_file precedence.aria
 @source_line 15
 
 ---
 
-@fn expr_kind_name
-@sig (k: ExprKind) -> str
-@source_file src/parser/ast.aria
-@source_line 62
+@type DeclIndex
+@kind struct
+@fields
+  decls: [DeclInfo]
+@source_file ast.aria
+@source_line 432
 
 ---
 
-@fn decl_kind_name
-@sig (k: DeclKind) -> str
-@source_file src/parser/ast.aria
-@source_line 361
+@type DeclInfo
+@kind struct
+@fields
+  kind: DeclKind
+  name: str
+  token_start: i64
+  body_start: i64
+  body_end: i64
+  is_pub: bool
+  node_idx: i64
+@source_file ast.aria
+@source_line 422
 
 ---
 
-@fn new_pool
-@sig () -> NodePool
-@source_file src/parser/ast.aria
+@type DeclKind
+@kind union
+@purpose DeclKind uses integer encoding to avoid bootstrap codegen bugs with large sum types 0=none, 1=fn, 2=type, 3=enum, 4=trai
+@variants
+  | DkFn
+  | DkType
+  | DkEnum
+  | DkTrait
+  | DkImpl
+  | DkConst
+  | DkEntry
+  | DkTest
+  | DkUse
+  | DkNone
+@source_file ast.aria
+@source_line 395
+
+---
+
+@type Expr
+@kind struct
+@fields
+  kind: ExprKind
+  s1: str
+  s2: str
+  b1: bool
+  b2: bool
+  c0: i64
+  c1: i64
+  c2: i64
+  list_start: i64
+  list_count: i64
+  span: Span
+@source_file ast.aria
 @source_line 143
 
 ---
 
-@fn pool_add
-@sig (pool: NodePool, e: Expr) -> NodePool
-@source_file src/parser/ast.aria
-@source_line 146
+@type ExprKind
+@kind union
+@variants
+  | EkIntLit
+  | EkFloatLit
+  | EkStringLit
+  | EkBoolLit
+  | EkIdent
+  | EkBinary
+  | EkUnary
+  | EkCall
+  | EkMethodCall
+  | EkFieldAccess
+  | EkIndex
+  | EkBlock
+  | EkIf
+  | EkMatch
+  | EkClosure
+  | EkArray
+  | EkStruct
+  | EkAssign
+  | EkBinding
+  | EkReturn
+  | EkBreak
+  | EkContinue
+  | EkFor
+  | EkWhile
+  | EkLoop
+  | EkDefer
+  | EkWith
+  | EkTuple
+  | EkCatch
+  | EkPipeline
+  | EkRange
+  | EkPropagate
+  | EkAssertOk
+  | EkFnDecl
+  | EkTypeDecl
+  | EkEnumDecl
+  | EkTraitDecl
+  | EkImplDecl
+  | EkConstDecl
+  | EkUseDecl
+  | EkParam
+  | EkField
+  | EkVariant
+  | EkListComp
+  | EkYield
+  | EkSelect
+  | EkNone
+  | EkDurationLit
+  | EkSizeLit
+  | EkTypeRef
+  | EkTypeArray
+  | EkTypeOptional
+  | EkTypeResult
+  | EkTypeFn
+  | EkTypeTuple
+  | EkMapLit
+  | EkSetLit
+  | EkSpawn
+  | EkScope
+  | EkChanNew
+  | EkChanRecv
+@source_file ast.aria
+@source_line 13
 
 ---
 
-@fn pool_get
-@sig (pool: NodePool, idx: i64) -> Expr
-@source_file src/parser/ast.aria
-@source_line 150
+@type NodePool
+@kind struct
+@fields
+  nodes: [Expr]
+@source_file ast.aria
+@source_line 161
 
 ---
 
-@fn pool_size
-@sig (pool: NodePool) -> i64
-@source_file src/parser/ast.aria
-@source_line 157
+@type PR
+@kind struct
+@fields
+  p: Parser
+  e: Expr
+@source_file parser.aria
+@source_line 73
 
 ---
 
-@fn mk_int_lit
-@sig (value: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 163
+@type ParseResult
+@kind struct
+@fields
+  index: DeclIndex
+  pool: NodePool
+  diagnostics: DiagnosticBag
+@source_file ast.aria
+@source_line 472
 
 ---
 
-@fn mk_float_lit
-@sig (value: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 167
+@type Parser
+@kind struct
+@fields
+  tokens: [Token]
+  pos: i64
+  pool: NodePool
+  diagnostics: DiagnosticBag
+@source_file parser.aria
+@source_line 9
 
 ---
 
-@fn mk_string_lit
-@sig (value: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 171
+@type Program
+@kind struct
+@fields
+  module_name: str
+  node_count: i64
+@source_file ast.aria
+@source_line 480
 
 ---
 
-@fn mk_bool_lit
-@sig (value: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 175
+@fn _adv
+@sig (p: Parser) -> Parser
+@params
+  p: Parser
+@source_file parser.aria
+@source_line 47
 
 ---
 
-@fn mk_ident
-@sig (name: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 179
+@fn _bdi_find_fn_body
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@calls [_bdi_skip_brackets, _bdi_skip_parens, _bdi_skip_type_tokens, _is_fn_name_token]
+@source_file parser.aria
+@source_line 665
 
 ---
 
-@fn mk_binary
-@sig (op: str, left: Expr, right: Expr, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 185
+@fn _bdi_skip_braces
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@source_file parser.aria
+@source_line 627
 
 ---
 
-@fn mk_unary
-@sig (op: str, operand: Expr, span: Span) -> Expr
-@source_file src/parser/ast.aria
+@fn _bdi_skip_brackets
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@source_file parser.aria
+@source_line 641
+
+---
+
+@fn _bdi_skip_expr
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@calls [_bdi_skip_braces]
+@source_file parser.aria
+@source_line 764
+
+---
+
+@fn _bdi_skip_parens
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@source_file parser.aria
+@source_line 653
+
+---
+
+@fn _bdi_skip_type_tokens
+@sig (tokens: [Token], start: i64, len: i64) -> i64
+@params
+  tokens: [Token]
+  start: i64
+  len: i64
+@calls [_bdi_skip_brackets, _bdi_skip_parens, _bdi_skip_type_tokens]
+@source_file parser.aria
+@source_line 710
+
+---
+
+@fn _bridge_ast_to_decl_index
+@sig (idx: DeclIndex, pool: NodePool, root: Expr) -> DeclIndex
+@params
+  idx: DeclIndex
+  pool: NodePool
+  root: Expr
+@calls [_decl_index_set, decl_index_get, decl_index_len, decl_kind_name, expr_kind_name, pool_get]
+@source_file parser.aria
+@source_line 573
+
+---
+
+@fn _ck
+@purpose Read the precomputed name from the token instead of calling token_name on every check.
+@sig (p: Parser) -> str
+@params
+  p: Parser
+@calls [_cur]
+@source_file parser.aria
+@source_line 34
+
+---
+
+@fn _cur
+@sig (p: Parser) -> Token
+@params
+  p: Parser
+@calls [Parser.tokens.len]
+@source_file parser.aria
+@source_line 24
+
+---
+
+@fn _decl_index_set
+@sig (idx: DeclIndex, i: i64, d: DeclInfo) -> DeclIndex
+@params
+  idx: DeclIndex
+  i: i64
+  d: DeclInfo
+@calls [_sentinel_decl]
+@source_file ast.aria
+@source_line 454
+
+---
+
+@fn _ek
+@sig (e: Expr) -> str
+@params
+  e: Expr
+@calls [expr_kind_name]
+@source_file tests.aria
+@source_line 12
+
+---
+
+@fn _expect
+@sig (p: Parser, expected: str) -> Parser
+@params
+  p: Parser
+  expected: str
+@calls [_adv, _ck, _cur, bag_add_error, new_span]
+@source_file parser.aria
+@source_line 50
+
+---
+
+@fn _i2s_test
+@sig (n: i64) -> str
+@params
+  n: i64
+@source_file tests.aria
+@source_line 427
+
+---
+
+@fn _is_fn_name_token
+@purpose Check if a token kind can be used as a function name.
+@sig (tk: str) -> bool
+@params
+  tk: str
+@source_file parser.aria
+@source_line 199
+
+---
+
+@fn _is_upper_start
+@purpose Check if name looks like a PascalCase type name (starts uppercase, has lowercase)
+@sig (name: str) -> bool
+@params
+  name: str
+@calls [str.charAt, str.len]
+@source_file parser.aria
+@source_line 79
+
+---
+
+@fn _lex_parse
+@sig (source: str) -> PR
+@params
+  source: str
+@calls [get_tokens, parse, tokenize]
+@source_file tests.aria
+@source_line 7
+
+---
+
+@fn _no_expr
+@sig () -> Expr
+@calls [_sentinel_expr]
+@source_file ast.aria
 @source_line 189
 
 ---
 
-@fn mk_call
-@sig (callee: Expr, args_count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 193
+@fn _no_span
+@sig () -> Span
+@calls [new_span]
+@source_file ast.aria
+@source_line 165
 
 ---
 
-@fn mk_method_call
-@sig (method: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 197
+@fn _padd
+@sig (p: Parser, e: Expr) -> Parser
+@params
+  p: Parser
+  e: Expr
+@calls [pool_add]
+@source_file parser.aria
+@source_line 21
 
 ---
 
-@fn mk_field_access
-@sig (field: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 201
+@fn _parse_array
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _no_span, _padd, _parse_expr, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 3018
 
 ---
 
-@fn mk_index
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 205
+@fn _parse_assert
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _no_span, _padd, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3327
 
 ---
 
-@fn mk_block
-@sig (count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 209
+@fn _parse_bench
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _padd, _parse_block, _pidx, _pspan]
+@source_file parser.aria
+@source_line 1625
 
 ---
 
-@fn mk_if
-@sig (has_else: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 213
+@fn _parse_block
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _no_expr, _no_span, _padd, _parse_stmt, _perror, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 2362
 
 ---
 
-@fn mk_match
-@sig (arms_count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 217
+@fn _parse_brace_expr
+@purpose Disambiguate { in expression position: map literal, set literal, or block
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _no_span, _padd, _parse_block, _parse_expr, _parse_stmt, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 2892
 
 ---
 
-@fn mk_array
-@sig (count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 221
+@fn _parse_closure_expr
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _no_expr, _padd, _parse_block, _parse_expr, _pidx, _pspan, _skip_type]
+@source_file parser.aria
+@source_line 2804
 
 ---
 
-@fn mk_struct_lit
-@sig (name: str, field_count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 225
+@fn _parse_const_decl
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_expr, _pidx, _pspan, _skip_type]
+@source_file parser.aria
+@source_line 1580
 
 ---
 
-@fn mk_assign
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 229
+@fn _parse_entry
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _padd, _parse_block, _pidx, _pspan]
+@source_file parser.aria
+@source_line 1600
 
 ---
 
-@fn mk_binding
-@sig (name: str, is_mut: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 233
+@fn _parse_enum_decl
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 1399
 
 ---
 
-@fn mk_return
-@sig (has_value: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 237
+@fn _parse_expr
+@sig (p: Parser, min_bp: i64) -> PR
+@params
+  p: Parser
+  min_bp: i64
+@calls [_adv, _ck, _cur, _padd, _parse_expr, _parse_postfix, _parse_prefix, _pidx, _pspan, infix_binding_power, postfix_binding_power]
+@source_file parser.aria
+@source_line 1816
 
 ---
 
-@fn mk_break
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 241
+@fn _parse_fn
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _no_expr, _no_span, _padd, _parse_block, _parse_expr, _parse_type, _pidx, _pspan, _skip_nl, _skip_type, expr_kind_name, mk_param]
+@source_file parser.aria
+@source_line 801
 
 ---
 
-@fn mk_continue
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 245
+@fn _parse_for
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_block, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3131
 
 ---
 
-@fn mk_for
-@sig (pattern_name: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 249
+@fn _parse_for_body
+@purpose Labeled loop body parsers — called with parser positioned AFTER the loop keyword
+@sig (p: Parser, label: str) -> PR
+@params
+  p: Parser
+  label: str
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_block, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3195
 
 ---
 
-@fn mk_while
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 253
+@fn _parse_grouped
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _no_span, _padd, _parse_expr, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 2850
 
 ---
 
-@fn mk_loop
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 257
+@fn _parse_if
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _padd, _parse_block, _parse_expr, _parse_if, _pidx, _pspan]
+@source_file parser.aria
+@source_line 2396
 
 ---
 
-@fn mk_closure
-@sig (params_str: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 261
+@fn _parse_impl_decl
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _no_span, _padd, _parse_fn, _pidx, _pspan, _skip_nl, mk_impl_decl]
+@source_file parser.aria
+@source_line 1517
 
 ---
 
-@fn mk_propagate
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 265
+@fn _parse_loop
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _padd, _parse_block, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3184
 
 ---
 
-@fn mk_assert_ok
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 269
+@fn _parse_loop_body
+@sig (p: Parser, label: str) -> PR
+@params
+  p: Parser
+  label: str
+@calls [_padd, _parse_block, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3250
 
 ---
 
-@fn mk_pipeline
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 273
+@fn _parse_match
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _expect, _no_expr, _no_span, _padd, _parse_expr, _parse_pattern, _parse_stmt, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 2431
 
 ---
 
-@fn mk_range
-@sig (inclusive: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 277
+@fn _parse_mut
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_expr, _pidx, _pspan, _skip_type]
+@source_file parser.aria
+@source_line 1786
 
 ---
 
-@fn mk_deferred
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 281
+@fn _parse_one
+@sig (source: str) -> PR
+@params
+  source: str
+@calls [_parse_expr, get_tokens, new_bag, new_pool, tokenize]
+@source_file tests.aria
+@source_line 14
 
 ---
 
-@fn mk_with
-@sig (name: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 285
+@fn _parse_pattern
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_pattern, _pidx, _pk, _pspan, _skip_nl, mk_bool_lit, mk_float_lit, mk_ident, mk_int_lit, mk_string_lit]
+@source_file parser.aria
+@source_line 2561
 
 ---
 
-@fn mk_tuple
-@sig (count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 289
+@fn _parse_postfix
+@sig (p: Parser, left: Expr) -> PR
+@params
+  p: Parser
+  left: Expr
+@calls [_adv, _ck, _cur, _expect, _is_upper_start, _no_expr, _no_span, _padd, _parse_block, _parse_expr, _parse_record_update, _parse_stmt, _parse_struct_lit, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 2124
 
 ---
 
-@fn mk_catch
-@sig (span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 293
+@fn _parse_prefix
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _is_upper_start, _no_expr, _no_span, _padd, _parse_array, _parse_block, _parse_brace_expr, _parse_closure_expr, _parse_expr, _parse_grouped, _parse_if, _parse_match, _parse_prefix, _parse_scope, _parse_select, _parse_spawn, _parse_stmt, _parse_struct_lit, _parse_type, _perror, _pidx, _pk, _pspan, _skip_nl, mk_bool_lit, mk_duration_lit, mk_float_lit, mk_ident, mk_int_lit, mk_size_lit, mk_string_lit, prefix_binding_power]
+@source_file parser.aria
+@source_line 1884
 
 ---
 
-@fn mk_fn_decl
-@sig (name: str, params: str, param_count: i64, has_body: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 301
+@fn _parse_record_update
+@purpose Parse record update body: field: val, ...} — called after .{ has been consumed
+@sig (p: Parser, left_idx: i64, span: Span) -> PR
+@params
+  p: Parser
+  left_idx: i64
+  span: Span
+@calls [_adv, _ck, _cur, _padd, _parse_expr, _pidx, _skip_nl, mk_field]
+@source_file parser.aria
+@source_line 2082
 
 ---
 
-@fn mk_type_decl
-@sig (name: str, is_sum: bool, count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 305
+@fn _parse_return
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _padd, _parse_expr, _pidx, _pspan, mk_return]
+@source_file parser.aria
+@source_line 3260
 
 ---
 
-@fn mk_enum_decl
-@sig (name: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 309
+@fn _parse_scope
+@purpose --- Parse scope expression --- scope { block }  -> EkScope{c0=block_idx}
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _padd, _parse_block, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 3365
 
 ---
 
-@fn mk_trait_decl
-@sig (name: str, method_count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 313
+@fn _parse_select
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _no_span, _padd, _parse_expr, _pidx, _pk, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 3392
 
 ---
 
-@fn mk_impl_decl
-@sig (type_name: str, trait_name: str, method_count: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 317
+@fn _parse_spawn
+@purpose --- Parse spawn expression --- spawn <call-or-expr>    -> EkSpawn{c0=body_idx, b1=false} spawn { block }         -> EkSp
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _padd, _parse_block, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3343
 
 ---
 
-@fn mk_const_decl
-@sig (name: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 321
+@fn _parse_stmt
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [Parser.tokens.len, _adv, _ck, _cur, _expect, _padd, _parse_assert, _parse_expr, _parse_for, _parse_for_body, _parse_loop, _parse_loop_body, _parse_mut, _parse_return, _parse_type_decl, _parse_while, _parse_while_body, _parse_with, _pidx, _pspan, _skip_nl, _skip_type, expr_kind_name, pool_get]
+@source_file parser.aria
+@source_line 1642
 
 ---
 
-@fn mk_use_decl
-@sig (module: str, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 325
+@fn _parse_struct_lit
+@sig (p: Parser, name: str, span: Span) -> PR
+@params
+  p: Parser
+  name: str
+  span: Span
+@calls [_adv, _ck, _cur, _no_span, _padd, _parse_expr, _pidx, _pspan, _skip_nl, mk_ident]
+@source_file parser.aria
+@source_line 3088
 
 ---
 
-@fn mk_param
-@sig (name: str, type_tok_pos: i64, is_self: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 331
+@fn _parse_test
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _padd, _parse_block, _pidx, _pspan]
+@source_file parser.aria
+@source_line 1610
 
 ---
 
-@fn mk_field
-@sig (name: str, type_tok_pos: i64, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 336
+@fn _parse_top
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _parse_bench, _parse_const_decl, _parse_entry, _parse_enum_decl, _parse_fn, _parse_impl_decl, _parse_stmt, _parse_test, _parse_top, _parse_trait_decl, _parse_type_decl]
+@source_file parser.aria
+@source_line 781
 
 ---
 
-@fn mk_variant
-@sig (name: str, is_tuple: bool, span: Span) -> Expr
-@source_file src/parser/ast.aria
-@source_line 341
+@fn _parse_trait_decl
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _no_span, _padd, _parse_fn, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 1433
 
 ---
 
-@fn new_decl_index
-@sig () -> DeclIndex
-@source_file src/parser/ast.aria
-@source_line 393
+@fn _parse_type
+@purpose Parse a type expression, building AST nodes into the pool.
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_type, _pidx, _pk, _pspan]
+@source_file parser.aria
+@source_line 980
 
 ---
 
-@fn decl_index_add
-@sig (idx: DeclIndex, d: DeclInfo) -> DeclIndex
-@source_file src/parser/ast.aria
-@source_line 396
+@fn _parse_type_decl
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _no_span, _padd, _parse_expr, _parse_type, _pidx, _pspan, _skip_nl, _skip_type, i2s, mk_field]
+@source_file parser.aria
+@source_line 1124
 
 ---
 
-@fn decl_index_len
-@sig (idx: DeclIndex) -> i64
-@source_file src/parser/ast.aria
-@source_line 399
+@fn _parse_while
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _padd, _parse_block, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3171
 
 ---
 
-@fn decl_index_get
-@sig (idx: DeclIndex, i: i64) -> DeclInfo
-@source_file src/parser/ast.aria
-@source_line 401
+@fn _parse_while_body
+@sig (p: Parser, label: str) -> PR
+@params
+  p: Parser
+  label: str
+@calls [_padd, _parse_block, _parse_expr, _pidx, _pspan]
+@source_file parser.aria
+@source_line 3237
 
 ---
 
-@fn new_parser
-@sig (tokens: [Token]) -> Parser
-@source_file src/parser/parser.aria
-@source_line 16
+@fn _parse_with
+@sig (p: Parser) -> PR
+@params
+  p: Parser
+@calls [_adv, _ck, _cur, _expect, _padd, _parse_block, _parse_expr, _pidx, _pspan, _skip_nl]
+@source_file parser.aria
+@source_line 3275
 
 ---
 
-@fn parse
-@sig (tokens: [Token]) -> PR
-@calls [new_parser]
-@source_file src/parser/parser.aria
-@source_line 112
+@fn _perror
+@sig (p: Parser, code: str, msg: str) -> Parser
+@params
+  p: Parser
+  code: str
+  msg: str
+@calls [_cur, bag_add_error, new_span]
+@source_file parser.aria
+@source_line 64
+
+---
+
+@fn _pidx
+@sig (p: Parser) -> i64
+@params
+  p: Parser
+@calls [pool_size]
+@source_file parser.aria
+@source_line 19
+
+---
+
+@fn _pk
+@sig (p: Parser) -> str
+@params
+  p: Parser
+@calls [Parser.tokens.len]
+@source_file parser.aria
+@source_line 36
+
+---
+
+@fn _pool
+@sig (r: PR) -> NodePool
+@params
+  r: PR
+@source_file tests.aria
+@source_line 150
+
+---
+
+@fn _pspan
+@sig (p: Parser) -> Span
+@params
+  p: Parser
+@calls [_cur, new_span]
+@source_file parser.aria
+@source_line 42
+
+---
+
+@fn _sentinel_decl
+@sig () -> DeclInfo
+@source_file ast.aria
+@source_line 436
+
+---
+
+@fn _sentinel_expr
+@sig () -> Expr
+@calls [_no_span]
+@source_file ast.aria
+@source_line 167
+
+---
+
+@fn _skip_braces
+@sig (p: Parser) -> Parser
+@params
+  p: Parser
+@calls [_adv, _ck]
+@source_file parser.aria
+@source_line 1110
+
+---
+
+@fn _skip_nl
+@sig (p: Parser) -> Parser
+@params
+  p: Parser
+@calls [_adv, _ck]
+@source_file parser.aria
+@source_line 58
+
+---
+
+@fn _skip_parens
+@sig (p: Parser) -> Parser
+@params
+  p: Parser
+@calls [_adv, _ck]
+@source_file parser.aria
+@source_line 2549
+
+---
+
+@fn _skip_type
+@purpose Backward-compatible: _skip_type advances past type tokens (used by callers that don't need AST)
+@sig (p: Parser) -> Parser
+@params
+  p: Parser
+@calls [_parse_type]
+@source_file parser.aria
+@source_line 1105
 
 ---
 
 @fn build_decl_index
 @sig (tokens: [Token]) -> ParseResult
-@calls [new_parser, parse]
-@source_file src/parser/parser.aria
-@source_line 187
+@params
+  tokens: [Token]
+@calls [_bdi_find_fn_body, _bdi_skip_braces, _bdi_skip_brackets, _bdi_skip_expr, _bdi_skip_parens, _bridge_ast_to_decl_index, _is_fn_name_token, decl_index_add, new_bag, new_decl_index, new_pool, parse, tokens.len]
+@source_file parser.aria
+@source_line 210
 
 ---
 
-@fn parser_diagnostics
-@sig (p: Parser) -> DiagnosticBag
-@source_file src/parser/parser.aria
-@source_line 2208
+@fn decl_index_add
+@sig (idx: DeclIndex, d: DeclInfo) -> DeclIndex
+@params
+  idx: DeclIndex
+  d: DeclInfo
+@calls [DeclIndex.decls.append]
+@source_file ast.aria
+@source_line 442
+
+---
+
+@fn decl_index_get
+@sig (idx: DeclIndex, i: i64) -> DeclInfo
+@params
+  idx: DeclIndex
+  i: i64
+@calls [DeclIndex.decls.len, _sentinel_decl]
+@source_file ast.aria
+@source_line 447
+
+---
+
+@fn decl_index_len
+@sig (idx: DeclIndex) -> i64
+@params
+  idx: DeclIndex
+@calls [DeclIndex.decls.len]
+@source_file ast.aria
+@source_line 445
+
+---
+
+@fn decl_kind_name
+@sig (k: DeclKind) -> str
+@params
+  k: DeclKind
+@source_file ast.aria
+@source_line 407
+
+---
+
+@fn expr_kind_name
+@sig (k: ExprKind) -> str
+@params
+  k: ExprKind
+@source_file ast.aria
+@source_line 76
+
+---
+
+@fn infix_binding_power
+@sig (name: str) -> BindingPower
+@params
+  name: str
+@calls [no_binding_power]
+@source_file precedence.aria
+@source_line 27
+
+---
+
+@fn is_assignment_op
+@sig (name: str) -> bool
+@params
+  name: str
+@source_file precedence.aria
+@source_line 125
+
+---
+
+@fn is_comparison_op
+@sig (name: str) -> bool
+@params
+  name: str
+@source_file precedence.aria
+@source_line 121
+
+---
+
+@fn is_infix_op
+@sig (name: str) -> bool
+@params
+  name: str
+@calls [infix_binding_power]
+@source_file precedence.aria
+@source_line 110
+
+---
+
+@fn is_postfix_op
+@sig (name: str) -> bool
+@params
+  name: str
+@calls [postfix_binding_power]
+@source_file precedence.aria
+@source_line 118
+
+---
+
+@fn is_prefix_op
+@sig (name: str) -> bool
+@params
+  name: str
+@calls [prefix_binding_power]
+@source_file precedence.aria
+@source_line 115
+
+---
+
+@fn mk_array
+@sig (count: i64, span: Span) -> Expr
+@params
+  count: i64
+  span: Span
+@source_file ast.aria
+@source_line 257
+
+---
+
+@fn mk_assert_ok
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 315
+
+---
+
+@fn mk_assign
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 275
+
+---
+
+@fn mk_binary
+@purpose Binary: s1=op, c0=left_idx, c1=right_idx (in pool) For now we store children inline since pool requires threading
+@sig (op: str, left: Expr, right: Expr, span: Span) -> Expr
+@params
+  op: str
+  left: Expr
+  right: Expr
+  span: Span
+@source_file ast.aria
+@source_line 221
+
+---
+
+@fn mk_binding
+@sig (name: str, is_mut: bool, span: Span) -> Expr
+@params
+  name: str
+  is_mut: bool
+  span: Span
+@source_file ast.aria
+@source_line 279
+
+---
+
+@fn mk_block
+@sig (count: i64, span: Span) -> Expr
+@params
+  count: i64
+  span: Span
+@source_file ast.aria
+@source_line 245
+
+---
+
+@fn mk_bool_lit
+@sig (value: bool, span: Span) -> Expr
+@params
+  value: bool
+  span: Span
+@source_file ast.aria
+@source_line 211
+
+---
+
+@fn mk_break
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 287
+
+---
+
+@fn mk_call
+@sig (callee: Expr, args_count: i64, span: Span) -> Expr
+@params
+  callee: Expr
+  args_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 229
+
+---
+
+@fn mk_catch
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 339
+
+---
+
+@fn mk_closure
+@sig (params_str: str, span: Span) -> Expr
+@params
+  params_str: str
+  span: Span
+@source_file ast.aria
+@source_line 307
+
+---
+
+@fn mk_const_decl
+@sig (name: str, span: Span) -> Expr
+@params
+  name: str
+  span: Span
+@source_file ast.aria
+@source_line 367
+
+---
+
+@fn mk_continue
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 291
+
+---
+
+@fn mk_deferred
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 327
+
+---
+
+@fn mk_duration_lit
+@sig (value: str, span: Span) -> Expr
+@params
+  value: str
+  span: Span
+@source_file ast.aria
+@source_line 203
+
+---
+
+@fn mk_enum_decl
+@sig (name: str, span: Span) -> Expr
+@params
+  name: str
+  span: Span
+@source_file ast.aria
+@source_line 355
+
+---
+
+@fn mk_field
+@purpose EkField: s1=field_name, c0=type_tok_pos
+@sig (name: str, type_tok_pos: i64, span: Span) -> Expr
+@params
+  name: str
+  type_tok_pos: i64
+  span: Span
+@source_file ast.aria
+@source_line 382
+
+---
+
+@fn mk_field_access
+@sig (field: str, span: Span) -> Expr
+@params
+  field: str
+  span: Span
+@source_file ast.aria
+@source_line 237
+
+---
+
+@fn mk_float_lit
+@sig (value: str, span: Span) -> Expr
+@params
+  value: str
+  span: Span
+@source_file ast.aria
+@source_line 195
+
+---
+
+@fn mk_fn_decl
+@sig (name: str, params: str, param_count: i64, has_body: bool, span: Span) -> Expr
+@params
+  name: str
+  params: str
+  param_count: i64
+  has_body: bool
+  span: Span
+@source_file ast.aria
+@source_line 347
+
+---
+
+@fn mk_for
+@sig (pattern_name: str, span: Span) -> Expr
+@params
+  pattern_name: str
+  span: Span
+@source_file ast.aria
+@source_line 295
+
+---
+
+@fn mk_ident
+@sig (name: str, span: Span) -> Expr
+@params
+  name: str
+  span: Span
+@source_file ast.aria
+@source_line 215
+
+---
+
+@fn mk_if
+@sig (has_else: bool, span: Span) -> Expr
+@params
+  has_else: bool
+  span: Span
+@source_file ast.aria
+@source_line 249
+
+---
+
+@fn mk_impl_decl
+@sig (type_name: str, trait_name: str, method_count: i64, span: Span) -> Expr
+@params
+  type_name: str
+  trait_name: str
+  method_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 363
+
+---
+
+@fn mk_index
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 241
+
+---
+
+@fn mk_int_lit
+@sig (value: str, span: Span) -> Expr
+@params
+  value: str
+  span: Span
+@source_file ast.aria
+@source_line 191
+
+---
+
+@fn mk_loop
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 303
+
+---
+
+@fn mk_map_lit
+@purpose Map literal: list stores alternating key/value indices, count = number of pairs
+@sig (pair_count: i64, span: Span) -> Expr
+@params
+  pair_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 266
+
+---
+
+@fn mk_match
+@sig (arms_count: i64, span: Span) -> Expr
+@params
+  arms_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 253
+
+---
+
+@fn mk_method_call
+@sig (method: str, span: Span) -> Expr
+@params
+  method: str
+  span: Span
+@source_file ast.aria
+@source_line 233
+
+---
+
+@fn mk_param
+@purpose --- Parameter, field, variant constructors --- EkParam: s1=name, c0=type_tok_pos, b1=is_self
+@sig (name: str, type_tok_pos: i64, is_self: bool, span: Span) -> Expr
+@params
+  name: str
+  type_tok_pos: i64
+  is_self: bool
+  span: Span
+@source_file ast.aria
+@source_line 377
+
+---
+
+@fn mk_pipeline
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 319
+
+---
+
+@fn mk_propagate
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 311
+
+---
+
+@fn mk_range
+@sig (inclusive: bool, span: Span) -> Expr
+@params
+  inclusive: bool
+  span: Span
+@source_file ast.aria
+@source_line 323
+
+---
+
+@fn mk_return
+@sig (has_value: bool, span: Span) -> Expr
+@params
+  has_value: bool
+  span: Span
+@source_file ast.aria
+@source_line 283
+
+---
+
+@fn mk_set_lit
+@purpose Set literal: list stores element indices, count = number of elements
+@sig (elem_count: i64, span: Span) -> Expr
+@params
+  elem_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 271
+
+---
+
+@fn mk_size_lit
+@sig (value: str, span: Span) -> Expr
+@params
+  value: str
+  span: Span
+@source_file ast.aria
+@source_line 207
+
+---
+
+@fn mk_string_lit
+@sig (value: str, span: Span) -> Expr
+@params
+  value: str
+  span: Span
+@source_file ast.aria
+@source_line 199
+
+---
+
+@fn mk_struct_lit
+@sig (name: str, field_count: i64, span: Span) -> Expr
+@params
+  name: str
+  field_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 261
+
+---
+
+@fn mk_trait_decl
+@sig (name: str, method_count: i64, span: Span) -> Expr
+@params
+  name: str
+  method_count: i64
+  span: Span
+@source_file ast.aria
+@source_line 359
+
+---
+
+@fn mk_tuple
+@sig (count: i64, span: Span) -> Expr
+@params
+  count: i64
+  span: Span
+@source_file ast.aria
+@source_line 335
+
+---
+
+@fn mk_type_decl
+@sig (name: str, is_sum: bool, count: i64, span: Span) -> Expr
+@params
+  name: str
+  is_sum: bool
+  count: i64
+  span: Span
+@source_file ast.aria
+@source_line 351
+
+---
+
+@fn mk_unary
+@sig (op: str, operand: Expr, span: Span) -> Expr
+@params
+  op: str
+  operand: Expr
+  span: Span
+@source_file ast.aria
+@source_line 225
+
+---
+
+@fn mk_use_decl
+@sig (module: str, span: Span) -> Expr
+@params
+  module: str
+  span: Span
+@source_file ast.aria
+@source_line 371
+
+---
+
+@fn mk_variant
+@purpose EkVariant: s1=variant_name, b1=is_tuple_style
+@sig (name: str, is_tuple: bool, span: Span) -> Expr
+@params
+  name: str
+  is_tuple: bool
+  span: Span
+@source_file ast.aria
+@source_line 387
+
+---
+
+@fn mk_while
+@sig (span: Span) -> Expr
+@params
+  span: Span
+@source_file ast.aria
+@source_line 299
+
+---
+
+@fn mk_with
+@sig (name: str, span: Span) -> Expr
+@params
+  name: str
+  span: Span
+@source_file ast.aria
+@source_line 331
+
+---
+
+@fn new_decl_index
+@sig () -> DeclIndex
+@calls [_sentinel_decl]
+@source_file ast.aria
+@source_line 439
+
+---
+
+@fn new_parser
+@sig (tokens: [Token]) -> Parser
+@params
+  tokens: [Token]
+@calls [new_bag, new_pool]
+@source_file parser.aria
+@source_line 16
+
+---
+
+@fn new_pool
+@sig () -> NodePool
+@calls [_sentinel_expr]
+@source_file ast.aria
+@source_line 171
 
 ---
 
 @fn no_binding_power
 @sig () -> BindingPower
-@source_file src/parser/precedence.aria
+@source_file precedence.aria
 @source_line 20
 
 ---
 
-@fn infix_binding_power
-@sig (kind: TokenKind) -> BindingPower
-@source_file src/parser/precedence.aria
-@source_line 24
+@fn parse
+@sig (tokens: [Token]) -> PR
+@params
+  tokens: [Token]
+@calls [_adv, _ck, _no_span, _padd, _parse_top, _pidx, _skip_nl, new_parser]
+@source_file parser.aria
+@source_line 123
 
 ---
 
-@fn prefix_binding_power
-@sig (kind: TokenKind) -> i64
-@source_file src/parser/precedence.aria
-@source_line 82
+@fn parser_diagnostics
+@sig (p: Parser) -> DiagnosticBag
+@params
+  p: Parser
+@source_file parser.aria
+@source_line 3522
+
+---
+
+@fn pool_add
+@sig (pool: NodePool, e: Expr) -> NodePool
+@params
+  pool: NodePool
+  e: Expr
+@calls [NodePool.nodes.append]
+@source_file ast.aria
+@source_line 174
+
+---
+
+@fn pool_get
+@sig (pool: NodePool, idx: i64) -> Expr
+@params
+  pool: NodePool
+  idx: i64
+@calls [NodePool.nodes.len, _sentinel_expr]
+@source_file ast.aria
+@source_line 178
+
+---
+
+@fn pool_size
+@sig (pool: NodePool) -> i64
+@params
+  pool: NodePool
+@calls [NodePool.nodes.len]
+@source_file ast.aria
+@source_line 185
 
 ---
 
 @fn postfix_binding_power
-@sig (kind: TokenKind) -> i64
-@source_file src/parser/precedence.aria
+@sig (name: str) -> i64
+@params
+  name: str
+@source_file precedence.aria
 @source_line 93
 
 ---
 
-@fn is_infix_op
-@sig (kind: TokenKind) -> bool
-@source_file src/parser/precedence.aria
-@source_line 109
-
----
-
-@fn is_prefix_op
-@sig (kind: TokenKind) -> bool
-@source_file src/parser/precedence.aria
-@source_line 114
-
----
-
-@fn is_postfix_op
-@sig (kind: TokenKind) -> bool
-@source_file src/parser/precedence.aria
-@source_line 117
-
----
-
-@fn is_comparison_op
-@sig (kind: TokenKind) -> bool
-@source_file src/parser/precedence.aria
-@source_line 120
-
----
-
-@fn is_assignment_op
-@sig (kind: TokenKind) -> bool
-@source_file src/parser/precedence.aria
-@source_line 126
+@fn prefix_binding_power
+@sig (name: str) -> i64
+@params
+  name: str
+@source_file precedence.aria
+@source_line 83
