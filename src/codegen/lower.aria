@@ -12216,6 +12216,25 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
         return LT{l: ll, temp: nt.temp}
     }
 
+    // `.to_json()` on a struct tagged `@[derive(Json)]` — the derive
+    // emits `<T>_to_json(self)` in `_lower_derives`, so we dispatch via
+    // a direct OpCall. The user fn registry doesn't have it yet (derives
+    // run after body lowering), which is why the generic method-dispatch
+    // path below wouldn't find it.
+    if method == "to_json" {
+        obj_type_jt := _lget_type(ll, obj)
+        sname_jt := _struct_name_for_type(ll.store, ll.registry, obj_type_jt)
+        if sname_jt != "" && treg_has_impl(ll.treg, sname_jt, "Json") {
+            while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+            if _lk(ll) == ")" { ll = _ladv(ll) }
+            nt := _lnew_str_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpCall, nt.temp, obj, 1, sname_jt + "_to_json", 12))
+            ll = _lset_type(ll, nt.temp, 12)
+            return LT{l: ll, temp: nt.temp}
+        }
+    }
+
     if method == "debug_str" {
         while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
         if _lk(ll) == ")" { ll = _ladv(ll) }
@@ -19103,6 +19122,22 @@ fn _lower_derives(l: Lowerer) -> Lowerer {
                     ll = _lower_derive_hash(ll, def)
                 }
             }
+            // Check if this type has derived Json. A signature may already
+            // be in the registry from the checker's pre-registration pass —
+            // those have token_start == 0, meaning "no user-written body".
+            // Only skip emission when a real user fn (token_start > 0) exists.
+            if treg_has_impl(ll.treg, def.name, "Json") {
+                to_name := def.name + "_to_json"
+                existing := reg_find_fn(ll.registry, to_name)
+                if existing.name == "" || existing.token_start == 0 {
+                    ll = _lower_derive_json_to(ll, def)
+                }
+                from_name := def.name + "_from_json"
+                existing2 := reg_find_fn(ll.registry, from_name)
+                if existing2.name == "" || existing2.token_start == 0 {
+                    ll = _lower_derive_json_from(ll, def)
+                }
+            }
         }
         si = si + 1
     }
@@ -19506,6 +19541,304 @@ fn _lower_derive_hash(l: Lowerer, def: StructDef) -> Lowerer {
         fi = fi + 1
     }
     ll = _lemit(ll, new_inst(OpRet, 0, hash_nt.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
+// Emit a str const + concat it onto cur_str. Returns the new temp holding
+// the accumulated string. Used by the Json derive to build `{…}` pieces.
+fn _json_append_const(l: Lowerer, cur_str: i64, lit: str) -> LT {
+    mut ll := l
+    lit_res := _lower_string_const(ll, lit)
+    ll = lit_res.l
+    cat := _lnew_str_temp(ll)
+    ll = cat.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, cur_str, lit_res.temp, "", 0))
+    LT{l: ll, temp: cat.temp}
+}
+
+// Emit a concat of `cur_str` with the str-typed temp at `s_temp`.
+fn _json_append_str(l: Lowerer, cur_str: i64, s_temp: i64) -> LT {
+    mut ll := l
+    cat := _lnew_str_temp(ll)
+    ll = cat.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat.temp, cur_str, s_temp, "", 0))
+    LT{l: ll, temp: cat.temp}
+}
+
+// Generate `fn TypeName_to_json(self: T) -> str`. Emits a flat string
+// directly (no JsonValue pool) so the derive is self-contained — the
+// runtime helper `_aria_json_escape` handles string field escaping, and
+// nested structs chain into their own generated `_to_json` via OpCall.
+//
+// Supported field types: str, i64/bool (number/true/false/null-on-unknown),
+// f64, and nested structs that also derive Json. Option[T] and arrays
+// are deferred to a later pass.
+fn _lower_derive_json_to(l: Lowerer, def: StructDef) -> Lowerer {
+    fname := def.name + "_to_json"
+    mut ll := _lset_func(l, new_ir_func(fname, 1, 12))
+    self_nt := _lnew_temp(ll)
+    ll = self_nt.l
+    ll = _lemit(ll, new_inst(OpArg, self_nt.temp, 0, 0, "", 0))
+
+    // Start with "{"
+    open_res := _lower_string_const(ll, "\{")
+    ll = open_res.l
+    mut cur_str := open_res.temp
+
+    mut fi := 1
+    mut slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+
+        // Comma separator between fields.
+        if fi > 1 {
+            r := _json_append_const(ll, cur_str, ",")
+            ll = r.l
+            cur_str = r.temp
+        }
+
+        // `"field_name":`
+        r2 := _json_append_const(ll, cur_str, "\"" + fld.name + "\":")
+        ll = r2.l
+        cur_str = r2.temp
+
+        if ft == 12 {
+            // str — _aria_json_escape returns already-quoted, escaped str.
+            raw := _lnew_str_temp(ll)
+            ll = raw.l
+            ll = _lemit(ll, new_inst(OpFieldGet, raw.temp, self_nt.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldGet, raw.temp + 1, self_nt.temp, slot + 1, "", 0))
+            quoted := _lnew_str_temp(ll)
+            ll = quoted.l
+            ll = _lemit(ll, new_inst(OpCall, quoted.temp, raw.temp, 2, "_aria_json_escape", 12))
+            ll = _lset_type(ll, quoted.temp, 12)
+            r3 := _json_append_str(ll, cur_str, quoted.temp)
+            ll = r3.l
+            cur_str = r3.temp
+            slot = slot + 2
+        } else if ft == 1 {
+            // i64 — decimal literal.
+            fval := _lnew_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            fstr := _lnew_str_temp(ll)
+            ll = fstr.l
+            ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, fval.temp, 0, "", 0))
+            r3 := _json_append_str(ll, cur_str, fstr.temp)
+            ll = r3.l
+            cur_str = r3.temp
+            slot = slot + 1
+        } else if ft == 11 {
+            // bool (TY_BOOL=11) — branch on 0/1 and append "true"/"false".
+            fval := _lnew_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            true_lbl := _lnew_label(ll)
+            ll = true_lbl.l
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            // Materialize the "true"/"false" literal into a stable temp
+            // (phi isn't wired, so we store into a single slot via conditional jumps).
+            lit_slot := _lnew_str_temp(ll)
+            ll = lit_slot.l
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, fval.temp, true_lbl.temp, "", 0))
+            // False branch
+            f_lit := _lower_string_const(ll, "false")
+            ll = f_lit.l
+            ll = _lemit(ll, new_inst(OpStore, lit_slot.temp, f_lit.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, lit_slot.temp + 1, f_lit.temp + 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            // True branch
+            ll = _lemit(ll, new_inst(OpLabel, 0, true_lbl.temp, 0, "", 0))
+            t_lit := _lower_string_const(ll, "true")
+            ll = t_lit.l
+            ll = _lemit(ll, new_inst(OpStore, lit_slot.temp, t_lit.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, lit_slot.temp + 1, t_lit.temp + 1, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            ll = _lset_type(ll, lit_slot.temp, 12)
+            r3 := _json_append_str(ll, cur_str, lit_slot.temp)
+            ll = r3.l
+            cur_str = r3.temp
+            slot = slot + 1
+        } else if ft > 16 && ft < ll.store.types.len() {
+            // Nested user struct. If it derives Json, forward to its _to_json.
+            nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
+            if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
+                fval := _lnew_temp(ll)
+                ll = fval.l
+                ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+                nested_call := _lnew_str_temp(ll)
+                ll = nested_call.l
+                ll = _lemit(ll, new_inst(OpCall, nested_call.temp, fval.temp, 1, nested_name + "_to_json", 12))
+                ll = _lset_type(ll, nested_call.temp, 12)
+                r3 := _json_append_str(ll, cur_str, nested_call.temp)
+                ll = r3.l
+                cur_str = r3.temp
+            } else {
+                // Unsupported field type — emit JSON null so the output stays valid.
+                r3 := _json_append_const(ll, cur_str, "null")
+                ll = r3.l
+                cur_str = r3.temp
+            }
+            slot = slot + 1
+        } else {
+            r3 := _json_append_const(ll, cur_str, "null")
+            ll = r3.l
+            cur_str = r3.temp
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+
+    // Closing `}`
+    close_r := _json_append_const(ll, cur_str, "\}")
+    ll = close_r.l
+    ll = _lemit(ll, new_inst(OpRet, 0, close_r.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+    ll
+}
+
+// Emit an OpCall to a 2-slot str-arg helper that returns str, like
+// `json_get_str(v, key)`. Returns a fresh str temp. Packs the 3-slot arg
+// block (v, key_ptr, key_len) into consecutive temps so the called fn
+// sees them in the expected order.
+fn _json_call_get_str(l: Lowerer, v_temp: i64, key: str, callee: str) -> LT {
+    mut ll := l
+    key_lt := _lower_string_const(ll, key)
+    ll = key_lt.l
+    pack := _lnew_temp(ll)
+    ll = pack.l
+    extra1 := _lnew_temp(ll)
+    ll = extra1.l
+    extra2 := _lnew_temp(ll)
+    ll = extra2.l
+    ll = _lemit(ll, new_inst(OpStore, pack.temp, v_temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack.temp + 1, key_lt.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack.temp + 2, key_lt.temp + 1, 0, "", 0))
+    ret := _lnew_str_temp(ll)
+    ll = ret.l
+    ll = _lemit(ll, new_inst(OpCall, ret.temp, pack.temp, 3, callee, 12))
+    ll = _lset_type(ll, ret.temp, 12)
+    LT{l: ll, temp: ret.temp}
+}
+
+// OpCall to a helper returning i64 (e.g. json_get_int/json_get_bool/
+// json_object_get). Same arg layout as _json_call_get_str.
+fn _json_call_get_i64(l: Lowerer, v_temp: i64, key: str, callee: str) -> LT {
+    mut ll := l
+    key_lt := _lower_string_const(ll, key)
+    ll = key_lt.l
+    pack := _lnew_temp(ll)
+    ll = pack.l
+    extra1 := _lnew_temp(ll)
+    ll = extra1.l
+    extra2 := _lnew_temp(ll)
+    ll = extra2.l
+    ll = _lemit(ll, new_inst(OpStore, pack.temp, v_temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack.temp + 1, key_lt.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack.temp + 2, key_lt.temp + 1, 0, "", 0))
+    ret := _lnew_temp(ll)
+    ll = ret.l
+    ll = _lemit(ll, new_inst(OpCall, ret.temp, pack.temp, 3, callee, 1))
+    ll = _lset_type(ll, ret.temp, 1)
+    LT{l: ll, temp: ret.temp}
+}
+
+// Generate `fn TypeName_from_json_value(v: JsonValue) -> T` and
+// `fn TypeName_from_json(s: str) -> T`. The first does the real work —
+// pull each field via `json_get_str` / `json_get_int` / `json_get_bool`
+// or recurse via `<NestedT>_from_json_value`. The str-entry variant just
+// wraps `json_parse(s)` and forwards.
+//
+// Missing keys and type-mismatched values produce the json lib's defaults
+// ("", 0, false) rather than an Err — this matches phase 1 scope (simple
+// structs, happy-path parsing). A fallible variant can layer on later.
+fn _lower_derive_json_from(l: Lowerer, def: StructDef) -> Lowerer {
+    mut ll := l
+    // --- Part 1: <T>_from_json_value(v: JsonValue) -> T ---
+    value_fname := def.name + "_from_json_value"
+    struct_id := _struct_type_id(ll.registry, def.name)
+    ll = _lset_func(ll, new_ir_func(value_fname, 1, struct_id))
+    v_arg := _lnew_temp(ll)
+    ll = v_arg.l
+    ll = _lemit(ll, new_inst(OpArg, v_arg.temp, 0, 0, "", 0))
+    // Allocate the result struct
+    alloc_size := def.fields.len() - 1
+    inst := _lnew_temp(ll)
+    ll = inst.l
+    ll = _lemit(ll, new_inst(OpAlloc, inst.temp, alloc_size, 0, def.name, 0))
+    if struct_id > 0 { ll = _lset_type(ll, inst.temp, struct_id) }
+    mut fi := 1
+    mut slot := 0
+    while fi < def.fields.len() {
+        fld := def.fields[fi]
+        ft := fld.type_id
+        if ft == 12 {
+            got := _json_call_get_str(ll, v_arg.temp, fld.name, "json_get_str")
+            ll = got.l
+            ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
+            ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp + 1, slot + 1, "", 0))
+            slot = slot + 2
+        } else if ft == 1 {
+            got := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_get_int")
+            ll = got.l
+            ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
+            slot = slot + 1
+        } else if ft == 11 {
+            got := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_get_bool")
+            ll = got.l
+            ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
+            slot = slot + 1
+        } else if ft > 16 && ft < ll.store.types.len() {
+            nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
+            if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
+                // sub_v := json_object_get(v, "field")
+                sub_v := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_object_get")
+                ll = sub_v.l
+                // nested := <Nested>_from_json_value(sub_v)
+                nested_ret := _lnew_temp(ll)
+                ll = nested_ret.l
+                ll = _lemit(ll, new_inst(OpCall, nested_ret.temp, sub_v.temp, 1, nested_name + "_from_json_value", 1))
+                nested_tid := _struct_type_id(ll.registry, nested_name)
+                if nested_tid > 0 { ll = _lset_type(ll, nested_ret.temp, nested_tid) }
+                ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, nested_ret.temp, slot, fld.name, 0))
+            }
+            // Unsupported nested type — leave field zeroed.
+            slot = slot + 1
+        } else {
+            // Unsupported primitive (f64, etc.) — leave field zeroed.
+            slot = slot + 1
+        }
+        fi = fi + 1
+    }
+    ll = _lemit(ll, new_inst(OpRet, 0, inst.temp, 0, "", 0))
+    ll = _lfinish_func(ll)
+
+    // --- Part 2: <T>_from_json(s: str) -> T ---
+    str_fname := def.name + "_from_json"
+    ll = _lset_func(ll, new_ir_func(str_fname, 2, struct_id))
+    s_ptr := _lnew_str_temp(ll)
+    ll = s_ptr.l
+    ll = _lemit(ll, new_inst(OpArg, s_ptr.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpArg, s_ptr.temp + 1, 1, 0, "", 0))
+    // Pack str arg into 2 consecutive slots, then call json_parse.
+    pack := _lnew_temp(ll)
+    ll = pack.l
+    extra1 := _lnew_temp(ll)
+    ll = extra1.l
+    ll = _lemit(ll, new_inst(OpStore, pack.temp, s_ptr.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpStore, pack.temp + 1, s_ptr.temp + 1, 0, "", 0))
+    v_ret := _lnew_temp(ll)
+    ll = v_ret.l
+    ll = _lemit(ll, new_inst(OpCall, v_ret.temp, pack.temp, 2, "json_parse", 1))
+    // Forward to from_json_value.
+    final_ret := _lnew_temp(ll)
+    ll = final_ret.l
+    ll = _lemit(ll, new_inst(OpCall, final_ret.temp, v_ret.temp, 1, value_fname, 1))
+    if struct_id > 0 { ll = _lset_type(ll, final_ret.temp, struct_id) }
+    ll = _lemit(ll, new_inst(OpRet, 0, final_ret.temp, 0, "", 0))
     ll = _lfinish_func(ll)
     ll
 }

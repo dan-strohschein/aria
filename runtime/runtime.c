@@ -168,6 +168,44 @@ struct _aria_str _aria_sha256_hex(char *data_ptr, aria_int data_len) {
     return result;
 }
 
+// JSON-escape a raw string and wrap it in double quotes.
+// Input is `(ptr, len)`, output is `"…"` with `"`, `\`, and control chars escaped.
+// The @[derive(Json)] codegen calls this for every `str` field so the
+// generated `_to_json` never has to know about escaping internally.
+struct _aria_str _aria_json_escape(char *data_ptr, aria_int data_len) {
+    // Worst case: every byte becomes `\uXXXX` (6 bytes), plus two quotes.
+    size_t cap = (size_t)data_len * 6 + 2 + 1;
+    char *out = (char *)malloc(cap);
+    size_t w = 0;
+    out[w++] = '"';
+    for (aria_int i = 0; i < data_len; i++) {
+        unsigned char c = (unsigned char)data_ptr[i];
+        switch (c) {
+            case '"':  out[w++] = '\\'; out[w++] = '"';  break;
+            case '\\': out[w++] = '\\'; out[w++] = '\\'; break;
+            case '\b': out[w++] = '\\'; out[w++] = 'b';  break;
+            case '\f': out[w++] = '\\'; out[w++] = 'f';  break;
+            case '\n': out[w++] = '\\'; out[w++] = 'n';  break;
+            case '\r': out[w++] = '\\'; out[w++] = 'r';  break;
+            case '\t': out[w++] = '\\'; out[w++] = 't';  break;
+            default:
+                if (c < 0x20) {
+                    static const char hex_[] = "0123456789abcdef";
+                    out[w++] = '\\'; out[w++] = 'u';
+                    out[w++] = '0'; out[w++] = '0';
+                    out[w++] = hex_[(c >> 4) & 0xf];
+                    out[w++] = hex_[c & 0xf];
+                } else {
+                    out[w++] = (char)c;
+                }
+        }
+    }
+    out[w++] = '"';
+    out[w] = '\0';
+    struct _aria_str result = {out, (aria_int)w};
+    return result;
+}
+
 // --- I/O ---
 
 // Avoid name collision with generated Aria stdlib functions (@write, @read, etc.).

@@ -627,6 +627,7 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
 
         if kname == "type" {
             cc = _cset_pos(cc, decl.token_start)
+            cc = _parse_attribute_derives(cc, decl.name)
             cc = _cskip_pub(cc)
             if decl.name.startsWith("_alias:") {
                 // alias declaration
@@ -638,11 +639,15 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
                 // Legacy token-walk
                 cc = _register_type_decl(cc)
             }
+            cc = _register_derive_fn_sigs(cc, decl.name)
         } else if kname == "enum" {
             if decl.node_idx > 0 {
+                cc = _cset_pos(cc, decl.token_start)
+                cc = _parse_attribute_derives(cc, decl.name)
                 cc = _register_enum_decl_ast(cc, decl.node_idx)
             } else {
                 cc = _cset_pos(cc, decl.token_start)
+                cc = _parse_attribute_derives(cc, decl.name)
                 cc = _cskip_pub(cc)
                 cc = _register_enum_decl(cc)
             }
@@ -653,6 +658,63 @@ fn _pass1_types(c: Checker, index: DeclIndex) -> Checker {
 }
 
 // Parse `derives [Trait1, Trait2]` clause and register trait impls
+// Register fn signatures for derived Json impls so user code can call
+// `<T>_to_json(x)` / `<T>_from_json(s)` without the checker flagging them
+// as unresolved. The actual IR bodies are emitted in _lower_derives.
+fn _register_derive_fn_sigs(c: Checker, type_name: str) -> Checker {
+    mut cc := c
+    if !treg_has_impl(cc.treg, type_name, "Json") { return cc }
+    type_id := resolve_type_name(cc.store, type_name)
+    if type_id == TY_UNKNOWN { return cc }
+    to_name := type_name + "_to_json"
+    existing_to := reg_find_fn(cc.registry, to_name)
+    if existing_to.name == "" {
+        to_sig := new_fn_sig(to_name, ["", "self"], [0, type_id], 12, 0)
+        cc = _cset_reg(cc, reg_add_fn(cc.registry, to_sig))
+    }
+    from_name := type_name + "_from_json"
+    existing_from := reg_find_fn(cc.registry, from_name)
+    if existing_from.name == "" {
+        from_sig := new_fn_sig(from_name, ["", "s"], [0, 12], type_id, 0)
+        cc = _cset_reg(cc, reg_add_fn(cc.registry, from_sig))
+    }
+    cc
+}
+
+// Scan backward from the current position for `@[derive(IDENT, IDENT, ...)]`
+// and register each listed trait as an impl of `type_name`. The checker's
+// token cursor should be at the type declaration's `token_start` so the
+// attribute — which precedes `pub`/`type`/`struct` — lives just behind us.
+fn _parse_attribute_derives(c: Checker, type_name: str) -> Checker {
+    mut cc := c
+    // Walk backward over whitespace/newlines to find the `]` end of the attr.
+    mut p := cc.pos - 1
+    while p > 0 && cc.tokens[p].name == "NEWLINE" { p = p - 1 }
+    if p <= 0 { return cc }
+    if cc.tokens[p].name != "]" { return cc }
+    mut start := p - 1
+    while start > 0 && cc.tokens[start].name != "[" { start = start - 1 }
+    if start <= 0 { return cc }
+    if cc.tokens[start - 1].name != "@" { return cc }
+    // Inside `[`…`]` expect `derive ( ident { , ident } )`.
+    mut q := start + 1
+    if q >= p { return cc }
+    if cc.tokens[q].name != "IDENT" { return cc }
+    if cc.tokens[q].text != "derive" { return cc }
+    q = q + 1
+    if q >= p { return cc }
+    if cc.tokens[q].name != "(" { return cc }
+    q = q + 1
+    while q < p && cc.tokens[q].name != ")" {
+        if cc.tokens[q].name == "IDENT" {
+            tname := cc.tokens[q].text
+            cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(tname, type_name)))
+        }
+        q = q + 1
+    }
+    cc
+}
+
 fn _parse_derives(c: Checker, type_name: str) -> Checker {
     if _ck2(c) != "derives" { return c }
     mut cc := _cadv(c)  // skip derives
