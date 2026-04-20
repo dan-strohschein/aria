@@ -4755,6 +4755,21 @@ fn _check_generic_struct_lit(c: Checker, name: str, sdef: StructDef) -> CE {
         // Register as named type
         new_st := store_add(cc.store, mk_named_type(spec_name))
         cc = _cset_store(cc, new_st)
+        // Propagate derived trait impls from generic base to specialization so
+        // the codegen `_lower_derives` pass emits `Pair_i64_to_json` etc.
+        mut ipi := 1
+        while ipi < cc.treg.impl_defs.len() {
+            base_impl := cc.treg.impl_defs[ipi]
+            if base_impl.type_name == name && base_impl.trait_name != "" {
+                if treg_has_impl(cc.treg, spec_name, base_impl.trait_name) == false {
+                    cc = _cset_treg(cc, treg_add_impl(cc.treg, _mk_impl(base_impl.trait_name, spec_name)))
+                }
+            }
+            ipi = ipi + 1
+        }
+        // Register derived Json fn sigs so `.to_json()` method dispatch resolves
+        // to `<spec>_to_json` in the checker and codegen.
+        cc = _register_derive_fn_sigs(cc, spec_name)
     }
 
     // Resolve specialized type ID

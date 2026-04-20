@@ -1,0 +1,23 @@
+// test-files: ../../lib/json.aria generic_json_derive_test.aria
+// test-requires: json
+// test-expect: generic_json_derive_test passed
+use json
+
+@[derive(Json)]
+struct Env[T] {
+    data: T
+    ok: bool
+}
+
+entry {
+    e := Env[i64]{data: 42, ok: true}
+    s := json.encode(e)
+    assert s.len() > 0
+    println(s)
+
+    e2 := Env[i64]{data: 7, ok: false}
+    s2 := json.encode(e2)
+    println(s2)
+
+    println("generic_json_derive_test passed")
+}

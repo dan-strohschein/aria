@@ -19093,7 +19093,11 @@ fn _lower_derives(l: Lowerer) -> Lowerer {
     mut si := 1
     while si < ll.registry.struct_defs.len() {
         def := ll.registry.struct_defs[si]
-        if def.name != "" && def.is_sum == false && def.fields.len() > 1 {
+        // Skip the unspecialized generic base: its field types are TypeVars
+        // that the derive-body emitters can't lower. Specializations like
+        // `Pair_i64` are registered as concrete structs with generic_count=0
+        // and are iterated separately.
+        if def.name != "" && def.is_sum == false && def.fields.len() > 1 && def.generic_count == 0 {
             // Check if this type has derived Eq
             if treg_has_impl(ll.treg, def.name, "Eq") {
                 // Only generate if no user-defined TypeName_eq function exists

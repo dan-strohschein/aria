@@ -2065,6 +2065,32 @@ fn _parse_prefix(p: Parser) -> PR {
         }
         // Only parse struct literal if name starts with uppercase (type names are PascalCase)
         if _ck(pp) == lb && _is_upper_start(name) { return _parse_struct_lit(pp, name, span) }
+        // Generic struct literal: Name[T1, T2, ...]{...}
+        // Scan [ IDENT (, IDENT)* ] {  — must end with { to disambiguate from array subscript.
+        if _ck(pp) == "[" && _is_upper_start(name) {
+            mut gs_scan := pp.pos + 1
+            mut gs_spec := name
+            mut gs_ok := true
+            mut gs_seen := false
+            while gs_scan < pp.tokens.len() && pp.tokens[gs_scan].name != "]" && pp.tokens[gs_scan].name != "EOF" {
+                if pp.tokens[gs_scan].name == "IDENT" {
+                    gs_spec = gs_spec + "_" + pp.tokens[gs_scan].text
+                    gs_seen = true
+                    gs_scan = gs_scan + 1
+                    if gs_scan < pp.tokens.len() && pp.tokens[gs_scan].name == "," { gs_scan = gs_scan + 1 }
+                } else {
+                    gs_ok = false
+                    gs_scan = pp.tokens.len()
+                }
+            }
+            if gs_ok && gs_seen && gs_scan < pp.tokens.len() && pp.tokens[gs_scan].name == "]" {
+                gs_next := gs_scan + 1
+                if gs_next < pp.tokens.len() && pp.tokens[gs_next].name == lb {
+                    pp = Parser{tokens: pp.tokens, pos: gs_next, pool: pp.pool, diagnostics: pp.diagnostics}
+                    return _parse_struct_lit(pp, gs_spec, span)
+                }
+            }
+        }
         // Method ref: Type::method — rewrite as qualified name Type_method
         if _ck(pp) == ":" && _pk(pp) == ":" {
             pp = _adv(pp)  // skip first :
