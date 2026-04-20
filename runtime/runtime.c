@@ -2187,6 +2187,10 @@ aria_int _aria_tcp_set_timeout(aria_int fd, aria_int kind, aria_int ms) {
 #ifdef ARIA_HAS_LIBPQ
 #include <libpq-fe.h>
 
+// Runtime-level probe — lets Aria code distinguish "libpq missing"
+// from "libpq present but connection failed" without trying a connect.
+aria_int _aria_pg_available(void) { return 1; }
+
 // Connect to PostgreSQL. Returns connection handle (cast PGconn* to aria_int).
 aria_int _aria_pg_connect(char *ptr, aria_int len) {
     char *connstr = (char *)malloc((size_t)(len + 1));
@@ -2355,6 +2359,7 @@ void _aria_pg_clear(aria_int result) {
 }
 
 #else  // !ARIA_HAS_LIBPQ — provide stubs so linker doesn't fail
+aria_int _aria_pg_available(void) { return 0; }
 aria_int _aria_pg_connect(char *s, aria_int l) { return 0; }
 void _aria_pg_close(aria_int c) {}
 aria_int _aria_pg_status(aria_int c) { return -1; }

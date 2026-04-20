@@ -254,6 +254,7 @@ fn _populate_builtins(r: Resolver) -> Resolver {
     rr = _add_builtin(rr, "_ariaTcpPeerAddr", SkBuiltin)
     rr = _add_builtin(rr, "_ariaTcpSetTimeout", SkBuiltin)
     // PostgreSQL
+    rr = _add_builtin(rr, "_ariaPgAvailable", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgConnect", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgClose", SkBuiltin)
     rr = _add_builtin(rr, "_ariaPgStatus", SkBuiltin)

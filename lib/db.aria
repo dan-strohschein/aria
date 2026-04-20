@@ -151,9 +151,17 @@ struct Transaction {
     active: bool
 }
 
+// Returns true iff the runtime was compiled with -DARIA_HAS_LIBPQ. Lets
+// callers branch on libpq-present without attempting a real connection.
+fn available() -> bool {
+    _ariaPgAvailable() == 1
+}
+
 // Connect to a database. Returns Connection!DbError — use catch to handle
-// the unavailable case.
+// the unavailable case. When libpq isn't linked, returns DbError.Unavailable
+// immediately so callers get a proper error instead of a dead handle.
 fn connect(url: str) -> Connection!DbError with [Io] {
+    if _ariaPgAvailable() == 0 { return err(DbError.Unavailable) }
     h := _ariaPgConnect(url)
     if h == 0 { return err(DbError.Unavailable) }
     if _ariaPgStatus(h) != 1 {

@@ -559,6 +559,7 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare " + si64 + " @_aria_tcp_peer_addr(i64)" + nl)
     p = p.append("declare i64 @_aria_tcp_set_timeout(i64, i64, i64)" + nl)
     // PostgreSQL
+    p = p.append("declare i64 @_aria_pg_available()" + nl)
     p = p.append("declare i64 @_aria_pg_connect(i8*, i64)" + nl)
     p = p.append("declare void @_aria_pg_close(i64)" + nl)
     p = p.append("declare i64 @_aria_pg_status(i64)" + nl)
@@ -873,6 +874,7 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare void @_aria_tcp_close(i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_tcp_peer_addr(i64)" + nl)
     h = h.append("declare i64 @_aria_tcp_set_timeout(i64, i64, i64)" + nl)
+    h = h.append("declare i64 @_aria_pg_available()" + nl)
     h = h.append("declare i64 @_aria_pg_connect(i8*, i64)" + nl)
     h = h.append("declare void @_aria_pg_close(i64)" + nl)
     h = h.append("declare i64 @_aria_pg_status(i64)" + nl)

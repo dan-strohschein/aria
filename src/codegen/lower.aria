@@ -5046,6 +5046,7 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaTcpClose" { return "_aria_tcp_close" }
     if name == "_ariaTcpPeerAddr" { return "_aria_tcp_peer_addr" }
     if name == "_ariaTcpSetTimeout" { return "_aria_tcp_set_timeout" }
+    if name == "_ariaPgAvailable" { return "_aria_pg_available" }
     if name == "_ariaPgConnect" { return "_aria_pg_connect" }
     if name == "_ariaPgClose" { return "_aria_pg_close" }
     if name == "_ariaPgStatus" { return "_aria_pg_status" }
@@ -9499,6 +9500,16 @@ fn _lower_primary(l: Lowerer) -> LT {
             }
 
             // --- PostgreSQL ---
+            if name == "_ariaPgAvailable" {
+                ll = _ladv(ll)  // skip (
+                while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                if _lk(ll) == ")" { ll = _ladv(ll) }
+                nt := _lnew_temp(ll)
+                ll = nt.l
+                ll = _lemit(ll, new_inst(OpCall, nt.temp, 0, 0, "_aria_pg_available", 1))
+                ll = _lset_type(ll, nt.temp, 1)
+                return LT{l: ll, temp: nt.temp}
+            }
             if name == "_ariaPgConnect" {
                 ll = _ladv(ll)  // skip (
                 arg := _lower_expr(ll)
