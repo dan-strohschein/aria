@@ -263,6 +263,38 @@ fn store_add_canonical(store: TypeStore, info: TypeInfo) -> StoreAddResult {
 
 fn store_size(store: TypeStore) -> i64 = store.types.len()
 
+// Recursively substitute TypeVar IDs inside a type. Used by the checker
+// when specializing a generic struct literal so `Option[T]` / `[T]` /
+// `Result[T, E]` fields in the base decl become `Option[i64]` etc. in
+// the spec — downstream derive emitters (_lower_derive_json_to) key off
+// the concrete type_id to route into `<Inner>_to_json`, so an un-
+// substituted wrapper would fall through to the "null" fallback.
+fn _subst_tv(store: TypeStore, tid: i64, tv_0: i64, ta_0: i64, tv_1: i64, ta_1: i64, tv_2: i64, ta_2: i64) -> StoreAddResult {
+    if tv_0 > 0 && tid == tv_0 { return StoreAddResult{store: store, id: ta_0} }
+    if tv_1 > 0 && tid == tv_1 { return StoreAddResult{store: store, id: ta_1} }
+    if tv_2 > 0 && tid == tv_2 { return StoreAddResult{store: store, id: ta_2} }
+    if tid <= 0 || tid >= store.types.len() { return StoreAddResult{store: store, id: tid} }
+    info := store.types[tid]
+    kn := type_kind_name(info.kind)
+    if kn == "Optional" {
+        r := _subst_tv(store, info.type_id, tv_0, ta_0, tv_1, ta_1, tv_2, ta_2)
+        if r.id == info.type_id { return StoreAddResult{store: r.store, id: tid} }
+        return store_add_canonical(r.store, mk_optional_type(r.id))
+    }
+    if kn == "Array" {
+        r := _subst_tv(store, info.type_id, tv_0, ta_0, tv_1, ta_1, tv_2, ta_2)
+        if r.id == info.type_id { return StoreAddResult{store: r.store, id: tid} }
+        return store_add_canonical(r.store, mk_array_type(r.id))
+    }
+    if kn == "Result" {
+        ok := _subst_tv(store, info.type_id, tv_0, ta_0, tv_1, ta_1, tv_2, ta_2)
+        er := _subst_tv(ok.store, info.type_id2, tv_0, ta_0, tv_1, ta_1, tv_2, ta_2)
+        if ok.id == info.type_id && er.id == info.type_id2 { return StoreAddResult{store: er.store, id: tid} }
+        return store_add_canonical(er.store, mk_result_type(ok.id, er.id))
+    }
+    StoreAddResult{store: store, id: tid}
+}
+
 // --- Type name formatting ---
 
 fn format_type(store: TypeStore, id: i64) -> str {

@@ -1,0 +1,32 @@
+// test-files: ../../lib/json.aria generic_json_nested_test.aria
+// test-requires: json
+// test-expect: generic_json_nested_test passed
+use json
+
+@[derive(Json)]
+struct User {
+    id: i64
+    name: str
+}
+
+@[derive(Json)]
+struct ApiResponse[T] {
+    data: T?
+    took_ms: i64
+}
+
+entry {
+    u := User{id: 1, name: "Alice"}
+    r := ApiResponse[User]{data: Some(u), took_ms: 42}
+    s := json.encode(r)
+    println(s)
+    assert s.contains("\"id\":1")
+    assert s.contains("\"name\":\"Alice\"")
+
+    empty := ApiResponse[User]{data: None, took_ms: 0}
+    s2 := json.encode(empty)
+    println(s2)
+    assert s2.contains("\"data\":null")
+
+    println("generic_json_nested_test passed")
+}

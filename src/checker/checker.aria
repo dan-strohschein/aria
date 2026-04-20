@@ -4737,16 +4737,17 @@ fn _check_generic_struct_lit(c: Checker, name: str, sdef: StructDef) -> CE {
         if sdef.generic_count > 1 { tv_1 = resolve_type_name(cc.store, sdef.generic_name_1) }
         if sdef.generic_count > 2 { tv_2 = resolve_type_name(cc.store, sdef.generic_name_2) }
 
-        // Substitute field types
+        // Substitute field types, recursively for wrapped types like
+        // `Option[T]` / `[T]` / `Result[T, E]` — otherwise the spec's field
+        // retains the base TypeVar inside the wrapper and nested derive
+        // emitters fall through to "null" instead of recursing.
         mut sp_fields := [FieldInfo{name: "", type_id: 0}]
         mut fi := 1
         while fi < sdef.fields.len() {
             fld := sdef.fields[fi]
-            mut ft := fld.type_id
-            if ft == tv_0 && tv_0 > 0 { ft = ta_0 }
-            if ft == tv_1 && tv_1 > 0 { ft = ta_1 }
-            if ft == tv_2 && tv_2 > 0 { ft = ta_2 }
-            sp_fields = sp_fields.append(FieldInfo{name: fld.name, type_id: ft})
+            r := _subst_tv(cc.store, fld.type_id, tv_0, ta_0, tv_1, ta_1, tv_2, ta_2)
+            cc = _cset_store(cc, r.store)
+            sp_fields = sp_fields.append(FieldInfo{name: fld.name, type_id: r.id})
             fi = fi + 1
         }
 
