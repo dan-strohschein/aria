@@ -7091,6 +7091,65 @@ fn _lower_expr(l: Lowerer) -> LT {
         result := _lower_primary(l)
         ll = result.l
         left = result.temp
+    } else {
+        // Module-qualified short-circuit consumed `recv.method(args)` / const /
+        // variant via _lower_module_call_tokens, but ll.pos may now be at a
+        // postfix `.method()` / `.field` / `[idx]` (e.g. `time.now().unix()`).
+        // Drive a small postfix loop so chained calls don't leak tokens back
+        // to the caller and trigger spurious "unresolved" warnings.
+        mut pf_running := true
+        while pf_running {
+            pk := _lk(ll)
+            if pk == "." {
+                ll = _ladv(ll)
+                if _lk(ll) == "IDENT" {
+                    fld := _lcur(ll).text
+                    ll = _ladv(ll)
+                    if _lk(ll) == "(" {
+                        mr := _lower_method_call(ll, left, fld)
+                        ll = mr.l
+                        left = mr.temp
+                    } else {
+                        // Field access — best-effort, mirrors _lower_atom.
+                        left_type := _lget_type(ll, left)
+                        sname := _struct_name_for_type(ll.store, ll.registry, left_type)
+                        if sname != "" {
+                            fidx := _field_index(ll.registry, sname, fld)
+                            ft := _field_type_id(ll, sname, fld)
+                            if ft == 12 {
+                                fnt := _lnew_str_temp(ll)
+                                ll = fnt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, fnt.temp, left, fidx, fld, 0))
+                                slen := fidx + 1
+                                ll = _lemit(ll, new_inst(OpFieldGet, fnt.temp + 1, left, slen, fld, 0))
+                                ll = _lset_type(ll, fnt.temp, 12)
+                                left = fnt.temp
+                            } else {
+                                fnt := _lnew_temp(ll)
+                                ll = fnt.l
+                                ll = _lemit(ll, new_inst(OpFieldGet, fnt.temp, left, fidx, fld, 0))
+                                if ft > 0 { ll = _lset_type(ll, fnt.temp, ft) }
+                                left = fnt.temp
+                            }
+                        }
+                    }
+                } else { pf_running = false }
+            } else if pk == "[" {
+                ll = _ladv(ll)
+                idx_r := _lower_expr(ll)
+                ll = idx_r.l
+                if _lk(ll) == "]" { ll = _ladv(ll) }
+                left_type := _lget_type(ll, left)
+                elem_type := _array_elem_type(ll.store, left_type)
+                gnt := _lnew_temp(ll)
+                ll = gnt.l
+                ll = _lemit(ll, new_inst(OpArrayGet, gnt.temp, left, idx_r.temp, "", 0))
+                if elem_type > 0 { ll = _lset_type(ll, gnt.temp, elem_type) }
+                left = gnt.temp
+            } else {
+                pf_running = false
+            }
+        }
     }
 
     // Handle binary operators and postfix
@@ -7766,6 +7825,9 @@ fn _lower_expr(l: Lowerer) -> LT {
                 }
                 if _lk(ll) == "|" { ll = _ladv(ll) }  // skip |
             }
+            // Null-guard the Result pointer (mirrors `?` at line 8241) so a
+            // stub/lib returning 0 panics cleanly instead of SIGSEGV.
+            ll = _emit_result_null_guard(ll, left)
             // Extract tag from result
             tag_nt := _lnew_temp(ll)
             ll = tag_nt.l
@@ -13748,16 +13810,79 @@ fn _lower_atom(l: Lowerer) -> LT {
             pk1 := l.pos + 1
             pk2 := l.pos + 2
             pk3 := l.pos + 3
-            if pk3 < l.tokens.len() &&
+            if pk2 < l.tokens.len() &&
                l.tokens[pk1].name == "." &&
-               l.tokens[pk2].name == "IDENT" &&
-               l.tokens[pk3].name == "(" {
+               l.tokens[pk2].name == "IDENT" {
                 method := l.tokens[pk2].text
-                qualified := recv_name + "_" + method
-                if reg_find_fn(l.registry, qualified).name != "" ||
-                   reg_find_fn(l.registry, method).name != "" {
-                    ll0 := _lset_pos(l, pk3)
-                    return _lower_module_call_tokens(ll0, recv_name, method)
+                is_call := pk3 < l.tokens.len() && l.tokens[pk3].name == "("
+                if is_call {
+                    qualified := recv_name + "_" + method
+                    if reg_find_fn(l.registry, qualified).name != "" ||
+                       reg_find_fn(l.registry, method).name != "" {
+                        ll0 := _lset_pos(l, pk3)
+                        return _lower_module_call_tokens(ll0, recv_name, method)
+                    }
+                } else {
+                    // Module-qualified const lookup (e.g. `time.ms` inside an
+                    // expression like `50 * time.ms`). Without this we'd fall
+                    // through to _lower_primary on the receiver and warn
+                    // "unresolved identifier". Mirror the const/variant/prim
+                    // short-circuits from _lower_expr.
+                    cv := _lconst_lookup(l, method)
+                    if cv != 0 - 9999999 {
+                        nt := _lnew_temp(l)
+                        mut ll := nt.l
+                        ll = _lemit(ll, new_inst(OpConst, nt.temp, cv, 0, "", 0))
+                        ll = _lset_type(ll, nt.temp, 1)
+                        ll = _lset_pos(ll, l.pos + 3)
+                        return LT{l: ll, temp: nt.temp}
+                    }
+                    // Built-in primitive constants i64.MAX / u8.MAX etc.
+                    mut prim_v := 0
+                    mut prim_hit := false
+                    if recv_name == "i64" && method == "MAX" { prim_v = 9223372036854775807; prim_hit = true }
+                    if recv_name == "i64" && method == "MIN" { prim_v = 0 - 9223372036854775807 - 1; prim_hit = true }
+                    if recv_name == "i32" && method == "MAX" { prim_v = 2147483647; prim_hit = true }
+                    if recv_name == "i32" && method == "MIN" { prim_v = 0 - 2147483648; prim_hit = true }
+                    if recv_name == "i16" && method == "MAX" { prim_v = 32767; prim_hit = true }
+                    if recv_name == "i16" && method == "MIN" { prim_v = 0 - 32768; prim_hit = true }
+                    if recv_name == "i8"  && method == "MAX" { prim_v = 127; prim_hit = true }
+                    if recv_name == "i8"  && method == "MIN" { prim_v = 0 - 128; prim_hit = true }
+                    if recv_name == "u32" && method == "MAX" { prim_v = 4294967295; prim_hit = true }
+                    if recv_name == "u16" && method == "MAX" { prim_v = 65535; prim_hit = true }
+                    if recv_name == "u8"  && method == "MAX" { prim_v = 255; prim_hit = true }
+                    if (recv_name == "u32" || recv_name == "u16" || recv_name == "u8" || recv_name == "u64") && method == "MIN" { prim_v = 0; prim_hit = true }
+                    if prim_hit {
+                        nt := _lnew_temp(l)
+                        mut ll := nt.l
+                        ll = _lemit(ll, new_inst(OpConst, nt.temp, prim_v, 0, "", 0))
+                        ll = _lset_type(ll, nt.temp, 1)
+                        ll = _lset_pos(ll, l.pos + 3)
+                        return LT{l: ll, temp: nt.temp}
+                    }
+                    // Type-qualified no-data variant
+                    mvtag := _variant_tag(l.registry, method)
+                    if mvtag > 0 {
+                        mvparent := _variant_parent(l.registry, method)
+                        if variant_data_count(mvparent, mvtag) == 0 {
+                            nt := _lnew_temp(l)
+                            mut ll := nt.l
+                            if sum_has_data(mvparent) {
+                                alloc_sz := sum_alloc_size(mvparent)
+                                ll = _lemit(ll, new_inst(OpAlloc, nt.temp, alloc_sz, 0, mvparent.name, 0))
+                                st_id := _struct_type_id(ll.registry, mvparent.name)
+                                if st_id > 0 { ll = _lset_type(ll, nt.temp, st_id) }
+                                tag_nt := _lnew_temp(ll)
+                                ll = tag_nt.l
+                                ll = _lemit(ll, new_inst(OpConst, tag_nt.temp, mvtag, 0, "", 0))
+                                ll = _lemit(ll, new_inst(OpFieldSet, nt.temp, tag_nt.temp, 0, "_tag", 0))
+                            } else {
+                                ll = _lemit(ll, new_inst(OpConst, nt.temp, mvtag, 0, "", 0))
+                            }
+                            ll = _lset_pos(ll, l.pos + 3)
+                            return LT{l: ll, temp: nt.temp}
+                        }
+                    }
                 }
             }
         }
