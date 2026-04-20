@@ -50,14 +50,13 @@ fn active_label(is_active: bool) -> str {
 
 fn parse_record(line: str) -> Record {
     parts := line.split(",")
-    // split sentinel at [0], real data at [1]+
-    if parts.len() < 5 {
+    if parts.len() < 4 {
         return Record{name: "", age: 0, score: 0, active: false}
     }
-    name := parts[1].trim()
-    age := parse_int(parts[2].trim())
-    score := parse_int(parts[3].trim())
-    active := parts[4].trim() == "true"
+    name := parts[0].trim()
+    age := parse_int(parts[1].trim())
+    score := parse_int(parts[2].trim())
+    active := parts[3].trim() == "true"
     return Record{name: name, age: age, score: score, active: active}
 }
 
@@ -185,7 +184,7 @@ entry {
     lines := content.split("\n")
 
     mut records := [Record{name: "", age: 0, score: 0, active: false}]
-    mut li := 1
+    mut li := 0
     while li < lines.len() {
         line := lines[li]
         if line.len() > 0 {

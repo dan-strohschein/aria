@@ -98,9 +98,9 @@ fn http_parse_request(raw: str) -> HttpRequest {
     mut version := ""
     mut query := ""
     parts := request_line.split(" ")
-    if parts.len() > 1 { method = parts[1] }
-    if parts.len() > 2 {
-        full_path := parts[2]
+    if parts.len() > 0 { method = parts[0] }
+    if parts.len() > 1 {
+        full_path := parts[1]
         qidx := full_path.indexOf("?")
         if qidx >= 0 {
             path = full_path.substring(0, qidx)
@@ -109,7 +109,7 @@ fn http_parse_request(raw: str) -> HttpRequest {
             path = full_path
         }
     }
-    if parts.len() > 3 { version = parts[3] }
+    if parts.len() > 2 { version = parts[2] }
 
     HttpRequest{method: method, path: path, version: version,
                 body: body, query: query, raw_headers: raw_headers}
@@ -140,7 +140,7 @@ fn http_parse_query(query: str) -> [str] {
     if query.len() == 0 { return [""] }
     pairs := query.split("&")
     mut result := [""]
-    mut i := 1
+    mut i := 0
     while i < pairs.len() {
         pair := pairs[i]
         eq := pair.indexOf("=")

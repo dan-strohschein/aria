@@ -58,8 +58,7 @@ fn kv_load(store: KVStore, keys_out: [str]) -> Map {
     if content.len() == 0 { return m }
 
     lines := content.split("\n")
-    // split has sentinel at index 0, real data at 1+
-    mut idx := 1
+    mut idx := 0
     while idx < lines.len() {
         line := lines[idx]
         if line.len() > 0 {

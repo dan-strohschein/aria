@@ -30,8 +30,7 @@ fn count_words_in_string(text: str) -> i64 {
     if text.len() == 0 { return 0 }
     words := text.split(" ")
     mut count := 0
-    // split sentinel at [0], real data at [1]+
-    mut i := 1
+    mut i := 0
     while i < words.len() {
         w := words[i]
         trimmed := w.trim()
@@ -52,8 +51,7 @@ fn process_file(path: str) -> FileResult {
     lines := content.split("\n")
     mut line_count := 0
     mut word_count := 0
-    // split sentinel at [0], real lines at [1]+
-    mut i := 1
+    mut i := 0
     while i < lines.len() {
         line := lines[i]
         if line.len() > 0 {
@@ -90,11 +88,11 @@ fn strip_punctuation(word: str) -> str {
 fn word_frequencies(text: str) -> Map {
     freq := Map()
     lines := text.split("\n")
-    mut li := 1
+    mut li := 0
     while li < lines.len() {
         line := lines[li]
         words := line.split(" ")
-        mut wi := 1
+        mut wi := 0
         while wi < words.len() {
             w := words[wi]
             raw := w.trim()

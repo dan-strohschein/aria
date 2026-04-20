@@ -179,8 +179,8 @@ fn json_array_get(v: JsonValue, idx: i64) -> JsonValue {
     s := v.pool.strs[v.id]
     if s.len() == 0 { return JsonValue{id: 0, pool: v.pool} }
     parts := s.split(",")
-    if idx + 1 >= parts.len() { return JsonValue{id: 0, pool: v.pool} }
-    eid := _jp_parse_int(parts[idx + 1])
+    if idx >= parts.len() { return JsonValue{id: 0, pool: v.pool} }
+    eid := _jp_parse_int(parts[idx])
     return JsonValue{id: eid, pool: v.pool}
 }
 
@@ -194,7 +194,7 @@ fn json_object_get(v: JsonValue, key: str) -> JsonValue {
     // Split keys by \x01
     keys := keys_part.split("\x01")
     vals := vals_part.split(",")
-    mut i := 1
+    mut i := 0
     while i < keys.len() {
         if keys[i] == key {
             eid := _jp_parse_int(vals[i])
@@ -626,9 +626,9 @@ fn _json_emit_obj(v: JsonValue) -> str {
     keys := keys_part.split("\x01")
     vals := vals_part.split(",")
     mut r := "\{"
-    mut i := 1
+    mut i := 0
     while i < keys.len() {
-        if i > 1 { r = r + "," }
+        if i > 0 { r = r + "," }
         r = r + _json_escape(keys[i]) + ":" + json_emit(JsonValue{id: _jp_parse_int(vals[i]), pool: v.pool})
         i = i + 1
     }
@@ -734,7 +734,7 @@ fn _jpool_copy_value(dst: _JPool, v: JsonValue) -> _JVid {
         mut new_ids := [0]
         if src.len() > 0 {
             parts := src.split(",")
-            mut i := 1
+            mut i := 0
             while i < parts.len() {
                 child := JsonValue{id: _jp_parse_int(parts[i]), pool: v.pool}
                 c := _jpool_copy_value(acc, child)
@@ -758,7 +758,7 @@ fn _jpool_copy_value(dst: _JPool, v: JsonValue) -> _JVid {
             if keys_part.len() > 0 {
                 ks := keys_part.split("\x01")
                 vs := vals_part.split(",")
-                mut i := 1
+                mut i := 0
                 while i < ks.len() {
                     src_child := JsonValue{id: _jp_parse_int(vs[i]), pool: v.pool}
                     c := _jpool_copy_value(acc, src_child)
@@ -796,7 +796,7 @@ fn _jp_decode_object_pairs(v: JsonValue) -> _JOP {
         if keys_part.len() > 0 {
             ks := keys_part.split("\x01")
             vs := vals_part.split(",")
-            mut i := 1
+            mut i := 0
             while i < ks.len() {
                 keys = keys.append(ks[i])
                 vals = vals.append(_jp_parse_int(vs[i]))
@@ -822,7 +822,7 @@ pub fn json_arr_push(a: JsonValue, v: JsonValue) -> JsonValue {
     mut ids := [0]
     if encoded.len() > 0 {
         parts := encoded.split(",")
-        mut i := 1
+        mut i := 0
         while i < parts.len() {
             ids = ids.append(_jp_parse_int(parts[i]))
             i = i + 1

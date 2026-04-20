@@ -15442,7 +15442,7 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     // Parse param names from AST s1 field (comma-separated, reliable)
     if node.s1.len() > 0 {
         parts := node.s1.split(",")
-        mut pi := 1
+        mut pi := 0
         while pi < parts.len() {
             if parts[pi].len() > 0 {
                 param_names = param_names.append(parts[pi])

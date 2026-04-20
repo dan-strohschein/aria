@@ -9,19 +9,17 @@ entry {
     empty := ""
     assert empty.charCount() == 0
 
-    // Test 3: chars() - SKIPPED: type mismatch between checker (claims [i64])
-    // and runtime (returns [str]); needs coordinated fix. See
-    // project_post_assert_fix_bugs.md bug #1.
+    // Test 3: chars() returns array of codepoints (0-indexed, no sentinel)
     s := "abc"
     cps := s.chars()
-    assert cps.len() == 4
+    assert cps.len() == 3
 
-    // Test 4: graphemes() returns array of single-char strings
+    // Test 4: graphemes() returns array of single-char strings (0-indexed)
     gs := "xyz".graphemes()
-    assert gs.len() == 4  // sentinel + 3
-    assert gs[1] == "x"
-    assert gs[2] == "y"
-    assert gs[3] == "z"
+    assert gs.len() == 3
+    assert gs[0] == "x"
+    assert gs[1] == "y"
+    assert gs[2] == "z"
 
     print("chars_graphemes_test passed")
 }

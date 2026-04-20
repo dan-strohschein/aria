@@ -127,8 +127,8 @@ fn parse_args(args: [str]) -> Options with [Io] {
     mut cmd_set := false
     mut files := [""]
 
-    // args[0] = sentinel, args[1] = program name, start from 2
-    mut i := 2
+    // args[0] = program name, start from 1
+    mut i := 1
     while i < args.len() {
         arg := args[i]
         if _is_flag(arg) {
@@ -356,7 +356,7 @@ fn _parse_test_files_directive(file_path: str) -> [str] with [Fs] {
                 line_val := source.substring(i + prefix.len(), end)
                 parts := line_val.split(" ")
                 mut result := [""]
-                mut pi := 1
+                mut pi := 0
                 while pi < parts.len() {
                     if parts[pi].len() > 0 {
                         result = result.append(_normalize_path(dir + parts[pi]))
@@ -1069,7 +1069,7 @@ fn run_bench(raw_files: [str], format: str, runtime_path: str) -> i64 with [Io, 
 
 entry {
     args := _ariaArgs()
-    if args.len() < 3 {
+    if args.len() < 2 {
         print_help()
     } else {
         opts := parse_args(args)

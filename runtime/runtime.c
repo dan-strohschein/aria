@@ -1382,11 +1382,6 @@ struct _aria_str _aria_str_toUpper(char *ptr, aria_int len) {
 
 aria_int _aria_str_split(char *ptr, aria_int len, char *delim_ptr, aria_int delim_len) {
     aria_int arr = _aria_array_new(8);
-    // Sentinel: empty string struct (safe to dereference)
-    aria_int *sentinel_str = (aria_int *)_str_arena_alloc(16);
-    sentinel_str[0] = (aria_int)"";
-    sentinel_str[1] = 0;
-    arr = _aria_array_append(arr,(aria_int)sentinel_str);
 
     if (delim_len == 0) {
         aria_int *str_struct = (aria_int *)_str_arena_alloc(16);
@@ -1667,10 +1662,6 @@ aria_int _aria_list_dir(char *path_ptr, aria_int path_len) {
     path[path_len] = '\0';
 
     aria_int arr = _aria_array_new(16);
-    aria_int *sentinel_str = (aria_int *)malloc(16);
-    sentinel_str[0] = (aria_int)"";
-    sentinel_str[1] = 0;
-    arr = _aria_array_append(arr,(aria_int)sentinel_str);
 
 #ifdef _WIN32
     char search[MAX_PATH];
@@ -1864,7 +1855,6 @@ aria_int _aria_map_keys(aria_int map_ptr) {
     char *states = (char *)header[4];
 
     aria_int arr = _aria_array_new(header[0] * 2 + 2);
-    arr = _aria_array_append(arr,0);  // sentinel
     for (aria_int i = 0; i < capacity; i++) {
         if (states[i] == 1) {
             // Pack key as string: append ptr then len
@@ -1987,7 +1977,6 @@ aria_int _aria_set_values(aria_int set_ptr) {
     char *states = (char *)header[3];
 
     aria_int arr = _aria_array_new(header[0] * 2 + 2);
-    arr = _aria_array_append(arr,0);  // sentinel
     for (aria_int i = 0; i < capacity; i++) {
         if (states[i] == 1) {
             aria_int *str_struct = (aria_int *)malloc(16);
@@ -2018,10 +2007,6 @@ void _aria_args_init(int argc, char **argv) {
     // to a 2-word struct {ptr, len}. So we store each string as a pointer to
     // a heap-allocated {ptr, len} pair — ONE element per string, not two.
     aria_int arr = _aria_array_new(argc + 2);
-
-    // Sentinel at index 0: allocate a 2-word struct for empty string
-    aria_int *sentinel = (aria_int *)calloc(1, 16);
-    arr = _aria_array_append(arr, (aria_int)sentinel);
 
     for (int i = 0; i < argc; i++) {
         aria_int slen = (aria_int)strlen(argv[i]);
@@ -2986,8 +2971,6 @@ aria_int _aria_str_char_count(char *ptr, aria_int len) {
 
 aria_int _aria_str_chars(char *ptr, aria_int len) {
     aria_int arr = _aria_array_new(len < 8 ? 8 : len);
-    // sentinel
-    arr = _aria_array_append(arr,0);
     aria_int i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)ptr[i];
@@ -3020,11 +3003,6 @@ aria_int _aria_str_chars(char *ptr, aria_int len) {
 
 aria_int _aria_str_graphemes(char *ptr, aria_int len) {
     aria_int arr = _aria_array_new(len < 8 ? 8 : len);
-    // sentinel
-    aria_int *sentinel = (aria_int *)malloc(16);
-    sentinel[0] = (aria_int)"";
-    sentinel[1] = 0;
-    arr = _aria_array_append(arr,(aria_int)sentinel);
     aria_int i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)ptr[i];

@@ -151,8 +151,7 @@ fn convert_markdown(input: str) -> str {
     mut in_code_block := false
     mut in_list := false
 
-    // Iterate lines (split sentinel at [0], real lines at [1]+)
-    mut li := 1
+    mut li := 0
     while li < lines.len() {
         line := lines[li]
         trimmed := line.trim()
