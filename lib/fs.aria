@@ -18,10 +18,18 @@ type Error =
 
 // read returns an empty string when the file is missing or unreadable.
 // Empty-file and missing-file both produce "" — callers that need to
-// distinguish should call fs.exists first. The returned string is always
-// a valid allocation (never a null pointer), so .len() and string ops
-// are safe on the result.
+// distinguish should call fs.exists first, or use read_checked for a
+// Result-returning variant. The returned string is always a valid
+// allocation (never a null pointer), so .len() and string ops are safe.
 fn read(path: str) -> str with [Fs] {
+    _ariaReadFile(path)
+}
+
+// read_checked returns Err(Error.NotFound) when the file is missing so
+// callers can distinguish missing-file from empty-file via `catch` / `?`
+// instead of comparing against "". On-disk content is returned as Ok(s).
+fn read_checked(path: str) -> str!Error with [Fs] {
+    if _ariaFileExists(path) == 0 { return err(Error.NotFound) }
     _ariaReadFile(path)
 }
 
