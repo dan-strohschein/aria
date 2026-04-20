@@ -2148,7 +2148,10 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         }
         field := _cur(pp).text
         pp = _adv(pp)
-        // .to[Type]() and .trunc[Type]() — conversion methods with type arg
+        // .to[Type](), .trunc[Type](), .parse[Type](...) — turbofish
+        // conversion / parse methods. Args are permitted (e.g.
+        // `json.parse[User](s)`) and lowered into the standard
+        // MethodCall list_start/list_count layout.
         if _ck(pp) == "[" && (field == "to" || field == "trunc" || field == "parse") {
             pp = _adv(pp)  // skip [
             mut type_arg := ""
@@ -2157,10 +2160,31 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
                 pp = _adv(pp)
             }
             if _ck(pp) == "]" { pp = _adv(pp) }
-            if _ck(pp) == "(" { pp = _adv(pp) }
-            if _ck(pp) == ")" { pp = _adv(pp) }
+            mut tf_arg_indices := [0]
+            mut tf_count := 0
+            if _ck(pp) == "(" {
+                pp = _adv(pp)
+                while _ck(pp) != ")" && _ck(pp) != "EOF" {
+                    pp = _skip_nl(pp)
+                    ar := _parse_expr(pp, 0)
+                    tf_a_idx := _pidx(ar.p)
+                    pp = _padd(ar.p, ar.e)
+                    tf_arg_indices = tf_arg_indices.append(tf_a_idx)
+                    tf_count = tf_count + 1
+                    pp = _skip_nl(pp)
+                    if _ck(pp) == "," { pp = _adv(pp) }
+                }
+                pp = _expect(pp, ")")
+            }
+            tf_list_start := _pidx(pp)
+            mut tfi := 0
+            while tfi < tf_count {
+                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                                     c0: tf_arg_indices[tfi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
+                tfi = tfi + 1
+            }
             return PR{p: pp, e: Expr{kind: EkMethodCall, s1: field, s2: type_arg, b1: false, b2: false,
-                                      c0: left_idx, c1: 0, c2: 0, list_start: 0, list_count: 0, span: span}}
+                                      c0: left_idx, c1: 0, c2: 0, list_start: tf_list_start, list_count: tf_count, span: span}}
         }
         // Struct-like variant construction: Type.Variant { field: val, ... }
         // Only parse as struct if the { } block contains field: value pairs, not match arms (=>)

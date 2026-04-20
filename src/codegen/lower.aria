@@ -2838,6 +2838,24 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         marg_types = marg_types.append(_lget_type(ll, arg_r.temp))
                         mai = mai + 1
                     }
+                    // `json.encode(x)` where x is a `@[derive(Json)]` struct:
+                    // retarget the call to `<T>_to_json(x)`. Falls through to
+                    // the stock `encode(JsonValue) -> str` otherwise.
+                    if recv_name == "json" && method == "encode" && marg_temps.len() == 2 {
+                        arg_t_je := marg_types[1]
+                        sname_je := _struct_name_for_type(ll.store, ll.registry, arg_t_je)
+                        if sname_je != "" && treg_has_impl(ll.treg, sname_je, "Json") {
+                            mcall_name = sname_je + "_to_json"
+                            msig = reg_find_fn(ll.registry, mcall_name)
+                        }
+                    }
+                    // `json.parse[T](s)` turbofish — dispatch to
+                    // `<T>_from_json(s)`. Without the turbofish, falls through
+                    // to stock `json_parse(s) -> JsonValue`.
+                    if recv_name == "json" && method == "parse" && node.s2.len() > 0 && treg_has_impl(ll.treg, node.s2, "Json") {
+                        mcall_name = node.s2 + "_from_json"
+                        msig = reg_find_fn(ll.registry, mcall_name)
+                    }
                     // If this is a generic impl method (e.g. Pair_new with T, U
                     // inherited from `impl[A, B] Pair[A, B]`), resolve the call
                     // to its specialization by suffixing the arg types so the
@@ -13770,6 +13788,17 @@ fn _lower_module_call_tokens(l: Lowerer, recv_name: str, method: str) -> LT {
         ll = _lskip_nl(ll)
     }
     if _lk(ll) == ")" { ll = _ladv(ll) }
+    // `json.encode(x)` where x is a `@[derive(Json)]` struct — re-point the
+    // call to `<T>_to_json(x)` before packing. Falls through to the stock
+    // `encode(JsonValue) -> str` in lib/json.aria for non-derived args.
+    if recv_name == "json" && method == "encode" && arg_temps.len() == 2 {
+        arg_t_je := arg_types[1]
+        sname_je := _struct_name_for_type(ll.store, ll.registry, arg_t_je)
+        if sname_je != "" && treg_has_impl(ll.treg, sname_je, "Json") {
+            call_name = sname_je + "_to_json"
+            msig = reg_find_fn(ll.registry, call_name)
+        }
+    }
     // Count register slots (str args take 2).
     mut reg_count := 0
     mut ci := 1
@@ -19566,14 +19595,77 @@ fn _json_append_str(l: Lowerer, cur_str: i64, s_temp: i64) -> LT {
     LT{l: ll, temp: cat.temp}
 }
 
+// Emit IR that converts a single value to its JSON string representation.
+// Returns an LT whose .temp points to a str (ptr at .temp, len at .temp+1).
+// For str inputs, val_temp must be the 2-slot str layout (ptr/len). For
+// other primitives and struct pointers, val_temp is a 1-slot value.
+// Falls back to literal "null" for unsupported types (nested arrays /
+// optionals — to be layered on).
+fn _emit_value_to_json(l: Lowerer, val_temp: i64, type_id: i64) -> LT {
+    mut ll := l
+    if type_id == 12 {
+        quoted := _lnew_str_temp(ll)
+        ll = quoted.l
+        ll = _lemit(ll, new_inst(OpCall, quoted.temp, val_temp, 2, "_aria_json_escape", 12))
+        ll = _lset_type(ll, quoted.temp, 12)
+        return LT{l: ll, temp: quoted.temp}
+    }
+    if type_id == 1 {
+        fstr := _lnew_str_temp(ll)
+        ll = fstr.l
+        ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, val_temp, 0, "", 0))
+        ll = _lset_type(ll, fstr.temp, 12)
+        return LT{l: ll, temp: fstr.temp}
+    }
+    if type_id == 9 {
+        fstr := _lnew_str_temp(ll)
+        ll = fstr.l
+        ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, val_temp, 0, "f64", 0))
+        ll = _lset_type(ll, fstr.temp, 12)
+        return LT{l: ll, temp: fstr.temp}
+    }
+    if type_id == 11 {
+        true_lbl := _lnew_label(ll)
+        ll = true_lbl.l
+        end_lbl := _lnew_label(ll)
+        ll = end_lbl.l
+        lit_slot := _lnew_str_temp(ll)
+        ll = lit_slot.l
+        ll = _lemit(ll, new_inst(OpBranchTrue, 0, val_temp, true_lbl.temp, "", 0))
+        f_lit := _lower_string_const(ll, "false")
+        ll = f_lit.l
+        ll = _lemit(ll, new_inst(OpStore, lit_slot.temp, f_lit.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, lit_slot.temp + 1, f_lit.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, true_lbl.temp, 0, "", 0))
+        t_lit := _lower_string_const(ll, "true")
+        ll = t_lit.l
+        ll = _lemit(ll, new_inst(OpStore, lit_slot.temp, t_lit.temp, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpStore, lit_slot.temp + 1, t_lit.temp + 1, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+        ll = _lset_type(ll, lit_slot.temp, 12)
+        return LT{l: ll, temp: lit_slot.temp}
+    }
+    nested_name := _struct_name_for_type(ll.store, ll.registry, type_id)
+    if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
+        call_ret := _lnew_str_temp(ll)
+        ll = call_ret.l
+        ll = _lemit(ll, new_inst(OpCall, call_ret.temp, val_temp, 1, nested_name + "_to_json", 12))
+        ll = _lset_type(ll, call_ret.temp, 12)
+        return LT{l: ll, temp: call_ret.temp}
+    }
+    null_lit := _lower_string_const(ll, "null")
+    ll = null_lit.l
+    LT{l: ll, temp: null_lit.temp}
+}
+
 // Generate `fn TypeName_to_json(self: T) -> str`. Emits a flat string
 // directly (no JsonValue pool) so the derive is self-contained — the
 // runtime helper `_aria_json_escape` handles string field escaping, and
 // nested structs chain into their own generated `_to_json` via OpCall.
 //
-// Supported field types: str, i64/bool (number/true/false/null-on-unknown),
-// f64, and nested structs that also derive Json. Option[T] and arrays
-// are deferred to a later pass.
+// Supported field types: str, i64, bool, f64, [T] for primitive T,
+// Option[T] for primitive T, and nested structs that also derive Json.
 fn _lower_derive_json_to(l: Lowerer, def: StructDef) -> Lowerer {
     fname := def.name + "_to_json"
     mut ll := _lset_func(l, new_ir_func(fname, 1, 12))
@@ -19630,6 +19722,20 @@ fn _lower_derive_json_to(l: Lowerer, def: StructDef) -> Lowerer {
             ll = r3.l
             cur_str = r3.temp
             slot = slot + 1
+        } else if ft == 9 {
+            // f64 — route OpIntToStr with s1="f64" to _aria_float_to_str,
+            // which formats the bits as a JSON-safe number literal.
+            fval := _lnew_temp(ll)
+            ll = fval.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+            fstr := _lnew_str_temp(ll)
+            ll = fstr.l
+            ll = _lemit(ll, new_inst(OpIntToStr, fstr.temp, fval.temp, 0, "f64", 0))
+            ll = _lset_type(ll, fstr.temp, 12)
+            r3 := _json_append_str(ll, cur_str, fstr.temp)
+            ll = r3.l
+            cur_str = r3.temp
+            slot = slot + 1
         } else if ft == 11 {
             // bool (TY_BOOL=11) — branch on 0/1 and append "true"/"false".
             fval := _lnew_temp(ll)
@@ -19663,24 +19769,175 @@ fn _lower_derive_json_to(l: Lowerer, def: StructDef) -> Lowerer {
             cur_str = r3.temp
             slot = slot + 1
         } else if ft > 16 && ft < ll.store.types.len() {
-            // Nested user struct. If it derives Json, forward to its _to_json.
-            nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
-            if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
-                fval := _lnew_temp(ll)
-                ll = fval.l
-                ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
-                nested_call := _lnew_str_temp(ll)
-                ll = nested_call.l
-                ll = _lemit(ll, new_inst(OpCall, nested_call.temp, fval.temp, 1, nested_name + "_to_json", 12))
-                ll = _lset_type(ll, nested_call.temp, 12)
-                r3 := _json_append_str(ll, cur_str, nested_call.temp)
+            ft_kind := type_kind_name(ll.store.types[ft].kind)
+            if ft_kind == "Array" {
+                // [T] — emit "[" + comma-joined per-elem JSON + "]". Uses
+                // a 2-slot buffer slot so cur_str can flow through the loop
+                // in phi-less IR.
+                elem_tid := ll.store.types[ft].type_id
+                r_open := _json_append_const(ll, cur_str, "[")
+                ll = r_open.l
+                buf_slot := _lnew_str_temp(ll)
+                ll = buf_slot.l
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp, r_open.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp + 1, r_open.temp + 1, 0, "", 0))
+                arr_nt := _lnew_temp(ll)
+                ll = arr_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, arr_nt.temp, self_nt.temp, slot, fld.name, 0))
+                len_nt := _lnew_temp(ll)
+                ll = len_nt.l
+                ll = _lemit(ll, new_inst(OpArrayLen, len_nt.temp, arr_nt.temp, 0, "", 0))
+                i_slot := _lnew_temp(ll)
+                ll = i_slot.l
+                zero_nt := _lnew_temp(ll)
+                ll = zero_nt.l
+                ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, i_slot.temp, zero_nt.temp, 0, "", 0))
+                loop_lbl := _lnew_label(ll)
+                ll = loop_lbl.l
+                end_lbl := _lnew_label(ll)
+                ll = end_lbl.l
+                ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+                i_cur := _lnew_temp(ll)
+                ll = i_cur.l
+                ll = _lemit(ll, new_inst(OpLoad, i_cur.temp, i_slot.temp, 0, "", 0))
+                cmp_nt := _lnew_temp(ll)
+                ll = cmp_nt.l
+                ll = _lemit(ll, new_inst(OpLt, cmp_nt.temp, i_cur.temp, len_nt.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_nt.temp, end_lbl.temp, "", 0))
+                // if i > 0 append ","
+                zero2 := _lnew_temp(ll)
+                ll = zero2.l
+                ll = _lemit(ll, new_inst(OpConst, zero2.temp, 0, 0, "", 0))
+                cmp2 := _lnew_temp(ll)
+                ll = cmp2.l
+                ll = _lemit(ll, new_inst(OpGt, cmp2.temp, i_cur.temp, zero2.temp, "", 0))
+                skip_comma := _lnew_label(ll)
+                ll = skip_comma.l
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp2.temp, skip_comma.temp, "", 0))
+                cur_load := _lnew_str_temp(ll)
+                ll = cur_load.l
+                ll = _lemit(ll, new_inst(OpLoad, cur_load.temp, buf_slot.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLoad, cur_load.temp + 1, buf_slot.temp + 1, 0, "", 0))
+                ll = _lset_type(ll, cur_load.temp, 12)
+                comma_r := _json_append_const(ll, cur_load.temp, ",")
+                ll = comma_r.l
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp, comma_r.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp + 1, comma_r.temp + 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, skip_comma.temp, 0, "", 0))
+                // Load element. Str elements take 2 slots.
+                mut elem_temp := 0
+                if elem_tid == 12 {
+                    e := _lnew_str_temp(ll)
+                    ll = e.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, e.temp, arr_nt.temp, i_cur.temp, "", 12))
+                    ll = _lset_type(ll, e.temp, 12)
+                    elem_temp = e.temp
+                } else {
+                    e := _lnew_temp(ll)
+                    ll = e.l
+                    ll = _lemit(ll, new_inst(OpArrayGet, e.temp, arr_nt.temp, i_cur.temp, "", 0))
+                    if elem_tid > 0 { ll = _lset_type(ll, e.temp, elem_tid) }
+                    elem_temp = e.temp
+                }
+                // Encode element and append.
+                elem_json := _emit_value_to_json(ll, elem_temp, elem_tid)
+                ll = elem_json.l
+                cur_load2 := _lnew_str_temp(ll)
+                ll = cur_load2.l
+                ll = _lemit(ll, new_inst(OpLoad, cur_load2.temp, buf_slot.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLoad, cur_load2.temp + 1, buf_slot.temp + 1, 0, "", 0))
+                ll = _lset_type(ll, cur_load2.temp, 12)
+                app_r := _json_append_str(ll, cur_load2.temp, elem_json.temp)
+                ll = app_r.l
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp, app_r.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, buf_slot.temp + 1, app_r.temp + 1, 0, "", 0))
+                // i++
+                one_nt := _lnew_temp(ll)
+                ll = one_nt.l
+                ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+                next_i := _lnew_temp(ll)
+                ll = next_i.l
+                ll = _lemit(ll, new_inst(OpAdd, next_i.temp, i_cur.temp, one_nt.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, i_slot.temp, next_i.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+                // Load final cur_str, append "]"
+                final_load := _lnew_str_temp(ll)
+                ll = final_load.l
+                ll = _lemit(ll, new_inst(OpLoad, final_load.temp, buf_slot.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLoad, final_load.temp + 1, buf_slot.temp + 1, 0, "", 0))
+                ll = _lset_type(ll, final_load.temp, 12)
+                close_r := _json_append_const(ll, final_load.temp, "]")
+                ll = close_r.l
+                cur_str = close_r.temp
+            } else if ft_kind == "Optional" {
+                // Option[T] — _tag at slot 0 (0=None, 1=Some), _val at slot 1.
+                inner_tid := ll.store.types[ft].type_id
+                opt_nt := _lnew_temp(ll)
+                ll = opt_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, opt_nt.temp, self_nt.temp, slot, fld.name, 0))
+                tag_nt := _lnew_temp(ll)
+                ll = tag_nt.l
+                ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, opt_nt.temp, 0, "_tag", 0))
+                some_lbl := _lnew_label(ll)
+                ll = some_lbl.l
+                opt_end := _lnew_label(ll)
+                ll = opt_end.l
+                opt_slot := _lnew_str_temp(ll)
+                ll = opt_slot.l
+                ll = _lemit(ll, new_inst(OpBranchTrue, 0, tag_nt.temp, some_lbl.temp, "", 0))
+                // None → store "null"
+                null_lit := _lower_string_const(ll, "null")
+                ll = null_lit.l
+                ll = _lemit(ll, new_inst(OpStore, opt_slot.temp, null_lit.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, opt_slot.temp + 1, null_lit.temp + 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpJump, 0, opt_end.temp, 0, "", 0))
+                // Some → load _val, encode per T
+                ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+                mut val_temp := 0
+                if inner_tid == 12 {
+                    v := _lnew_str_temp(ll)
+                    ll = v.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, v.temp, opt_nt.temp, 1, "_val", 0))
+                    ll = _lemit(ll, new_inst(OpFieldGet, v.temp + 1, opt_nt.temp, 2, "", 0))
+                    ll = _lset_type(ll, v.temp, 12)
+                    val_temp = v.temp
+                } else {
+                    v := _lnew_temp(ll)
+                    ll = v.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, v.temp, opt_nt.temp, 1, "_val", 0))
+                    if inner_tid > 0 { ll = _lset_type(ll, v.temp, inner_tid) }
+                    val_temp = v.temp
+                }
+                val_json := _emit_value_to_json(ll, val_temp, inner_tid)
+                ll = val_json.l
+                ll = _lemit(ll, new_inst(OpStore, opt_slot.temp, val_json.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, opt_slot.temp + 1, val_json.temp + 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, opt_end.temp, 0, "", 0))
+                ll = _lset_type(ll, opt_slot.temp, 12)
+                r3 := _json_append_str(ll, cur_str, opt_slot.temp)
                 ll = r3.l
                 cur_str = r3.temp
             } else {
-                // Unsupported field type — emit JSON null so the output stays valid.
-                r3 := _json_append_const(ll, cur_str, "null")
-                ll = r3.l
-                cur_str = r3.temp
+                // Nested user struct. If it derives Json, forward to its _to_json.
+                nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
+                if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
+                    fval := _lnew_temp(ll)
+                    ll = fval.l
+                    ll = _lemit(ll, new_inst(OpFieldGet, fval.temp, self_nt.temp, slot, fld.name, 0))
+                    nested_call := _lnew_str_temp(ll)
+                    ll = nested_call.l
+                    ll = _lemit(ll, new_inst(OpCall, nested_call.temp, fval.temp, 1, nested_name + "_to_json", 12))
+                    ll = _lset_type(ll, nested_call.temp, 12)
+                    r3 := _json_append_str(ll, cur_str, nested_call.temp)
+                    ll = r3.l
+                    cur_str = r3.temp
+                } else {
+                    r3 := _json_append_const(ll, cur_str, "null")
+                    ll = r3.l
+                    cur_str = r3.temp
+                }
             }
             slot = slot + 1
         } else {
@@ -19786,29 +20043,191 @@ fn _lower_derive_json_from(l: Lowerer, def: StructDef) -> Lowerer {
             ll = got.l
             ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
             slot = slot + 1
+        } else if ft == 9 {
+            // f64 — json_get_float returns f64 bits in the i64 slot.
+            got := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_get_float")
+            ll = got.l
+            ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
+            slot = slot + 1
         } else if ft == 11 {
             got := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_get_bool")
             ll = got.l
             ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, got.temp, slot, fld.name, 0))
             slot = slot + 1
         } else if ft > 16 && ft < ll.store.types.len() {
-            nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
-            if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
-                // sub_v := json_object_get(v, "field")
+            ft_kind := type_kind_name(ll.store.types[ft].kind)
+            if ft_kind == "Optional" {
+                inner_tid := ll.store.types[ft].type_id
                 sub_v := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_object_get")
                 ll = sub_v.l
-                // nested := <Nested>_from_json_value(sub_v)
-                nested_ret := _lnew_temp(ll)
-                ll = nested_ret.l
-                ll = _lemit(ll, new_inst(OpCall, nested_ret.temp, sub_v.temp, 1, nested_name + "_from_json_value", 1))
-                nested_tid := _struct_type_id(ll.registry, nested_name)
-                if nested_tid > 0 { ll = _lset_type(ll, nested_ret.temp, nested_tid) }
-                ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, nested_ret.temp, slot, fld.name, 0))
+                kind_t := _lnew_temp(ll)
+                ll = kind_t.l
+                ll = _lemit(ll, new_inst(OpCall, kind_t.temp, sub_v.temp, 1, "json_kind", 1))
+                ll = _lset_type(ll, kind_t.temp, 1)
+                zero_k := _lnew_temp(ll)
+                ll = zero_k.l
+                ll = _lemit(ll, new_inst(OpConst, zero_k.temp, 0, 0, "", 0))
+                is_null := _lnew_temp(ll)
+                ll = is_null.l
+                ll = _lemit(ll, new_inst(OpEq, is_null.temp, kind_t.temp, zero_k.temp, "", 0))
+                some_lbl := _lnew_label(ll)
+                ll = some_lbl.l
+                opt_end := _lnew_label(ll)
+                ll = opt_end.l
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, is_null.temp, some_lbl.temp, "", 0))
+                // None branch
+                none_opt := _lnew_temp(ll)
+                ll = none_opt.l
+                ll = _lemit(ll, new_inst(OpAlloc, none_opt.temp, 2, 0, "_Optional", 0))
+                zero_tag := _lnew_temp(ll)
+                ll = zero_tag.l
+                ll = _lemit(ll, new_inst(OpConst, zero_tag.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, none_opt.temp, zero_tag.temp, 0, "_tag", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, none_opt.temp, slot, fld.name, 0))
+                ll = _lemit(ll, new_inst(OpJump, 0, opt_end.temp, 0, "", 0))
+                // Some branch
+                ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+                mut opt_slots := 2
+                if inner_tid == 12 { opt_slots = 3 }
+                some_opt := _lnew_temp(ll)
+                ll = some_opt.l
+                ll = _lemit(ll, new_inst(OpAlloc, some_opt.temp, opt_slots, 0, "_Optional", 0))
+                one_tag := _lnew_temp(ll)
+                ll = one_tag.l
+                ll = _lemit(ll, new_inst(OpConst, one_tag.temp, 1, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, some_opt.temp, one_tag.temp, 0, "_tag", 0))
+                if inner_tid == 12 {
+                    sv := _lnew_str_temp(ll)
+                    ll = sv.l
+                    ll = _lemit(ll, new_inst(OpCall, sv.temp, sub_v.temp, 1, "json_str_val", 12))
+                    ll = _lset_type(ll, sv.temp, 12)
+                    ll = _lemit(ll, new_inst(OpFieldSet, some_opt.temp, sv.temp, 1, "_val", 0))
+                    ll = _lemit(ll, new_inst(OpFieldSet, some_opt.temp, sv.temp + 1, 2, "", 0))
+                } else if inner_tid == 1 || inner_tid == 11 {
+                    iv := _lnew_temp(ll)
+                    ll = iv.l
+                    ll = _lemit(ll, new_inst(OpCall, iv.temp, sub_v.temp, 1, "json_int_val", 1))
+                    ll = _lset_type(ll, iv.temp, 1)
+                    ll = _lemit(ll, new_inst(OpFieldSet, some_opt.temp, iv.temp, 1, "_val", 0))
+                } else if inner_tid == 9 {
+                    fv := _lnew_temp(ll)
+                    ll = fv.l
+                    ll = _lemit(ll, new_inst(OpCall, fv.temp, sub_v.temp, 1, "json_float_val", 9))
+                    ll = _lset_type(ll, fv.temp, 9)
+                    ll = _lemit(ll, new_inst(OpFieldSet, some_opt.temp, fv.temp, 1, "_val", 0))
+                }
+                ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, some_opt.temp, slot, fld.name, 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, opt_end.temp, 0, "", 0))
+            } else if ft_kind == "Array" {
+                elem_tid := ll.store.types[ft].type_id
+                sub_v := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_object_get")
+                ll = sub_v.l
+                arr_len := _lnew_temp(ll)
+                ll = arr_len.l
+                ll = _lemit(ll, new_inst(OpCall, arr_len.temp, sub_v.temp, 1, "json_array_len", 1))
+                ll = _lset_type(ll, arr_len.temp, 1)
+                // Start with empty array; append per element so str elems get
+                // properly boxed via OpArrayAppend's str path.
+                arr_slot := _lnew_temp(ll)
+                ll = arr_slot.l
+                zero_cap := _lnew_temp(ll)
+                ll = zero_cap.l
+                ll = _lemit(ll, new_inst(OpConst, zero_cap.temp, 0, 0, "", 0))
+                init_arr := _lnew_temp(ll)
+                ll = init_arr.l
+                ll = _lemit(ll, new_inst(OpArrayNew, init_arr.temp, zero_cap.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, arr_slot.temp, init_arr.temp, 0, "", 0))
+                // i := 0
+                i_slot := _lnew_temp(ll)
+                ll = i_slot.l
+                zi := _lnew_temp(ll)
+                ll = zi.l
+                ll = _lemit(ll, new_inst(OpConst, zi.temp, 0, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, i_slot.temp, zi.temp, 0, "", 0))
+                a_loop := _lnew_label(ll)
+                ll = a_loop.l
+                a_end := _lnew_label(ll)
+                ll = a_end.l
+                ll = _lemit(ll, new_inst(OpLabel, 0, a_loop.temp, 0, "", 0))
+                i_cur := _lnew_temp(ll)
+                ll = i_cur.l
+                ll = _lemit(ll, new_inst(OpLoad, i_cur.temp, i_slot.temp, 0, "", 0))
+                cmp := _lnew_temp(ll)
+                ll = cmp.l
+                ll = _lemit(ll, new_inst(OpLt, cmp.temp, i_cur.temp, arr_len.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp.temp, a_end.temp, "", 0))
+                // elem_v := json_array_get(sub_v, i). 2-arg OpCall.
+                pack := _lnew_temp(ll)
+                ll = pack.l
+                extra := _lnew_temp(ll)
+                ll = extra.l
+                ll = _lemit(ll, new_inst(OpStore, pack.temp, sub_v.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, pack.temp + 1, i_cur.temp, 0, "", 0))
+                elem_v := _lnew_temp(ll)
+                ll = elem_v.l
+                ll = _lemit(ll, new_inst(OpCall, elem_v.temp, pack.temp, 2, "json_array_get", 1))
+                ll = _lset_type(ll, elem_v.temp, 1)
+                // Load current arr
+                cur_arr := _lnew_temp(ll)
+                ll = cur_arr.l
+                ll = _lemit(ll, new_inst(OpLoad, cur_arr.temp, arr_slot.temp, 0, "", 0))
+                new_arr := _lnew_temp(ll)
+                ll = new_arr.l
+                if elem_tid == 12 {
+                    sv := _lnew_str_temp(ll)
+                    ll = sv.l
+                    ll = _lemit(ll, new_inst(OpCall, sv.temp, elem_v.temp, 1, "json_str_val", 12))
+                    ll = _lset_type(ll, sv.temp, 12)
+                    ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, cur_arr.temp, sv.temp, "", 12))
+                } else if elem_tid == 1 || elem_tid == 11 {
+                    iv := _lnew_temp(ll)
+                    ll = iv.l
+                    ll = _lemit(ll, new_inst(OpCall, iv.temp, elem_v.temp, 1, "json_int_val", 1))
+                    ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, cur_arr.temp, iv.temp, "", 0))
+                } else if elem_tid == 9 {
+                    fv := _lnew_temp(ll)
+                    ll = fv.l
+                    ll = _lemit(ll, new_inst(OpCall, fv.temp, elem_v.temp, 1, "json_float_val", 9))
+                    ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, cur_arr.temp, fv.temp, "", 0))
+                } else {
+                    // Unsupported elem — push 0 to keep length aligned.
+                    z := _lnew_temp(ll)
+                    ll = z.l
+                    ll = _lemit(ll, new_inst(OpConst, z.temp, 0, 0, "", 0))
+                    ll = _lemit(ll, new_inst(OpArrayAppend, new_arr.temp, cur_arr.temp, z.temp, "", 0))
+                }
+                ll = _lemit(ll, new_inst(OpStore, arr_slot.temp, new_arr.temp, 0, "", 0))
+                // i++
+                one := _lnew_temp(ll)
+                ll = one.l
+                ll = _lemit(ll, new_inst(OpConst, one.temp, 1, 0, "", 0))
+                nxt := _lnew_temp(ll)
+                ll = nxt.l
+                ll = _lemit(ll, new_inst(OpAdd, nxt.temp, i_cur.temp, one.temp, "", 0))
+                ll = _lemit(ll, new_inst(OpStore, i_slot.temp, nxt.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpJump, 0, a_loop.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpLabel, 0, a_end.temp, 0, "", 0))
+                // inst.field = final arr
+                final_arr := _lnew_temp(ll)
+                ll = final_arr.l
+                ll = _lemit(ll, new_inst(OpLoad, final_arr.temp, arr_slot.temp, 0, "", 0))
+                ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, final_arr.temp, slot, fld.name, 0))
+            } else {
+                nested_name := _struct_name_for_type(ll.store, ll.registry, ft)
+                if nested_name != "" && treg_has_impl(ll.treg, nested_name, "Json") {
+                    sub_v := _json_call_get_i64(ll, v_arg.temp, fld.name, "json_object_get")
+                    ll = sub_v.l
+                    nested_ret := _lnew_temp(ll)
+                    ll = nested_ret.l
+                    ll = _lemit(ll, new_inst(OpCall, nested_ret.temp, sub_v.temp, 1, nested_name + "_from_json_value", 1))
+                    nested_tid := _struct_type_id(ll.registry, nested_name)
+                    if nested_tid > 0 { ll = _lset_type(ll, nested_ret.temp, nested_tid) }
+                    ll = _lemit(ll, new_inst(OpFieldSet, inst.temp, nested_ret.temp, slot, fld.name, 0))
+                }
             }
-            // Unsupported nested type — leave field zeroed.
             slot = slot + 1
         } else {
-            // Unsupported primitive (f64, etc.) — leave field zeroed.
+            // Unsupported primitive — leave field zeroed.
             slot = slot + 1
         }
         fi = fi + 1

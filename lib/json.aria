@@ -221,9 +221,48 @@ fn json_get_int(v: JsonValue, key: str) -> i64 {
     json_int_val(child)
 }
 
+// Value-level float extractor. JSON_FLOAT values carry the text repr; we
+// re-parse via str.to[f64](). JSON_INT values silently promote. All other
+// kinds yield 0.0 — callers that want strictness should check json_kind
+// first.
+fn json_float_val(v: JsonValue) -> f64 {
+    k := json_kind(v)
+    if k == JSON_FLOAT {
+        s := json_str_val(v)
+        r := s.to[f64]() catch |e| { 0.0 }
+        return r
+    }
+    if k == JSON_INT {
+        i := json_int_val(v)
+        r := i.toStr().to[f64]() catch |e| { 0.0 }
+        return r
+    }
+    0.0
+}
+
 fn json_get_bool(v: JsonValue, key: str) -> bool {
     child := json_object_get(v, key)
     json_int_val(child) != 0
+}
+
+// Extract an f64-valued field. Floats parse into JSON_FLOAT (text-backed);
+// JSON_INT silently promotes to f64 so `{"x": 3}` works when the field is
+// declared f64. Returns 0.0 on missing / non-numeric.
+fn json_get_float(v: JsonValue, key: str) -> f64 {
+    child := json_object_get(v, key)
+    k := json_kind(child)
+    if k == JSON_FLOAT {
+        s := json_str_val(child)
+        r := s.to[f64]() catch |e| { 0.0 }
+        return r
+    }
+    if k == JSON_INT {
+        i := json_int_val(child)
+        // i64 -> f64 via string round-trip (no direct conv in stdlib yet).
+        r := i.toStr().to[f64]() catch |e| { 0.0 }
+        return r
+    }
+    0.0
 }
 
 // ============================================================
