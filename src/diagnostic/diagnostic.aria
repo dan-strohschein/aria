@@ -264,6 +264,7 @@ const E0202: str = "E0202"
 const E0203: str = "E0203"
 const E0204: str = "E0204"
 const E0205: str = "E0205"
+const E0206: str = "E0206"
 
 // Effect Errors (E0300-E0399)
 const E0300: str = "E0300"

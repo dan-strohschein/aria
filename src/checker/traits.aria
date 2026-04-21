@@ -272,6 +272,34 @@ fn resolve_method_on_bound(reg: TraitRegistry, bound_str: str, method_name: str)
     ""
 }
 
+// Returns the names of all TraitDefs that declare `method_name`. Used by
+// diagnostics to suggest candidate bounds when a generic-body method call
+// isn't backed by any active bound on the type parameter. Deduplicated.
+fn treg_traits_declaring(reg: TraitRegistry, method_name: str) -> [str] {
+    mut out := [""]
+    mut i := 1
+    while i < reg.trait_defs.len() {
+        td := reg.trait_defs[i]
+        mut hit := false
+        mut j := 1
+        while j < td.method_names.len() && hit == false {
+            if td.method_names[j] == method_name { hit = true }
+            j = j + 1
+        }
+        if hit {
+            mut seen := false
+            mut k := 1
+            while k < out.len() {
+                if out[k] == td.name { seen = true }
+                k = k + 1
+            }
+            if seen == false { out = out.append(td.name) }
+        }
+        i = i + 1
+    }
+    out
+}
+
 // --- Populate built-in traits and impls ---
 
 fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
