@@ -13069,10 +13069,37 @@ fn _lower_method_call(l: Lowerer, obj: i64, method: str) -> LT {
     // Unknown method. If the receiver type is known, this violates the trait
     // bound (no implicit fallback per spec pillar #5) — hard error + abort.
     // Empty obj_sname means the receiver type couldn't be determined (e.g.,
-    // generic body lowered before monomorphization) — keep as warning.
+    // generic body lowered before monomorphization).
     if obj_sname != "" {
         println("error: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
         _ariaExit(1)
+    }
+    // Trait-bound resolution for generic templates: if the receiver is a
+    // TypeVar that matches a generic param on the current fn, consult the
+    // param's trait bounds. A method declared by any bound trait is valid;
+    // the real dispatch happens in monomorphized specializations where T is
+    // a concrete type. Emits a silent placeholder to keep IR well-formed.
+    if obj_type > 0 && obj_type < ll.store.types.len() {
+        ti_obj := store_get(ll.store, obj_type)
+        if type_kind_name(ti_obj.kind) == "TypeVar" {
+            tv_name := ti_obj.name
+            cur_sig := reg_find_fn(ll.registry, ll.current_func.name)
+            mut bound_str := ""
+            if cur_sig.generic_name_0 == tv_name { bound_str = cur_sig.generic_bound_0 }
+            else if cur_sig.generic_name_1 == tv_name { bound_str = cur_sig.generic_bound_1 }
+            else if cur_sig.generic_name_2 == tv_name { bound_str = cur_sig.generic_bound_2 }
+            if bound_str.len() > 0 {
+                resolved_trait := resolve_method_on_bound(ll.treg, bound_str, method)
+                if resolved_trait.len() > 0 {
+                    while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }
+                    if _lk(ll) == ")" { ll = _ladv(ll) }
+                    bnt := _lnew_temp(ll)
+                    ll = bnt.l
+                    ll = _lemit(ll, new_inst(OpConst, bnt.temp, 0, 0, "", 0))
+                    return LT{l: ll, temp: bnt.temp}
+                }
+            }
+        }
     }
     println("warning: unresolved method '" + method + "' on type '" + obj_sname + "' at " + ll.file + ":" + i2s(_lcur(ll).line))
     while _lk(ll) != ")" && _lk(ll) != "EOF" { ll = _ladv(ll) }

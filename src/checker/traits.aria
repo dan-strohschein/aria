@@ -206,6 +206,72 @@ fn treg_types_implementing(reg: TraitRegistry, bound: str) -> [str] {
     types
 }
 
+// Split a `+`-separated bound string (e.g. `"Area+Perimeter+Display"`) into
+// its trait names. Empty / whitespace-only entries are dropped. Shared by the
+// checker's bound-validation paths and the codegen's template method dispatch.
+fn split_bounds(bound_str: str) -> [str] {
+    mut out := [""]
+    if bound_str.len() == 0 { return out }
+    mut start := 0
+    mut i := 0
+    while i < bound_str.len() {
+        if bound_str.charAt(i) == "+" {
+            if i > start {
+                piece := bound_str.substring(start, i)
+                if piece.len() > 0 { out = out.append(piece) }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < bound_str.len() {
+        piece := bound_str.substring(start, bound_str.len())
+        if piece.len() > 0 { out = out.append(piece) }
+    }
+    out
+}
+
+// Returns true if any TraitDef named `trait_name` declares `method_name`.
+// Linear scan rather than hash lookup because the trait_index can't
+// disambiguate when a user trait shadows a builtin by name (e.g. a user's
+// `trait Display { fn display(self) -> str }` coexists with the builtin
+// Display whose method is `to_str`). Method resolution checks every
+// homonymic trait.
+fn treg_trait_has_method(reg: TraitRegistry, trait_name: str, method_name: str) -> bool {
+    mut i := 1
+    while i < reg.trait_defs.len() {
+        td := reg.trait_defs[i]
+        if td.name == trait_name {
+            mut j := 1
+            while j < td.method_names.len() {
+                if td.method_names[j] == method_name { return true }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    false
+}
+
+// Given a `+`-separated bound string (from FnSig.generic_bound_0/1/2) and a
+// method name, return the first bound trait that declares the method.
+// Returns "" if no bound trait declares it.
+//
+// Used by both the checker (to type-check generic-body method calls against
+// bound traits) and the lowerer (to resolve dispatch targets when the receiver
+// has TypeVar kind during generic-template lowering).
+fn resolve_method_on_bound(reg: TraitRegistry, bound_str: str, method_name: str) -> str {
+    parts := split_bounds(bound_str)
+    mut i := 1
+    while i < parts.len() {
+        if treg_trait_has_method(reg, parts[i], method_name) {
+            return parts[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
 // --- Populate built-in traits and impls ---
 
 fn _add_numeric_impl(reg: TraitRegistry, type_name: str) -> TraitRegistry {
