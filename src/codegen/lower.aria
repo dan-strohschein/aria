@@ -1926,6 +1926,63 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     ll = mr.l
                     return LT{l: ll, temp: mr.temp}
                 }
+                // Free-function pipe: `a |> f(args)` → `f(a, args)`
+                free_sig := reg_find_fn(ll.registry, fname)
+                if free_sig.name != "" {
+                    mut arg_temps := [left.temp]
+                    mut arg_types := [left_type]
+                    mut ai := 0
+                    while ai < right_node.list_count {
+                        holder := pool_get(ll.pool, right_node.list_start + ai)
+                        av := _lower_expr_node(ll, holder.c0)
+                        ll = av.l
+                        arg_temps = arg_temps.append(av.temp)
+                        arg_types = arg_types.append(_lget_type(ll, av.temp))
+                        ai = ai + 1
+                    }
+                    mut reg_count := 0
+                    mut ki := 0
+                    while ki < arg_temps.len() {
+                        if arg_types[ki] == 12 { reg_count = reg_count + 2 } else { reg_count = reg_count + 1 }
+                        ki = ki + 1
+                    }
+                    first_nt := _lnew_temp(ll)
+                    ll = first_nt.l
+                    mut ri := 1
+                    while ri < reg_count {
+                        ext := _lnew_temp(ll)
+                        ll = ext.l
+                        ri = ri + 1
+                    }
+                    mut slot := 0
+                    mut ci := 0
+                    while ci < arg_temps.len() {
+                        if arg_types[ci] == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, first_nt.temp + slot, arg_temps[ci], 0, "", 0))
+                            slot_plus := slot + 1
+                            ll = _lemit(ll, new_inst(OpStore, first_nt.temp + slot_plus, arg_temps[ci] + 1, 0, "", 0))
+                            slot = slot + 2
+                        } else {
+                            ll = _lemit(ll, new_inst(OpStore, first_nt.temp + slot, arg_temps[ci], 0, "", 0))
+                            slot = slot + 1
+                        }
+                        ci = ci + 1
+                    }
+                    mut nt_temp := 0
+                    if free_sig.return_type == 12 {
+                        nt := _lnew_str_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    } else {
+                        nt := _lnew_temp(ll)
+                        ll = nt.l
+                        nt_temp = nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpCall, nt_temp, first_nt.temp, reg_count, fname, free_sig.return_type))
+                    if free_sig.return_type > 0 { ll = _lset_type(ll, nt_temp, free_sig.return_type) }
+                    if free_sig.error_type > 0 { ll = _lset_is_result(ll, nt_temp) }
+                    return LT{l: ll, temp: nt_temp}
+                }
                 // Other arg'd methods (join/take-as-int/send/...) — lower the
                 // arg from AST and route via _lower_method_with_args.
                 arg_holder := pool_get(ll.pool, right_node.list_start)
@@ -16135,6 +16192,70 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
             if found_str_use { param_types[ipi] = 12 }
         }
         ipi = ipi + 1
+    }
+
+    // Struct-param inference: for unannotated params still at i64 default,
+    // scan body for `pname.method(` calls. Search registry for `X_method` where
+    // X is a struct. If all observed methods agree on a single struct X,
+    // infer the param type to X. Handles `fn(conn) -> ...{ conn.exec(...) }`
+    // where the callback-position type isn't forwarded.
+    mut jpi := 1
+    while jpi < param_types.len() {
+        if param_types[jpi] == 1 {
+            jpname := param_names[jpi]
+            mut agreed := ""
+            mut conflict := false
+            mut sscan := tp
+            mut sdepth := 0
+            mut sentered := false
+            while sscan < ll.tokens.len() && conflict == false {
+                stname := ll.tokens[sscan].name
+                if stname == lbc { sdepth = sdepth + 1; sentered = true }
+                else if stname == rbc {
+                    sdepth = sdepth - 1
+                    if sentered && sdepth == 0 { sscan = ll.tokens.len() }
+                }
+                if sscan < ll.tokens.len() && stname == "IDENT" && ll.tokens[sscan].text == jpname {
+                    nxA := sscan + 1
+                    if nxA < ll.tokens.len() && ll.tokens[nxA].name == "." {
+                        nxB := nxA + 1
+                        if nxB < ll.tokens.len() && ll.tokens[nxB].name == "IDENT" {
+                            mname := ll.tokens[nxB].text
+                            suffix := "_" + mname
+                            mut fsi := 1
+                            mut local_cand := ""
+                            mut local_multi := false
+                            while fsi < ll.registry.fn_sigs.len() {
+                                fsig_i := ll.registry.fn_sigs[fsi]
+                                fn_nm := fsig_i.name
+                                if fn_nm.len() > suffix.len() {
+                                    tail := fn_nm.substring(fn_nm.len() - suffix.len(), fn_nm.len())
+                                    if tail == suffix {
+                                        head := fn_nm.substring(0, fn_nm.len() - suffix.len())
+                                        sid_h := _struct_type_id(ll.registry, head)
+                                        if sid_h > 0 {
+                                            if local_cand == "" { local_cand = head }
+                                            else if local_cand != head { local_multi = true }
+                                        }
+                                    }
+                                }
+                                fsi = fsi + 1
+                            }
+                            if local_cand != "" && local_multi == false {
+                                if agreed == "" { agreed = local_cand }
+                                else if agreed != local_cand { conflict = true }
+                            }
+                        }
+                    }
+                }
+                sscan = sscan + 1
+            }
+            if agreed != "" && conflict == false {
+                agreed_sid := _struct_type_id(ll.registry, agreed)
+                if agreed_sid > 0 { param_types[jpi] = agreed_sid }
+            }
+        }
+        jpi = jpi + 1
     }
 
     // Create closure function: env_ptr + user params
