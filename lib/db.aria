@@ -179,12 +179,23 @@ fn is_connected(c: Connection) -> bool {
 // All tx methods use the handle-based failure pattern rather than Result
 // wrapping (cross-module fallible returns with struct payloads need more
 // compiler work). Check tx.active / return values to detect failures.
+// Method-form aliases (Connection_begin / Transaction_exec / ...) are
+// provided so spec-style `conn.begin()` / `tx.exec()` dispatch resolves.
 fn begin(conn: Connection) -> Transaction with [Io] {
     if conn.handle == 0 { return Transaction { conn_handle: 0, active: false } }
     r := _ariaPgExec(conn.handle, "BEGIN")
     ok := _ariaPgResultStatus(r) == 0
     _ariaPgClear(r)
     Transaction { conn_handle: conn.handle, active: ok }
+}
+
+fn Connection_begin(self: Connection) -> Transaction!DbError with [Io] {
+    if self.handle == 0 { return err(DbError.ConnectionFailed) }
+    r := _ariaPgExec(self.handle, "BEGIN")
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    if !ok { return err(DbError.TxFailed) }
+    Transaction { conn_handle: self.handle, active: true }
 }
 
 fn exec(tx: Transaction, sql: str, params: [str]) -> bool with [Io] {
@@ -195,12 +206,30 @@ fn exec(tx: Transaction, sql: str, params: [str]) -> bool with [Io] {
     ok
 }
 
+fn Transaction_exec(self: Transaction, sql: str, params: [str]) -> i64!DbError with [Io] {
+    if !self.active { return err(DbError.TxFailed) }
+    r := _ariaPgExecParams(self.conn_handle, sql, params)
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    if !ok { return err(DbError.QueryFailed) }
+    0
+}
+
 fn commit(tx: Transaction) -> bool with [Io] {
     if !tx.active { return false }
     r := _ariaPgExec(tx.conn_handle, "COMMIT")
     ok := _ariaPgResultStatus(r) == 0
     _ariaPgClear(r)
     ok
+}
+
+fn Transaction_commit(self: Transaction) -> i64!DbError with [Io] {
+    if !self.active { return err(DbError.TxFailed) }
+    r := _ariaPgExec(self.conn_handle, "COMMIT")
+    ok := _ariaPgResultStatus(r) == 0
+    _ariaPgClear(r)
+    if !ok { return err(DbError.TxFailed) }
+    0
 }
 
 fn rollback(tx: Transaction) -> bool with [Io] {

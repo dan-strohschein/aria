@@ -24,9 +24,15 @@ fn elapsed(start: Instant, end: Instant) -> i64 {
 // Convert monotonic ns to a "unix-ish" seconds value. The runtime uses
 // CLOCK_MONOTONIC, so this isn't a true unix epoch — it's a stable counter
 // suitable for unique id generation (e.g. temp file names).
-fn unix(i: Instant) -> i64 {
-    i.ns / 1000000000
-}
+// Exposed both as a free fn `time.unix(inst)` and a method `inst.unix()`
+// via the TypeName_method convention.
+fn Instant_unix(self: Instant) -> i64 = self.ns / 1000000000
+
+fn unix(i: Instant) -> i64 = Instant_unix(i)
+
+// Millisecond helper mirroring `unix()` for nano→ms conversion. Exposed as
+// a method `inst.ms()` so interpolation `{elapsed.ms}` resolves.
+fn Instant_ms(self: Instant) -> i64 = self.ns / 1000000
 
 fn sleep(duration_ms: i64) with [Io] {
     _ariaSleep(duration_ms)

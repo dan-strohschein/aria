@@ -16272,20 +16272,23 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
     }
 
     // Struct-param inference: for unannotated params still at i64 default,
-    // scan body for `pname.method(` calls. Search registry for `X_method` where
-    // X is a struct. If all observed methods agree on a single struct X,
-    // infer the param type to X. Handles `fn(conn) -> ...{ conn.exec(...) }`
-    // where the callback-position type isn't forwarded.
+    // scan body for `pname.method(` calls. For each method collect the set
+    // of candidate struct types with an `X_method` in the registry, then
+    // intersect across all observed methods. If intersection is a singleton,
+    // use it. If multiple, break the tie by picking the type with the most
+    // `X_*` methods overall (the "richer" receiver, which is usually the
+    // intended one — e.g. Connection over Transaction when both declare
+    // `exec` but Connection has many more methods).
     mut jpi := 1
     while jpi < param_types.len() {
         if param_types[jpi] == 1 {
             jpname := param_names[jpi]
-            mut agreed := ""
-            mut conflict := false
+            mut cand_set := [""]    // running intersection of candidate types
+            mut cand_init := false
             mut sscan := tp
             mut sdepth := 0
             mut sentered := false
-            while sscan < ll.tokens.len() && conflict == false {
+            while sscan < ll.tokens.len() {
                 stname := ll.tokens[sscan].name
                 if stname == lbc { sdepth = sdepth + 1; sentered = true }
                 else if stname == rbc {
@@ -16299,9 +16302,8 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                         if nxB < ll.tokens.len() && ll.tokens[nxB].name == "IDENT" {
                             mname := ll.tokens[nxB].text
                             suffix := "_" + mname
+                            mut locals := [""]
                             mut fsi := 1
-                            mut local_cand := ""
-                            mut local_multi := false
                             while fsi < ll.registry.fn_sigs.len() {
                                 fsig_i := ll.registry.fn_sigs[fsi]
                                 fn_nm := fsig_i.name
@@ -16311,25 +16313,78 @@ fn _lower_closure_node(l: Lowerer, node: Expr) -> LT {
                                         head := fn_nm.substring(0, fn_nm.len() - suffix.len())
                                         sid_h := _struct_type_id(ll.registry, head)
                                         if sid_h > 0 {
-                                            if local_cand == "" { local_cand = head }
-                                            else if local_cand != head { local_multi = true }
+                                            mut dup := false
+                                            mut li := 1
+                                            while li < locals.len() {
+                                                if locals[li] == head { dup = true }
+                                                li = li + 1
+                                            }
+                                            if dup == false { locals = locals.append(head) }
                                         }
                                     }
                                 }
                                 fsi = fsi + 1
                             }
-                            if local_cand != "" && local_multi == false {
-                                if agreed == "" { agreed = local_cand }
-                                else if agreed != local_cand { conflict = true }
+                            // Skip methods with no struct candidates (e.g. generic
+                            // intrinsics registered later) to avoid destroying the
+                            // running intersection.
+                            if locals.len() > 1 {
+                                if cand_init == false {
+                                    cand_set = locals
+                                    cand_init = true
+                                } else {
+                                    mut new_set := [""]
+                                    mut ci2 := 1
+                                    while ci2 < cand_set.len() {
+                                        mut in_locals := false
+                                        mut lj := 1
+                                        while lj < locals.len() {
+                                            if locals[lj] == cand_set[ci2] { in_locals = true }
+                                            lj = lj + 1
+                                        }
+                                        if in_locals { new_set = new_set.append(cand_set[ci2]) }
+                                        ci2 = ci2 + 1
+                                    }
+                                    cand_set = new_set
+                                }
                             }
                         }
                     }
                 }
                 sscan = sscan + 1
             }
-            if agreed != "" && conflict == false {
-                agreed_sid := _struct_type_id(ll.registry, agreed)
-                if agreed_sid > 0 { param_types[jpi] = agreed_sid }
+            if cand_set.len() == 2 {
+                chosen := cand_set[1]
+                chosen_sid := _struct_type_id(ll.registry, chosen)
+                if chosen_sid > 0 { param_types[jpi] = chosen_sid }
+            } else if cand_set.len() > 2 {
+                // Tie-break: prefer the candidate with the most `X_*` methods
+                // in the registry.
+                mut best := ""
+                mut best_count := 0 - 1
+                mut ck := 1
+                while ck < cand_set.len() {
+                    cname := cand_set[ck]
+                    cprefix := cname + "_"
+                    mut cnt := 0
+                    mut fk := 1
+                    while fk < ll.registry.fn_sigs.len() {
+                        fnm := ll.registry.fn_sigs[fk].name
+                        if fnm.len() > cprefix.len() {
+                            if fnm.substring(0, cprefix.len()) == cprefix { cnt = cnt + 1 }
+                        }
+                        fk = fk + 1
+                    }
+                    if cnt > best_count {
+                        best = cname
+                        best_count = cnt
+                    }
+                    ck = ck + 1
+                }
+                if best.len() > 0 {
+                    best_sid := _struct_type_id(ll.registry, best)
+                    if best_sid > 0 { param_types[jpi] = best_sid }
+                }
             }
         }
         jpi = jpi + 1
