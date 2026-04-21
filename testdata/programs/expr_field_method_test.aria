@@ -1,0 +1,43 @@
+// test-files: ../../lib/db.aria expr_field_method_test.aria
+// test-expect: expr_field_method_test passed
+//
+// Issue B: method call on a FieldAccess result dispatches to
+// `TypeName_method(field_value, args...)` by reading the field's struct
+// type. Also exercises the cross-module type-ref resolution fix so that
+// `pool: db.Pool` field types carry their Pool type_id across module
+// boundaries.
+
+use db
+
+struct Inner {
+    n: i64
+}
+
+fn Inner_add(self: Inner, extra: i64) -> i64 {
+    self.n + extra
+}
+
+struct Outer {
+    inner: Inner
+    tag: str
+}
+
+struct AppState {
+    pool: db.Pool
+}
+
+entry {
+    // Local-struct path: Outer.inner.add(5)
+    o := Outer{inner: Inner{n: 10}, tag: "t"}
+    r := o.inner.add(5)
+    assert r == 15
+
+    // Cross-module path: s.pool is a db.Pool from another module;
+    // s.pool.close() should dispatch to db.Pool_close.
+    p := db.Pool{url: "u", max_conn: 1, handle: 0}
+    s := AppState{pool: p}
+    c := s.pool.close()
+    assert c
+
+    println("expr_field_method_test passed")
+}

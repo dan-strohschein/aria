@@ -3181,6 +3181,96 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             ll = _lset_pos(ll, tp)
             return _lower_method_call(ll, recv.temp, method)
         }
+        // Issue B: method call on an arbitrary expression whose type is a
+        // registered struct — dispatch to `TypeName_method(receiver, args)`.
+        // This is the with-args counterpart of the zero-arg block below and
+        // handles patterns like `state.db.with_conn(cb)` where `state.db`
+        // evaluates to a `Pool` and `Pool_with_conn` is defined in lib/db.
+        // Only intercepts when a direct user-defined fn matches and the
+        // method isn't a pipeline builtin (those land in _lower_method_call
+        // via the token-seek above) or a Result-method like ok_or (handled
+        // by _lower_method_with_args).
+        if node.list_count > 0 {
+            b_obj_type := _lget_type(ll, recv.temp)
+            b_sname := _struct_name_for_type(ll.store, ll.registry, b_obj_type)
+            if b_sname != "" {
+                b_qualified := b_sname + "_" + method
+                b_msig := reg_find_fn(ll.registry, b_qualified)
+                if b_msig.name != "" {
+                    // Reorder labeled args against the callee's params,
+                    // skipping param[1] which is the receiver synthesized
+                    // from the FieldAccess result.
+                    b_reorder := _reorder_call_holders(ll.pool, node.list_start, node.list_count, b_msig.param_names, 1)
+                    // Lower args in declaration order.
+                    mut b_arg_temps := [0]
+                    mut b_arg_types := [0]
+                    mut b_ai := 0
+                    while b_ai < node.list_count {
+                        mut b_holder := node.list_start + b_ai
+                        if b_ai + 1 < b_reorder.len() && b_reorder[b_ai + 1] >= 0 { b_holder = b_reorder[b_ai + 1] }
+                        b_hn := pool_get(ll.pool, b_holder)
+                        b_lr := _lower_expr_node(ll, b_hn.c0)
+                        ll = b_lr.l
+                        b_arg_temps = b_arg_temps.append(b_lr.temp)
+                        b_arg_types = b_arg_types.append(_lget_type(ll, b_lr.temp))
+                        b_ai = b_ai + 1
+                    }
+                    // Register slots: receiver (1) + args (str=2, else=1 each).
+                    mut b_reg_count := 1
+                    if b_obj_type == 12 { b_reg_count = 2 }
+                    mut b_ri := 1
+                    while b_ri < b_arg_temps.len() {
+                        if b_arg_types[b_ri] == 12 { b_reg_count = b_reg_count + 2 } else { b_reg_count = b_reg_count + 1 }
+                        b_ri = b_ri + 1
+                    }
+                    // Pack receiver + args into consecutive temps starting at b_fa.
+                    b_first := _lnew_temp(ll)
+                    ll = b_first.l
+                    mut b_xi := 1
+                    while b_xi < b_reg_count {
+                        b_extra := _lnew_temp(ll)
+                        ll = b_extra.l
+                        b_xi = b_xi + 1
+                    }
+                    mut b_slot := 0
+                    if b_obj_type == 12 {
+                        ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot, recv.temp, 0, "", 0))
+                        ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot + 1, recv.temp + 1, 0, "", 0))
+                        b_slot = b_slot + 2
+                    } else {
+                        ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot, recv.temp, 0, "", 0))
+                        b_slot = b_slot + 1
+                    }
+                    b_ri = 1
+                    while b_ri < b_arg_temps.len() {
+                        if b_arg_types[b_ri] == 12 {
+                            ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot, b_arg_temps[b_ri], 0, "", 0))
+                            ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot + 1, b_arg_temps[b_ri] + 1, 0, "", 0))
+                            b_slot = b_slot + 2
+                        } else {
+                            ll = _lemit(ll, new_inst(OpStore, b_first.temp + b_slot, b_arg_temps[b_ri], 0, "", 0))
+                            b_slot = b_slot + 1
+                        }
+                        b_ri = b_ri + 1
+                    }
+                    b_rt := b_msig.return_type
+                    mut b_nt_temp := 0
+                    if b_rt == 12 {
+                        b_nt := _lnew_str_temp(ll)
+                        ll = b_nt.l
+                        b_nt_temp = b_nt.temp
+                    } else {
+                        b_nt := _lnew_temp(ll)
+                        ll = b_nt.l
+                        b_nt_temp = b_nt.temp
+                    }
+                    ll = _lemit(ll, new_inst(OpCall, b_nt_temp, b_first.temp, b_reg_count, b_qualified, b_rt))
+                    if b_rt > 0 { ll = _lset_type(ll, b_nt_temp, b_rt) }
+                    if b_msig.error_type > 0 { ll = _lset_is_result(ll, b_nt_temp) }
+                    return LT{l: ll, temp: b_nt_temp}
+                }
+            }
+        }
         if node.list_count > 0 {
             arg1_r := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
             ll = arg1_r.l

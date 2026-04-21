@@ -258,7 +258,22 @@ fn _resolve_type_node(c: Checker, node_idx: i64) -> CE {
         if name == "" { return CE{c: c, type_id: TY_UNKNOWN} }
         tid := resolve_type_name(c.store, name)
         if tid != TY_UNKNOWN { return CE{c: c, type_id: tid} }
-        // Try qualified name lookup
+        // Module-qualified type: `db.Pool`, `net.Request`. Modules don't
+        // carve out their own type namespaces — the type is registered
+        // by bare name when its defining module is compiled, so strip
+        // the prefix and retry. Walk each suffix so `a.b.Pool` also
+        // resolves even if nested modules are introduced later.
+        mut dot_at := 0 - 1
+        mut i := 0
+        while i < name.len() {
+            if name.charAt(i) == "." { dot_at = i }
+            i = i + 1
+        }
+        if dot_at >= 0 {
+            bare := name.substring(dot_at + 1, name.len())
+            tid2 := resolve_type_name(c.store, bare)
+            if tid2 != TY_UNKNOWN { return CE{c: c, type_id: tid2} }
+        }
         return CE{c: c, type_id: TY_UNKNOWN}
     }
     if nk == "TypeArray" {
