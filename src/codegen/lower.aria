@@ -2997,6 +2997,83 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 }
             }
         }
+        // Module.Type.method(args) — e.g. `net.Router.new()`, `db.Pool.connect(url, n)`.
+        // Parser emits MethodCall{receiver: FieldAccess(Ident(module), TypeName), method}.
+        // When the module name is not a binding, route the call directly to
+        // `TypeName_method(args)` — matches the free-function naming convention
+        // established by Router_new/Router_get/Pool_connect etc.
+        if expr_kind_name(recv_node.kind) == "FieldAccess" {
+            fa_recv := pool_get(ll.pool, recv_node.c0)
+            if expr_kind_name(fa_recv.kind) == "Ident" {
+                module_name := fa_recv.s1
+                type_name := recv_node.s1
+                if _lenv_lookup(ll, module_name) < 0 {
+                    qualified := type_name + "_" + method
+                    qsig := reg_find_fn(ll.registry, qualified)
+                    if qsig.name != "" {
+                        // Lower args from AST
+                        mut q_arg_temps := [0]
+                        mut q_arg_types := [0]
+                        mut qai := 0
+                        while qai < node.list_count {
+                            arg_holder := pool_get(ll.pool, node.list_start + qai)
+                            arg_r := _lower_expr_node(ll, arg_holder.c0)
+                            ll = arg_r.l
+                            q_arg_temps = q_arg_temps.append(arg_r.temp)
+                            q_arg_types = q_arg_types.append(_lget_type(ll, arg_r.temp))
+                            qai = qai + 1
+                        }
+                        // Count regs + pack into consecutive temps
+                        mut q_reg_count := 0
+                        qai = 1
+                        while qai < q_arg_temps.len() {
+                            if q_arg_types[qai] == 12 { q_reg_count = q_reg_count + 2 } else { q_reg_count = q_reg_count + 1 }
+                            qai = qai + 1
+                        }
+                        mut q_fa := 0
+                        if q_arg_temps.len() > 1 {
+                            q_first := _lnew_temp(ll)
+                            ll = q_first.l
+                            mut q_ri := 1
+                            while q_ri < q_reg_count {
+                                q_extra := _lnew_temp(ll)
+                                ll = q_extra.l
+                                q_ri = q_ri + 1
+                            }
+                            mut q_slot := 0
+                            qai = 1
+                            while qai < q_arg_temps.len() {
+                                if q_arg_types[qai] == 12 {
+                                    ll = _lemit(ll, new_inst(OpStore, q_first.temp + q_slot, q_arg_temps[qai], 0, "", 0))
+                                    ll = _lemit(ll, new_inst(OpStore, q_first.temp + q_slot + 1, q_arg_temps[qai] + 1, 0, "", 0))
+                                    q_slot = q_slot + 2
+                                } else {
+                                    ll = _lemit(ll, new_inst(OpStore, q_first.temp + q_slot, q_arg_temps[qai], 0, "", 0))
+                                    q_slot = q_slot + 1
+                                }
+                                qai = qai + 1
+                            }
+                            q_fa = q_first.temp
+                        }
+                        q_rt := qsig.return_type
+                        mut q_nt_temp := 0
+                        if q_rt == 12 {
+                            q_nt := _lnew_str_temp(ll)
+                            ll = q_nt.l
+                            q_nt_temp = q_nt.temp
+                        } else {
+                            q_nt := _lnew_temp(ll)
+                            ll = q_nt.l
+                            q_nt_temp = q_nt.temp
+                        }
+                        ll = _lemit(ll, new_inst(OpCall, q_nt_temp, q_fa, q_reg_count, qualified, q_rt))
+                        if q_rt > 0 { ll = _lset_type(ll, q_nt_temp, q_rt) }
+                        if qsig.error_type > 0 { ll = _lset_is_result(ll, q_nt_temp) }
+                        return LT{l: ll, temp: q_nt_temp}
+                    }
+                }
+            }
+        }
         // Lower receiver from AST
         recv := _lower_expr_node(ll, node.c0)
         ll = recv.l

@@ -1,0 +1,32 @@
+// test-files: ../../lib/net.aria module_type_method_test.aria
+// test-expect: module_type_method_test passed
+//
+// Verifies the Module.Type.method(args) dispatch added in Issue A. When
+// the parser sees `net.Router.new()` it builds a MethodCall whose
+// receiver is a FieldAccess(Ident("net"), "Router"). The lowerer now
+// rewrites this to a direct call to `Router_new()` when the module
+// identifier is not a local binding.
+
+use net
+
+fn h(r: net.Request) -> net.Response {
+    net.response(200, "ok")
+}
+
+entry {
+    // net.Router.new() — constructor-style with no args
+    router := net.Router.new()
+
+    // Router methods with args via the free-function form still work —
+    // this test just validates that .new() dispatched correctly by
+    // exercising a subsequent route lookup.
+    router = net.Router_get(router, "/", h)
+
+    empty: [str] = []
+    r := net.Request{method: "GET", path: "/", body: "", headers: [""], query: "", params: empty}
+    resp := net.Router_dispatch(router, r)
+    assert resp.status == 200
+    assert resp.body == "ok"
+
+    println("module_type_method_test passed")
+}
