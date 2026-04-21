@@ -4285,6 +4285,35 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                 err_type_id = et_info.type_id2
             }
         }
+        // Fallback: the lowerer often marks calls with _lis_result + the Ok
+        // payload type rather than the full Result type. In that case recover
+        // the error type by walking the catch target's call expression and
+        // looking up the callee's FnSig.
+        if err_type_id == 0 {
+            mut probe_idx := node.c0
+            mut probe_k := ""
+            mut probe_name := ""
+            mut steps := 0
+            while steps < 4 && probe_idx > 0 {
+                pn := pool_get(ll.pool, probe_idx)
+                probe_k = expr_kind_name(pn.kind)
+                if probe_k == "Call" || probe_k == "MethodCall" {
+                    probe_name = pn.s1
+                    probe_idx = 0
+                } else if probe_k == "FieldAccess" {
+                    probe_idx = pn.c0
+                } else {
+                    probe_idx = 0
+                }
+                steps = steps + 1
+            }
+            if probe_name.len() > 0 {
+                psig := reg_find_fn(ll.registry, probe_name)
+                if psig.name != "" && psig.error_type > 0 {
+                    err_type_id = psig.error_type
+                }
+            }
+        }
         // Error path
         mut err_val := _lnew_temp(ll)
         if err_type_id == 12 {
@@ -8200,6 +8229,16 @@ fn _lower_expr(l: Lowerer) -> LT {
             err_val := _lnew_temp(ll)
             ll = err_val.l
             ll = _lemit(ll, new_inst(OpFieldGet, err_val.temp, left, 1, "_val", 0))
+            // Propagate the error type from the Result<T, E> so catch-arm
+            // bindings carry their concrete type — interpolation, method
+            // dispatch, and match patterns all depend on it.
+            left_ty := _lget_type(ll, left)
+            if left_ty > 0 && left_ty < ll.store.types.len() {
+                lti := store_get(ll.store, left_ty)
+                if type_kind_name(lti.kind) == "Result" && lti.type_id2 > 0 {
+                    ll = _lset_type(ll, err_val.temp, lti.type_id2)
+                }
+            }
             if err_name != "_" {
                 ll = _lenv_add(ll, err_name, err_val.temp)
             }
