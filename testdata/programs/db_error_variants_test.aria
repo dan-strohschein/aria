@@ -1,0 +1,44 @@
+// test-files: ../../lib/db.aria db_error_variants_test.aria
+// test-expect: db_error_variants_test passed
+//
+// Verifies the DbError surface: fallible functions return DbError, and
+// catch blocks receive the error payload. Payload-variant destructuring
+// for Constraint(m) across module boundaries has a known compiler issue
+// (cross-module payload-variant match misroutes), so this test just
+// confirms the variant can be constructed and caught — the extracted
+// message is plumbed through by _ariaPgResultErrorField when libpq is
+// wired.
+
+use db
+
+fn returns_not_found() -> i64!db.DbError with [Io] {
+    err(db.DbError.NotFound)
+}
+
+fn returns_constraint() -> i64!db.DbError with [Io] {
+    err(db.DbError.Constraint("unique_violation"))
+}
+
+entry {
+    // Non-payload variant catch
+    r1 := returns_not_found() catch {
+        _ => {
+            println("caught not_found")
+            0 - 1
+        }
+    }
+    assert r1 == 0 - 1
+
+    // Payload variant catch (wildcard — avoids the cross-module
+    // destructuring bug; real handlers can still pattern-match once
+    // the compiler bug is fixed).
+    r2 := returns_constraint() catch {
+        _ => {
+            println("caught constraint")
+            0 - 1
+        }
+    }
+    assert r2 == 0 - 1
+
+    println("db_error_variants_test passed")
+}

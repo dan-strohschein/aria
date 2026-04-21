@@ -298,13 +298,18 @@ fn Connection_exec(c: Connection, sql: str, params: [str]) -> i64!DbError with [
     nrows
 }
 
-// Query exactly one row and decode it via derive(Json). The row is rendered
-// as a JSON object and handed to the caller as a plain string — callers
-// invoke `<T>.parse(json_str)` (which maps to the derive-generated
-// `<T>_from_json`) to get the typed value. Keeps the FFI surface simple
-// without depending on generic-method monomorphization inside the stdlib.
+// Query exactly one row and encode it as a JSON object. Callers combine
+// this with `json.parse[T](s)` to get a typed `T`:
+//   js := db.query_one_json(conn, sql, params)?
+//   user := json.parse[User](js)
+// Keeps the FFI surface free of generic-method monomorphization — the
+// stdlib just produces a string, the derive machinery does the decoding.
 // Returns NotFound when the query produced zero rows, QueryFailed on SQL
 // errors.
+fn query_one_json(c: Connection, sql: str, params: [str]) -> str!DbError with [Io] {
+    Connection_query_one_json(c, sql, params)
+}
+
 fn Connection_query_one_json(c: Connection, sql: str, params: [str]) -> str!DbError with [Io] {
     if c.handle == 0 { return err(DbError.ConnectionFailed) }
     r := _ariaPgExecParams(c.handle, sql, params)

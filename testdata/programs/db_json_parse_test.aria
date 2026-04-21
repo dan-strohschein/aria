@@ -1,0 +1,34 @@
+// test-files: ../../lib/json.aria db_json_parse_test.aria
+// test-requires: json
+// test-expect: db_json_parse_test passed
+//
+// Verifies the Tier 2 db.query_one_json -> json.parse[T] chain. The
+// stdlib produces a JSON string from a row; the derive-generated
+// <T>_from_json parses it into a typed struct. We stub the DB layer with
+// a hand-crafted JSON (same shape _row_to_json would produce) so the
+// test runs without a live Postgres.
+
+use json
+
+@[derive(Json)]
+struct User {
+    id:         i64
+    username:   str
+    email:      str
+    created_at: str
+}
+
+entry {
+    // Shape: what lib/db.aria:_row_to_json would emit for a row from
+    // `SELECT id, username, email, created_at FROM users WHERE id = ?`
+    row_json := `{"id":42,"username":"alice","email":"a@b.c","created_at":"2026-04-20"}`
+
+    u := json.parse[User](row_json)
+
+    assert u.id == 42
+    assert u.username == "alice"
+    assert u.email == "a@b.c"
+    assert u.created_at == "2026-04-20"
+
+    println("db_json_parse_test passed")
+}
