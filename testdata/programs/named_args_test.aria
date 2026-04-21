@@ -1,0 +1,38 @@
+// test-expect: named_args_test passed
+//
+// Named args in call sites: parser captures `IDENT: expr` labels, the
+// checker remaps its arg-position cursor to the matching param index,
+// and the lowerer's AST-path reorders arg-holder nodes so consecutive
+// temps land in declaration order.
+
+fn connect_db(url: str, max_conn: i64) -> i64 {
+    max_conn
+}
+
+fn three_arg(a: i64, b: str, c: i64) -> i64 {
+    a + c
+}
+
+entry {
+    // Positional
+    a := connect_db("a", 5)
+    assert a == 5
+
+    // All named, in declaration order
+    b := connect_db(url: "b", max_conn: 10)
+    assert b == 10
+
+    // All named, reversed
+    c := connect_db(max_conn: 20, url: "c")
+    assert c == 20
+
+    // Mixed: positional first, named after
+    d := connect_db("d", max_conn: 30)
+    assert d == 30
+
+    // Three-arg reorder
+    e := three_arg(c: 7, a: 1, b: "two")
+    assert e == 8
+
+    println("named_args_test passed")
+}

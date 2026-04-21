@@ -3999,8 +3999,23 @@ fn _check_call_args_sig(c: Checker, sig: FnSig) -> CE {
     mut arg_idx := 1  // param_types[0] is sentinel
     while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
         cc = _cskip_nl(cc)
+        // Named arg: IDENT : expr — remap arg_idx to the position of the
+        // named param so type-checking matches the lowerer's reordering.
+        mut labeled_idx := 0
+        if _ck2(cc) == "IDENT" && cc.pos + 1 < cc.tokens.len() && cc.tokens[cc.pos + 1].name == ":" {
+            label := _ccur(cc).text
+            mut pi := 1
+            while pi < sig.param_names.len() {
+                if sig.param_names[pi] == label { labeled_idx = pi; pi = sig.param_names.len() }
+                pi = pi + 1
+            }
+            cc = _cadv(cc)  // skip name
+            cc = _cadv(cc)  // skip :
+            cc = _cskip_nl(cc)
+        }
         result := _check_expr_full(cc)
         cc = result.c
+        if labeled_idx > 0 { arg_idx = labeled_idx }
         // Validate argument type against parameter type (skip unknowns and type vars)
         if arg_idx < sig.param_types.len() {
             expected := sig.param_types[arg_idx]

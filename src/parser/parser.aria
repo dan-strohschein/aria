@@ -2187,15 +2187,24 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
             }
             if _ck(pp) == "]" { pp = _adv(pp) }
             mut tf_arg_indices := [0]
+            mut tf_arg_names := [""]
             mut tf_count := 0
             if _ck(pp) == "(" {
                 pp = _adv(pp)
                 while _ck(pp) != ")" && _ck(pp) != "EOF" {
                     pp = _skip_nl(pp)
+                    mut arg_name := ""
+                    if _ck(pp) == "IDENT" && pp.pos + 1 < pp.tokens.len() && pp.tokens[pp.pos + 1].name == ":" {
+                        arg_name = _cur(pp).text
+                        pp = _adv(pp)
+                        pp = _adv(pp)
+                        pp = _skip_nl(pp)
+                    }
                     ar := _parse_expr(pp, 0)
                     tf_a_idx := _pidx(ar.p)
                     pp = _padd(ar.p, ar.e)
                     tf_arg_indices = tf_arg_indices.append(tf_a_idx)
+                    tf_arg_names = tf_arg_names.append(arg_name)
                     tf_count = tf_count + 1
                     pp = _skip_nl(pp)
                     if _ck(pp) == "," { pp = _adv(pp) }
@@ -2205,7 +2214,7 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
             tf_list_start := _pidx(pp)
             mut tfi := 0
             while tfi < tf_count {
-                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                pp = _padd(pp, Expr{kind: EkNone, s1: tf_arg_names[tfi + 1], s2: "", b1: false, b2: false,
                                      c0: tf_arg_indices[tfi + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
                 tfi = tfi + 1
             }
@@ -2231,13 +2240,23 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         if _ck(pp) == "(" {
             pp = _adv(pp)
             mut mc_arg_indices := [0]
+            mut mc_arg_names := [""]
             mut count := 0
             while _ck(pp) != ")" && _ck(pp) != "EOF" {
                 pp = _skip_nl(pp)
+                // Named arg: IDENT : expr
+                mut arg_name := ""
+                if _ck(pp) == "IDENT" && pp.pos + 1 < pp.tokens.len() && pp.tokens[pp.pos + 1].name == ":" {
+                    arg_name = _cur(pp).text
+                    pp = _adv(pp)
+                    pp = _adv(pp)
+                    pp = _skip_nl(pp)
+                }
                 r := _parse_expr(pp, 0)
                 arg_idx := _pidx(r.p)
                 pp = _padd(r.p, r.e)
                 mc_arg_indices = mc_arg_indices.append(arg_idx)
+                mc_arg_names = mc_arg_names.append(arg_name)
                 count = count + 1
                 pp = _skip_nl(pp)
                 if _ck(pp) == "," { pp = _adv(pp) }
@@ -2246,7 +2265,7 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
             list_start := _pidx(pp)
             mut mci := 0
             while mci < count {
-                pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+                pp = _padd(pp, Expr{kind: EkNone, s1: mc_arg_names[mci + 1], s2: "", b1: false, b2: false,
                                      c0: mc_arg_indices[mci + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
                 mci = mci + 1
             }
@@ -2262,13 +2281,24 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         mut pp := _padd(p, left)
         pp = _adv(pp)
         mut call_arg_indices := [0]
+        mut call_arg_names := [""]
         mut count := 0
         while _ck(pp) != ")" && _ck(pp) != "EOF" {
             pp = _skip_nl(pp)
+            // Named arg: IDENT : expr — captures the label so the
+            // checker/lowerer can reorder against the callee's param names.
+            mut arg_name := ""
+            if _ck(pp) == "IDENT" && pp.pos + 1 < pp.tokens.len() && pp.tokens[pp.pos + 1].name == ":" {
+                arg_name = _cur(pp).text
+                pp = _adv(pp)
+                pp = _adv(pp)
+                pp = _skip_nl(pp)
+            }
             r := _parse_expr(pp, 0)
             arg_idx := _pidx(r.p)
             pp = _padd(r.p, r.e)
             call_arg_indices = call_arg_indices.append(arg_idx)
+            call_arg_names = call_arg_names.append(arg_name)
             count = count + 1
             pp = _skip_nl(pp)
             if _ck(pp) == "," { pp = _adv(pp) }
@@ -2277,7 +2307,7 @@ fn _parse_postfix(p: Parser, left: Expr) -> PR {
         list_start := _pidx(pp)
         mut cai := 0
         while cai < count {
-            pp = _padd(pp, Expr{kind: EkNone, s1: "", s2: "", b1: false, b2: false,
+            pp = _padd(pp, Expr{kind: EkNone, s1: call_arg_names[cai + 1], s2: "", b1: false, b2: false,
                                  c0: call_arg_indices[cai + 1], c1: 0, c2: 0, list_start: 0, list_count: 0, span: _no_span()})
             cai = cai + 1
         }

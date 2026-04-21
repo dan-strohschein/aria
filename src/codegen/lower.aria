@@ -301,6 +301,80 @@ fn _lenv_truncate(l: Lowerer, new_len: i64) -> Lowerer {
 // _lower_method_call. The AST-based dispatch at method call sites seeks to `(`
 // and delegates to _lower_method_call for these, so we don't have to duplicate
 // 15+ method bodies in _lower_method_with_args.
+// Compute a reordered list of arg-holder pool indices to match the callee's
+// declared parameter order when the call uses named arguments. `list_start`
+// + [0..list_count) are arg-holder nodes; each holder's `s1` carries the
+// label ("" for positional). `param_offset` is the index in `param_names`
+// where the caller's first argument lands — 0 for module-qualified calls
+// (no self), 1 for method calls where param_names[1] is the receiver.
+// Returns identity holder indices when no named args are present.
+fn _reorder_call_holders(pool: NodePool, list_start: i64, list_count: i64, param_names: [str], param_offset: i64) -> [i64] {
+    // Identity fast path: scan holders for any label.
+    mut any_named := false
+    mut i := 0
+    while i < list_count {
+        h := pool_get(pool, list_start + i)
+        if h.s1.len() > 0 { any_named = true }
+        i = i + 1
+    }
+    mut result := [0 - 1]  // sentinel
+    if !any_named {
+        mut k := 0
+        while k < list_count {
+            result = result.append(list_start + k)
+            k = k + 1
+        }
+        return result
+    }
+    // Reorder: for each declared param position (starting at param_offset+1
+    // since param_names[0] is the sentinel and [1..param_offset+1] are
+    // receiver-like synthetic params not present in the caller's arg list),
+    // pick a named-matching holder if any, else the next positional holder.
+    mut pi := 1 + param_offset
+    mut pos_idx := 0
+    while pi < param_names.len() {
+        pname := param_names[pi]
+        mut matched_holder := 0 - 1
+        mut ai := 0
+        while ai < list_count {
+            h := pool_get(pool, list_start + ai)
+            if h.s1.len() > 0 && pname.len() > 0 && h.s1 == pname {
+                matched_holder = list_start + ai
+                ai = list_count
+            }
+            ai = ai + 1
+        }
+        if matched_holder >= 0 {
+            result = result.append(matched_holder)
+        } else {
+            // Find the next positional holder (label-empty) we haven't used.
+            mut seen_pos := 0
+            mut chosen := 0 - 1
+            mut aj := 0
+            while aj < list_count {
+                h := pool_get(pool, list_start + aj)
+                if h.s1.len() == 0 {
+                    if seen_pos == pos_idx {
+                        chosen = list_start + aj
+                        aj = list_count
+                    }
+                    seen_pos = seen_pos + 1
+                }
+                aj = aj + 1
+            }
+            if chosen >= 0 {
+                result = result.append(chosen)
+                pos_idx = pos_idx + 1
+            } else {
+                // No positional or named match found — leave hole, stop.
+                pi = param_names.len()
+            }
+        }
+        pi = pi + 1
+    }
+    result
+}
+
 fn _is_pipeline_method(method: str) -> bool {
     method == "filter" ||
     method == "map" ||
@@ -2826,12 +2900,16 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     mcall_name = recv_name + "_" + method
                 }
                 if msig.name != "" {
-                    // Module-qualified call: lower args, then emit direct function call
+                    // Module-qualified call: lower args (reordered by param name
+                    // when named-args are present), then emit direct function call.
+                    reorder := _reorder_call_holders(ll.pool, node.list_start, node.list_count, msig.param_names, 0)
                     mut marg_temps := [0]
                     mut marg_types := [0]
                     mut mai := 0
                     while mai < node.list_count {
-                        arg_holder := pool_get(ll.pool, node.list_start + mai)
+                        mut holder_idx := node.list_start + mai
+                        if mai + 1 < reorder.len() && reorder[mai + 1] >= 0 { holder_idx = reorder[mai + 1] }
+                        arg_holder := pool_get(ll.pool, holder_idx)
                         arg_r := _lower_expr_node(ll, arg_holder.c0)
                         ll = arg_r.l
                         marg_temps = marg_temps.append(arg_r.temp)
@@ -3011,12 +3089,15 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                     qualified := type_name + "_" + method
                     qsig := reg_find_fn(ll.registry, qualified)
                     if qsig.name != "" {
-                        // Lower args from AST
+                        // Lower args from AST, honoring named-arg reordering.
+                        reorder := _reorder_call_holders(ll.pool, node.list_start, node.list_count, qsig.param_names, 0)
                         mut q_arg_temps := [0]
                         mut q_arg_types := [0]
                         mut qai := 0
                         while qai < node.list_count {
-                            arg_holder := pool_get(ll.pool, node.list_start + qai)
+                            mut holder_idx := node.list_start + qai
+                            if qai + 1 < reorder.len() && reorder[qai + 1] >= 0 { holder_idx = reorder[qai + 1] }
+                            arg_holder := pool_get(ll.pool, holder_idx)
                             arg_r := _lower_expr_node(ll, arg_holder.c0)
                             ll = arg_r.l
                             q_arg_temps = q_arg_temps.append(arg_r.temp)
@@ -4849,12 +4930,18 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
     }
 
     // --- Lower all args generically, then dispatch ---
+    // Look up the sig early so we can reorder named args against its
+    // declared parameter names.
+    pre_sig := reg_find_fn(ll.registry, name)
+    reorder := _reorder_call_holders(ll.pool, node.list_start, node.list_count, pre_sig.param_names, 0)
 
     mut arg_temps := [0]
     mut arg_types := [0]
     mut ai := 0
     while ai < node.list_count {
-        arg := _lower_expr_node(ll, pool_get(ll.pool, node.list_start + ai).c0)
+        mut holder_idx := node.list_start + ai
+        if ai + 1 < reorder.len() && reorder[ai + 1] >= 0 { holder_idx = reorder[ai + 1] }
+        arg := _lower_expr_node(ll, pool_get(ll.pool, holder_idx).c0)
         ll = arg.l
         arg_temps = arg_temps.append(arg.temp)
         arg_types = arg_types.append(_lget_type(ll, arg.temp))
@@ -4862,7 +4949,7 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
     }
 
     // Registry function lookup
-    sig := reg_find_fn(ll.registry, name)
+    sig := pre_sig
     mut call_name := name
     mut call_sig := sig
 
