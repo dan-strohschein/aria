@@ -1,0 +1,31 @@
+// test-command: test
+// test-expect: 3 passed, 0 failed
+//
+// Exercises the `aria test` runner itself: the harness compiles this via
+// `aria test`, which synthesizes a _test_runner main that calls each
+// test block and emits PASS/summary lines. A regression in any of the
+// parser → checker → lowerer → test-runner path flips this test red.
+
+mod main
+
+fn double(n: i64) -> i64 = n * 2
+
+fn is_even(n: i64) -> bool = n % 2 == 0
+
+test "double arithmetic" {
+    assert double(3) == 6
+    assert double(0) == 0
+    assert double(-4) == -8
+}
+
+test "is_even on small integers" {
+    assert is_even(2)
+    assert is_even(0)
+    assert is_even(1) == false
+}
+
+test "string equality and concatenation" {
+    greeting := "hello"
+    assert greeting == "hello"
+    assert greeting + " world" == "hello world"
+}

@@ -37,6 +37,7 @@ struct Options {
     output_path: str
     help_requested: bool
     has_error: bool
+    filter: str
 }
 
 fn default_options() -> Options =
@@ -49,28 +50,31 @@ fn default_options() -> Options =
         parallel: false,
         output_path: "",
         help_requested: false,
-        has_error: false
+        has_error: false,
+        filter: ""
     }
 
-// DRY: Options setter helpers (avoid duplicating 9-field struct literal)
+// DRY: Options setter helpers (avoid duplicating 10-field struct literal)
 fn _opts_set_cmd(o: Options, c: Command) -> Options =
-    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: c, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_format(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: v, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_target(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: o.format, target: v, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_runtime(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: v, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_parallel(o: Options) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: true, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_output(o: Options, v: str) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: v, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_files(o: Options, f: [str]) -> Options =
-    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error}
+    Options{command: o.command, files: f, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: o.filter}
 fn _opts_set_help(o: Options) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true, has_error: o.has_error}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: true, has_error: o.has_error, filter: o.filter}
 fn _opts_set_error(o: Options) -> Options =
-    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: true}
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: true, filter: o.filter}
+fn _opts_set_filter(o: Options, v: str) -> Options =
+    Options{command: o.command, files: o.files, format: o.format, target: o.target, runtime_path: o.runtime_path, parallel: o.parallel, output_path: o.output_path, help_requested: o.help_requested, has_error: o.has_error, filter: v}
 
 // --- Argument parsing ---
 
@@ -158,6 +162,16 @@ fn parse_args(args: [str]) -> Options with [Io] {
                 }
             } else if arg == "--parallel" {
                 opts = _opts_set_parallel(opts)
+            } else if arg.startsWith("--filter=") {
+                opts = _opts_set_filter(opts, _parse_flag_value(arg))
+            } else if arg == "--filter" {
+                if i + 1 < args.len() {
+                    i = i + 1
+                    opts = _opts_set_filter(opts, args[i])
+                } else {
+                    println("error: --filter requires a substring argument")
+                    opts = _opts_set_error(opts)
+                }
             } else if arg == "--version" || arg == "-v" {
                 opts = _opts_set_cmd(opts, CmdVersion)
             } else {
@@ -253,6 +267,7 @@ fn _print_test_help() -> i64 with [Io] {
     println("  -o PATH              Output test binary path")
     println("  --runtime=PATH       Path to runtime.c")
     println("  --parallel           Run tests in parallel (experimental)")
+    println("  --filter=SUBSTR      Only run tests whose label contains SUBSTR")
     println("  --format=text|json   Diagnostic output format")
     0
 }
@@ -908,7 +923,7 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str, output
     return exit_code
 }
 
-fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) -> i64 with [Io, Fs] {
+fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool, filter: str) -> i64 with [Io, Fs] {
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -930,14 +945,18 @@ fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool) ->
     output = output + "_test_runner"
 
     // Compile with test runner
-    diags := generate_tests_from_sources(files, output, rt, parallel)
+    diags := generate_tests_from_sources(files, output, rt, parallel, filter)
     if bag_has_errors(diags) {
         _print_diagnostics(diags, format)
         return 1
     }
 
-    // Run the test binary
-    return _ariaExec(output)
+    // Run the test binary. Forward the child's exit code — the entry block
+    // ignores run_test's return value, so a failing test would otherwise
+    // look green to the shell. Explicit _aria_exit preserves the failure.
+    exit_code := _ariaExec(output)
+    if exit_code != 0 { _ariaExit(exit_code) }
+    return exit_code
 }
 
 // --- Explain command ---
@@ -1102,7 +1121,7 @@ entry {
         } else if cmd == "check" {
             run_check(opts.files, opts.format)
         } else if cmd == "test" {
-            run_test(opts.files, opts.format, opts.runtime_path, opts.parallel)
+            run_test(opts.files, opts.format, opts.runtime_path, opts.parallel, opts.filter)
         } else if cmd == "bench" {
             run_bench(opts.files, opts.format, opts.runtime_path)
         } else if cmd == "fix" {

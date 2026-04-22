@@ -19792,6 +19792,12 @@ fn _skip_braces_l(l: Lowerer) -> Lowerer {
 // --- Lower assert ---
 
 fn _lower_assert(l: Lowerer) -> Lowerer {
+    // Capture the assert's source position BEFORE consuming `assert` so the
+    // FAIL message can cite the file:line of the assertion itself, not the
+    // expression fragment that `_lower_expr` may have walked past.
+    assert_tok := l.tokens[l.pos]
+    assert_line := assert_tok.line
+    assert_file := l.file
     mut ll := _ladv(l)  // skip assert
     result := _lower_expr(ll)
     ll = result.l
@@ -19812,11 +19818,12 @@ fn _lower_assert(l: Lowerer) -> Lowerer {
         suffix := fn_name.substring(6, fn_name.len())
         test_idx = _parse_int_literal(suffix)
     }
-    mut fail_msg := "FAIL: assertion failed"
+    loc_suffix := " at " + assert_file + ":" + i2s(assert_line)
+    mut fail_msg := "FAIL: assertion failed" + loc_suffix
     if test_idx >= 0 {
         label_idx := test_idx + 1  // test_names is 1-indexed, sentinel at 0
         if label_idx < ll.module.test_names.len() {
-            fail_msg = "FAIL: " + ll.module.test_names[label_idx] + ": assertion failed"
+            fail_msg = "FAIL: " + ll.module.test_names[label_idx] + ": assertion failed" + loc_suffix
         }
     }
     mut fail_idx := mod_find_string(ll.module, fail_msg)
@@ -21228,7 +21235,7 @@ fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, re
 
 // Lower for test mode: compile test blocks and generate a test runner _main
 // Skips entry blocks to avoid duplicate _main (test runner generates its own)
-fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool) -> IrModule {
+fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool, filter: str) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies_skip_entry(l, index)
@@ -21248,13 +21255,39 @@ fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: Typ
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function
-    l = _generate_test_runner_p(l, parallel)
+    l = _generate_test_runner_p(l, parallel, filter)
     return l.module
 }
 
-fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
+// Case-sensitive substring search, used at IR-build time to apply --filter.
+fn _test_label_matches(label: str, filter: str) -> bool {
+    if filter == "" { return true }
+    if filter.len() > label.len() { return false }
+    mut i := 0
+    lim := label.len() - filter.len() + 1
+    while i < lim {
+        if label.substring(i, i + filter.len()) == filter { return true }
+        i = i + 1
+    }
+    false
+}
+
+fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
     mut ll := l
-    test_count := ll.module.test_count
+    total_tests := ll.module.test_count
+    // Count how many tests match the filter (applied at IR-build time).
+    mut matched_count := 0
+    mut mi := 0
+    while mi < total_tests {
+        label_idx := mi + 1
+        mut label := ""
+        if label_idx < ll.module.test_names.len() {
+            label = ll.module.test_names[label_idx]
+        }
+        if _test_label_matches(label, filter) { matched_count = matched_count + 1 }
+        mi = mi + 1
+    }
+    test_count := matched_count
     if test_count == 0 {
         // No tests — generate empty _main that prints "no tests found"
         ll = _lset_func(ll, new_ir_func("_main", 0, 0))
@@ -21290,20 +21323,27 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
     // Generate _main that calls each test, prints results
     ll = _lset_func(ll, new_ir_func("_main", 0, 0))
 
-    // Parallel mode: spawn all tests, then await all handles
-    if parallel && test_count > 0 {
+    // Precompute the summary string: "<N> passed, 0 failed". Because assert
+    // lowering calls _aria_exit(1) on failure, reaching the summary means
+    // every executed test passed.
+    summary := i2s(matched_count) + " passed, 0 failed"
+
+    // Parallel mode: spawn all tests, then await all handles. Disabled when
+    // --filter is non-empty — the parallel path doesn't skip tests and we
+    // fall through to sequential so filtering applies.
+    if parallel && filter == "" && total_tests > 0 {
         // Pre-allocate handle temps (consecutive)
         first_handle := _lnew_temp(ll)
         ll = first_handle.l
         mut hi := 1
-        while hi < test_count {
+        while hi < total_tests {
             pad := _lnew_temp(ll)
             ll = pad.l
             hi = hi + 1
         }
         // Spawn each test into its handle slot
         mut si := 0
-        while si < test_count {
+        while si < total_tests {
             test_fn_name := "_test_" + i2s(si)
             tramp_name := "_tramp_" + test_fn_name
             fn_ref := _lnew_temp(ll)
@@ -21317,22 +21357,22 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
         }
         // Await all handles
         mut ai := 0
-        while ai < test_count {
+        while ai < total_tests {
             await_nt := _lnew_temp(ll)
             ll = await_nt.l
             ll = _lemit(ll, new_inst(OpCall, await_nt.temp, first_handle.temp + ai, 1, "_aria_task_await", 1))
             ai = ai + 1
         }
         // Print summary
-        mut done_idx := mod_find_string(ll.module, "all tests passed")
+        mut done_idx := mod_find_string(ll.module, summary)
         if done_idx == 0 {
-            new_mod := mod_add_string(ll.module, "all tests passed")
+            new_mod := mod_add_string(ll.module, summary)
             done_idx = new_mod.string_constants.len() - 1
             ll = _lset_mod(ll, new_mod)
         }
         done_nt := _lnew_str_temp(ll)
         ll = done_nt.l
-        ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, 16, "", 0))
+        ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, summary.len(), "", 0))
         ll = _lemit(ll, new_inst(OpCall, 0, done_nt.temp, 2, "_aria_println_str", 0))
         ll = _lfinish_func(ll)
         mut new_mod_e := mod_set_entry(ll.module, "_main")
@@ -21340,12 +21380,17 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
         return ll
     }
 
-    // Sequential mode: For each test, call it and print pass
+    // Sequential mode: for each test matching the filter, call it and print PASS.
     mut ti := 0
-    while ti < test_count {
-        test_fn_name := "_test_" + i2s(ti)
+    while ti < total_tests {
         // 1-based index into test_names (0 is sentinel)
         test_label_idx := ti + 1
+        mut current_label := ""
+        if test_label_idx < ll.module.test_names.len() {
+            current_label = ll.module.test_names[test_label_idx]
+        }
+        if _test_label_matches(current_label, filter) {
+        test_fn_name := "_test_" + i2s(ti)
 
         // Print test name
         mut label_str_idx := 0
@@ -21391,29 +21436,21 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool) -> Lowerer {
         if after_fn.name != "" {
             ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_after", 0))
         }
+        }  // end if _test_label_matches
 
         ti = ti + 1
     }
 
-    // Print summary
-    mut done_idx := mod_find_string(ll.module, "all tests passed")
+    // Print summary: "<N> passed, 0 failed"
+    mut done_idx := mod_find_string(ll.module, summary)
     if done_idx == 0 {
-        new_mod := mod_add_string(ll.module, "all tests passed")
+        new_mod := mod_add_string(ll.module, summary)
         done_idx = new_mod.string_constants.len() - 1
-        ll = Lowerer{tokens: ll.tokens, pos: ll.pos, store: ll.store, registry: ll.registry, treg: ll.treg, pool: ll.pool,
-                     table: ll.table, file: ll.file, module: new_mod,
-                     current_func: ll.current_func,
-                     temp_counter: ll.temp_counter, label_counter: ll.label_counter,
-                     env_names: ll.env_names, env_slots: ll.env_slots,
-                     loop_start: ll.loop_start, loop_end: ll.loop_end,
-                     const_names: ll.const_names, const_vals: ll.const_vals,
-                     const_str_names: ll.const_str_names, const_str_vals: ll.const_str_vals,
-                     temp_types: ll.temp_types, is_result: ll.is_result,
-                     fn_error_type: ll.fn_error_type, defer_starts: ll.defer_starts, defer_ends: ll.defer_ends}
+        ll = _lset_mod(ll, new_mod)
     }
     done_nt := _lnew_str_temp(ll)
     ll = done_nt.l
-    ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, 16, "", 0))
+    ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, summary.len(), "", 0))
     ll = _lemit(ll, new_inst(OpCall, 0, done_nt.temp, 2, "_aria_println_str", 0))
 
     // Exit 0

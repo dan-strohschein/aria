@@ -5,6 +5,9 @@
 #   // test-expect: expected output         — check stdout contains this text
 #   // test-requires: feature               — skip test (external dependency)
 #   // test-support: true                   — support file, don't run directly
+#   // test-command: test                   — compile via `aria test` and run the
+#                                             synthesized <file>_test_runner binary
+#                                             (exercises the test-framework itself)
 
 COMPILER="${ARIA_COMPILER:-src/main}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,12 +27,14 @@ for f in "$DIR"/*.aria; do
     test_expect=""
     test_requires=""
     test_support=""
+    test_command="build"
     while IFS= read -r line; do
         case "$line" in
             "// test-files: "*)    test_files="${line#// test-files: }" ;;
             "// test-expect: "*)   test_expect="${line#// test-expect: }" ;;
             "// test-requires: "*) test_requires="${line#// test-requires: }" ;;
             "// test-support: "*)  test_support="${line#// test-support: }" ;;
+            "// test-command: "*)  test_command="${line#// test-command: }" ;;
         esac
     done < <(head -10 "$f")
 
@@ -70,10 +75,15 @@ for f in "$DIR"/*.aria; do
         bin="${f%.aria}"
     fi
 
+    # `aria test` names the binary <file>_test_runner regardless of -o; honor that.
+    if [ "$test_command" = "test" ]; then
+        bin="${bin}_test_runner"
+    fi
+
     rm -f "$bin"
 
     # Build (capture output, allow failure)
-    build_out=$($COMPILER build $build_args 2>&1 || true)
+    build_out=$($COMPILER $test_command $build_args 2>&1 || true)
 
     if [ ! -f "$bin" ]; then
         FAIL=$((FAIL + 1))
@@ -82,9 +92,8 @@ for f in "$DIR"/*.aria; do
         continue
     fi
 
-    # Run
-    run_out=$("$bin" 2>&1 || true)
-    run_exit=${PIPESTATUS[0]}
+    # Run (capture exit code without masking; `|| true` would zero it out)
+    run_out=$("$bin" 2>&1); run_exit=$?
 
     # Check for crash (signal-based exit codes > 128)
     if [ "$run_exit" -gt 1 ] 2>/dev/null; then
