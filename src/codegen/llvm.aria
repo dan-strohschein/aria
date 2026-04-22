@@ -482,6 +482,8 @@ fn _generate_llvm_ir_target(m: IrModule, target: str) -> str {
     p = p.append("declare double @_aria_sqrt(double)" + nl)
     p = p.append("declare double @_aria_abs(double)" + nl)
     p = p.append("declare void @_aria_exit(i64)" + nl)
+    p = p.append("declare i64 @_aria_fork()" + nl)
+    p = p.append("declare i64 @_aria_waitpid(i64)" + nl)
     p = p.append("declare i64 @_aria_get_time_ns()" + nl)
     p = p.append("declare " + si64 + " @_aria_sha256_hex(i8*, i64)" + nl)
     p = p.append("declare " + si64 + " @_aria_json_escape(i8*, i64)" + nl)
@@ -806,6 +808,8 @@ fn _generate_llvm_ir_to_file_target(m: IrModule, path: str, target: str) with [F
     h = h.append("declare double @_aria_sqrt(double)" + nl)
     h = h.append("declare double @_aria_abs(double)" + nl)
     h = h.append("declare void @_aria_exit(i64)" + nl)
+    h = h.append("declare i64 @_aria_fork()" + nl)
+    h = h.append("declare i64 @_aria_waitpid(i64)" + nl)
     h = h.append("declare i64 @_aria_get_time_ns()" + nl)
     h = h.append("declare " + si64 + " @_aria_sha256_hex(i8*, i64)" + nl)
     h = h.append("declare " + si64 + " @_aria_json_escape(i8*, i64)" + nl)
@@ -1288,21 +1292,21 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
 
     if op == "Add" {
         if inst.s1 == "f64" { return _gen_float_binop(g, "fadd", inst, idx) }
-        return _gen_binop(g, "add", inst)
+        return _gen_binop(g, "add", inst, idx)
     }
     if op == "Sub" {
         if inst.s1 == "f64" { return _gen_float_binop(g, "fsub", inst, idx) }
-        return _gen_binop(g, "sub", inst)
+        return _gen_binop(g, "sub", inst, idx)
     }
     if op == "Mul" {
         if inst.s1 == "f64" { return _gen_float_binop(g, "fmul", inst, idx) }
-        return _gen_binop(g, "mul", inst)
+        return _gen_binop(g, "mul", inst, idx)
     }
     if op == "Div" {
         if inst.s1 == "f64" { return _gen_float_binop(g, "fdiv", inst, idx) }
-        return _gen_binop(g, "sdiv", inst)
+        return _gen_binop(g, "sdiv", inst, idx)
     }
-    if op == "Mod" { return _gen_binop(g, "srem", inst) }
+    if op == "Mod" { return _gen_binop(g, "srem", inst, idx) }
 
 
 
@@ -1355,8 +1359,8 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return _gen_cmp(g, "sge", inst, idx)
     }
 
-    if op == "And" { return _gen_binop(g, "and", inst) }
-    if op == "Or" { return _gen_binop(g, "or", inst) }
+    if op == "And" { return _gen_binop(g, "and", inst, idx) }
+    if op == "Or" { return _gen_binop(g, "or", inst, idx) }
 
     if op == "Not" {
         mut gg := g
@@ -1370,11 +1374,11 @@ fn _gen_inst(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         return gg
     }
 
-    if op == "BitAnd" { return _gen_binop(g, "and", inst) }
-    if op == "BitOr" { return _gen_binop(g, "or", inst) }
-    if op == "BitXor" { return _gen_binop(g, "xor", inst) }
-    if op == "Shl" { return _gen_binop(g, "shl", inst) }
-    if op == "Shr" { return _gen_binop(g, "ashr", inst) }
+    if op == "BitAnd" { return _gen_binop(g, "and", inst, idx) }
+    if op == "BitOr" { return _gen_binop(g, "or", inst, idx) }
+    if op == "BitXor" { return _gen_binop(g, "xor", inst, idx) }
+    if op == "Shl" { return _gen_binop(g, "shl", inst, idx) }
+    if op == "Shr" { return _gen_binop(g, "ashr", inst, idx) }
 
     if op == "Jump" {
         mut gg := g
@@ -2237,13 +2241,13 @@ fn _extract_str_result(g: LlvmGen, res_name: str, dest: i64, idx: i64, prefix: s
     gg
 }
 
-fn _gen_binop(g: LlvmGen, llvm_op: str, inst: IrInst) -> LlvmGen {
+fn _gen_binop(g: LlvmGen, llvm_op: str, inst: IrInst, idx: i64) -> LlvmGen {
     mut gg := g
-    a := "%binop_a_" + i2s(inst.dest)
-    b := "%binop_b_" + i2s(inst.dest)
+    a := "%binop_a_" + i2s(idx)
+    b := "%binop_b_" + i2s(idx)
     gg = _lg_emit(gg, a + " = load i64, i64* " + _t(inst.arg1))
     gg = _lg_emit(gg, b + " = load i64, i64* " + _t(inst.arg2))
-    res := "%binop_r_" + i2s(inst.dest)
+    res := "%binop_r_" + i2s(idx)
     gg = _lg_emit(gg, res + " = " + llvm_op + " i64 " + a + ", " + b)
     gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
     gg
@@ -2375,6 +2379,22 @@ fn _gen_call(g: LlvmGen, m: IrModule, f: IrFunc, inst: IrInst, idx: i64) -> Llvm
         v := "%call_exit_" + i2s(idx)
         gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
         gg = _lg_emit(gg, "call void @_aria_exit(i64 " + v + ")")
+        return gg
+    }
+
+    if name == "_aria_fork" {
+        res := "%call_fork_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_fork()")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
+        return gg
+    }
+
+    if name == "_aria_waitpid" {
+        v := "%call_wp_a_" + i2s(idx)
+        gg = _lg_emit(gg, v + " = load i64, i64* " + _t(inst.arg1))
+        res := "%call_wp_r_" + i2s(idx)
+        gg = _lg_emit(gg, res + " = call i64 @_aria_waitpid(i64 " + v + ")")
+        gg = _lg_emit(gg, "store i64 " + res + ", i64* " + _t(inst.dest))
         return gg
     }
 

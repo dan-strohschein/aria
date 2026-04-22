@@ -73,6 +73,41 @@ void _aria_exit(aria_int code) {
     exit((int)code);
 }
 
+// --- Process isolation (used by the test runner) ---
+// _aria_fork: fork() wrapper. Returns child pid in parent, 0 in child, -1 on error.
+// _aria_waitpid: wait for a specific child. Encodes result as:
+//   0..127 for normal exit codes (mask to 255, but Aria asserts use 1)
+//   128+signal for signal-terminated children
+//   -1 on waitpid error
+// These are test-runner primitives — callers must only fork from a known-safe
+// point (the synthesized test _main, which is single-threaded at fork time).
+
+#ifndef _WIN32
+#include <sys/wait.h>
+
+aria_int _aria_fork(void) {
+    pid_t pid = fork();
+    return (aria_int) pid;
+}
+
+aria_int _aria_waitpid(aria_int pid) {
+    int status = 0;
+    pid_t w = waitpid((pid_t) pid, &status, 0);
+    if (w < 0) return (aria_int) -1;
+    if (WIFEXITED(status))   return (aria_int) WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return (aria_int) (128 + WTERMSIG(status));
+    return (aria_int) -1;
+}
+#else
+// Windows has no fork(); stub so the runtime still links. The test runner
+// on Windows falls back to fail-fast behavior — calling _aria_fork returns
+// -1, and the generated IR treats -1 as "parent path, no child to wait for"
+// (effectively disabling isolation). This keeps the non-Windows path
+// debuggable without blocking Windows builds.
+aria_int _aria_fork(void) { return (aria_int) -1; }
+aria_int _aria_waitpid(aria_int pid) { (void)pid; return (aria_int) -1; }
+#endif
+
 // --- Time ---
 
 #include <time.h>

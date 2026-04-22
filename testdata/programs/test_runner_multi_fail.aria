@@ -1,0 +1,20 @@
+// test-command: test
+// test-expect: 1 passed, 2 failed
+//
+// Exercises fork-per-test isolation: with sequential fail-fast semantics
+// this fixture would only report the first failure and die. With fork
+// isolation the runner surfaces every failure and prints the exact count.
+
+mod main
+
+test "this one passes" {
+    assert 1 + 1 == 2
+}
+
+test "this one fails" {
+    assert 1 + 1 == 3
+}
+
+test "this one also fails" {
+    assert 2 + 2 == 5
+}

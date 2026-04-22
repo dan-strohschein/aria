@@ -21272,6 +21272,166 @@ fn _test_label_matches(label: str, filter: str) -> bool {
     false
 }
 
+// Intern a string in the module constant pool and return (updated lowerer, idx).
+// DRY: the mod_find_string/mod_add_string idiom appears in many test-runner
+// emission sites; this helper folds it into one place.
+fn _intern_module_str(l: Lowerer, s: str) -> LT {
+    mut ll := l
+    mut idx := mod_find_string(ll.module, s)
+    if idx == 0 {
+        new_mod := mod_add_string(ll.module, s)
+        idx = new_mod.string_constants.len() - 1
+        ll = _lset_mod(ll, new_mod)
+    }
+    LT{l: ll, temp: idx}
+}
+
+// Emit "PASS: <label>\n" to stdout. If label_str_idx == 0 the label was not
+// interned and we print the prefix alone (rare corner — keeps emission safe).
+fn _emit_pass_line(l: Lowerer, label_text: str, label_str_idx: i64) -> Lowerer {
+    mut ll := l
+    prefix_res := _intern_module_str(ll, "PASS: ")
+    ll = prefix_res.l
+    pass_idx := prefix_res.temp
+    pass_nt := _lnew_str_temp(ll)
+    ll = pass_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, pass_nt.temp, pass_idx, 6, "", 0))
+    if label_str_idx > 0 {
+        label_nt := _lnew_str_temp(ll)
+        ll = label_nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, label_nt.temp, label_str_idx, label_text.len(), "", 0))
+        concat_nt := _lnew_str_temp(ll)
+        ll = concat_nt.l
+        ll = _lemit(ll, new_inst(OpStrConcat, concat_nt.temp, pass_nt.temp, label_nt.temp, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, concat_nt.temp, 2, "_aria_println_str", 0))
+    } else {
+        ll = _lemit(ll, new_inst(OpCall, 0, pass_nt.temp, 2, "_aria_println_str", 0))
+    }
+    ll
+}
+
+// Emit the runtime summary line "<pass> passed, <fail> failed" using the
+// runtime counters. Values are read from temps, converted via OpIntToStr,
+// and chained with OpStrConcat.
+fn _emit_summary_line(l: Lowerer, pass_t: i64, fail_t: i64) -> Lowerer {
+    mut ll := l
+    p_str := _lnew_str_temp(ll)
+    ll = p_str.l
+    ll = _lemit(ll, new_inst(OpIntToStr, p_str.temp, pass_t, 0, "", 0))
+
+    lit1_res := _intern_module_str(ll, " passed, ")
+    ll = lit1_res.l
+    lit1_nt := _lnew_str_temp(ll)
+    ll = lit1_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, lit1_nt.temp, lit1_res.temp, 9, "", 0))
+
+    cat1 := _lnew_str_temp(ll)
+    ll = cat1.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat1.temp, p_str.temp, lit1_nt.temp, "", 0))
+
+    f_str := _lnew_str_temp(ll)
+    ll = f_str.l
+    ll = _lemit(ll, new_inst(OpIntToStr, f_str.temp, fail_t, 0, "", 0))
+
+    cat2 := _lnew_str_temp(ll)
+    ll = cat2.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat2.temp, cat1.temp, f_str.temp, "", 0))
+
+    lit2_res := _intern_module_str(ll, " failed")
+    ll = lit2_res.l
+    lit2_nt := _lnew_str_temp(ll)
+    ll = lit2_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, lit2_nt.temp, lit2_res.temp, 7, "", 0))
+
+    cat3 := _lnew_str_temp(ll)
+    ll = cat3.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cat2.temp, lit2_nt.temp, "", 0))
+
+    ll = _lemit(ll, new_inst(OpCall, 0, cat3.temp, 2, "_aria_println_str", 0))
+    ll
+}
+
+// Emit the fork/wait/branch block for ONE test in the runner's _main. The
+// parent waits for the child and updates pass/fail counters; the child runs
+// _before → _test_N → _after and exits 0. Assertion failure in the child
+// prints its own FAIL line (via _lower_assert) then exits 1, which the
+// parent treats as a fail-counter increment. This gives per-test isolation:
+// one bad assert no longer kills the whole runner.
+fn _emit_test_invocation(l: Lowerer, ti: i64, label_text: str, label_str_idx: i64, pass_t: i64, fail_t: i64) -> Lowerer {
+    mut ll := l
+    test_fn_name := "_test_" + i2s(ti)
+
+    // pid = _aria_fork()
+    pid_nt := _lnew_temp(ll)
+    ll = pid_nt.l
+    ll = _lemit(ll, new_inst(OpCall, pid_nt.temp, 0, 0, "_aria_fork", 0))
+
+    // Labels
+    child_lbl := _lnew_label(ll)
+    ll = child_lbl.l
+    fail_lbl := _lnew_label(ll)
+    ll = fail_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+
+    // if pid == 0 → child
+    zero_nt := _lnew_temp(ll)
+    ll = zero_nt.l
+    ll = _lemit(ll, new_inst(OpConst, zero_nt.temp, 0, 0, "", 0))
+    is_child := _lnew_temp(ll)
+    ll = is_child.l
+    ll = _lemit(ll, new_inst(OpEq, is_child.temp, pid_nt.temp, zero_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_child.temp, child_lbl.temp, "", 0))
+
+    // --- Parent path ---
+    status_nt := _lnew_temp(ll)
+    ll = status_nt.l
+    ll = _lemit(ll, new_inst(OpCall, status_nt.temp, pid_nt.temp, 1, "_aria_waitpid", 0))
+
+    // if status != 0 → fail path
+    is_fail := _lnew_temp(ll)
+    ll = is_fail.l
+    ll = _lemit(ll, new_inst(OpNeq, is_fail.temp, status_nt.temp, zero_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_fail.temp, fail_lbl.temp, "", 0))
+
+    // Success: print PASS and increment pass counter
+    ll = _emit_pass_line(ll, label_text, label_str_idx)
+    one_nt := _lnew_temp(ll)
+    ll = one_nt.l
+    ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpAdd, pass_t, pass_t, one_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+
+    // Fail path: increment fail counter (child already printed the FAIL line).
+    ll = _lemit(ll, new_inst(OpLabel, 0, fail_lbl.temp, 0, "", 0))
+    one_nt2 := _lnew_temp(ll)
+    ll = one_nt2.l
+    ll = _lemit(ll, new_inst(OpConst, one_nt2.temp, 1, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpAdd, fail_t, fail_t, one_nt2.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+
+    // --- Child path ---
+    ll = _lemit(ll, new_inst(OpLabel, 0, child_lbl.temp, 0, "", 0))
+    before_fn := mod_find_func(ll.module, "_before")
+    if before_fn.name != "" {
+        ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_before", 0))
+    }
+    ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, test_fn_name, 0))
+    after_fn := mod_find_func(ll.module, "_after")
+    if after_fn.name != "" {
+        ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_after", 0))
+    }
+    // exit 0 to signal success to the parent
+    child_exit := _lnew_temp(ll)
+    ll = child_exit.l
+    ll = _lemit(ll, new_inst(OpConst, child_exit.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, child_exit.temp, 1, "_aria_exit", 0))
+
+    // --- Converge ---
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+    ll
+}
+
 fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
     mut ll := l
     total_tests := ll.module.test_count
@@ -21323,15 +21483,11 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
     // Generate _main that calls each test, prints results
     ll = _lset_func(ll, new_ir_func("_main", 0, 0))
 
-    // Precompute the summary string: "<N> passed, 0 failed". Because assert
-    // lowering calls _aria_exit(1) on failure, reaching the summary means
-    // every executed test passed.
-    summary := i2s(matched_count) + " passed, 0 failed"
-
-    // Parallel mode: spawn all tests, then await all handles. Disabled when
-    // --filter is non-empty — the parallel path doesn't skip tests and we
-    // fall through to sequential so filtering applies.
+    // Parallel mode: spawn all tests, then await all handles. No fork isolation
+    // (parallel path predates fork-per-test; left as-is). Disabled when
+    // --filter is non-empty so filtering falls through to sequential.
     if parallel && filter == "" && total_tests > 0 {
+        summary := i2s(matched_count) + " passed, 0 failed"
         // Pre-allocate handle temps (consecutive)
         first_handle := _lnew_temp(ll)
         ll = first_handle.l
@@ -21380,7 +21536,15 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
         return ll
     }
 
-    // Sequential mode: for each test matching the filter, call it and print PASS.
+    // Sequential mode with fork-per-test isolation. Allocate runtime counters
+    // for pass/fail and let each test's exit status drive which counter ticks.
+    pass_t := _lnew_temp(ll)
+    ll = pass_t.l
+    ll = _lemit(ll, new_inst(OpConst, pass_t.temp, 0, 0, "", 0))
+    fail_t := _lnew_temp(ll)
+    ll = fail_t.l
+    ll = _lemit(ll, new_inst(OpConst, fail_t.temp, 0, 0, "", 0))
+
     mut ti := 0
     while ti < total_tests {
         // 1-based index into test_names (0 is sentinel)
@@ -21390,74 +21554,34 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
             current_label = ll.module.test_names[test_label_idx]
         }
         if _test_label_matches(current_label, filter) {
-        test_fn_name := "_test_" + i2s(ti)
-
-        // Print test name
-        mut label_str_idx := 0
-        if test_label_idx < ll.module.test_names.len() {
-            label_text := ll.module.test_names[test_label_idx]
-            label_str_idx = mod_find_string(ll.module, label_text)
+            label_str_idx := mod_find_string(ll.module, current_label)
+            ll = _emit_test_invocation(ll, ti, current_label, label_str_idx, pass_t.temp, fail_t.temp)
         }
-
-        // Call before fixture if it exists
-        before_fn := mod_find_func(ll.module, "_before")
-        if before_fn.name != "" {
-            ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_before", 0))
-        }
-        // Call the test function
-        ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, test_fn_name, 0))
-
-        // Print "PASS: <test name>"
-        // Add "PASS: " string
-        mut pass_idx := mod_find_string(ll.module, "PASS: ")
-        if pass_idx == 0 {
-            new_mod := mod_add_string(ll.module, "PASS: ")
-            pass_idx = new_mod.string_constants.len() - 1
-            ll = _lset_mod(ll, new_mod)
-        }
-        // Print "PASS: " + test name by concatenating
-        pass_nt := _lnew_str_temp(ll)
-        ll = pass_nt.l
-        ll = _lemit(ll, new_inst(OpConstStr, pass_nt.temp, pass_idx, 6, "", 0))
-        if label_str_idx > 0 {
-            label_nt := _lnew_str_temp(ll)
-            ll = label_nt.l
-            label_text := ll.module.test_names[test_label_idx]
-            ll = _lemit(ll, new_inst(OpConstStr, label_nt.temp, label_str_idx, label_text.len(), "", 0))
-            concat_nt := _lnew_str_temp(ll)
-            ll = concat_nt.l
-            ll = _lemit(ll, new_inst(OpStrConcat, concat_nt.temp, pass_nt.temp, label_nt.temp, "", 0))
-            ll = _lemit(ll, new_inst(OpCall, 0, concat_nt.temp, 2, "_aria_println_str", 0))
-        } else {
-            ll = _lemit(ll, new_inst(OpCall, 0, pass_nt.temp, 2, "_aria_println_str", 0))
-        }
-        // Call after fixture if it exists
-        after_fn := mod_find_func(ll.module, "_after")
-        if after_fn.name != "" {
-            ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, "_after", 0))
-        }
-        }  // end if _test_label_matches
-
         ti = ti + 1
     }
 
-    // Print summary: "<N> passed, 0 failed"
-    mut done_idx := mod_find_string(ll.module, summary)
-    if done_idx == 0 {
-        new_mod := mod_add_string(ll.module, summary)
-        done_idx = new_mod.string_constants.len() - 1
-        ll = _lset_mod(ll, new_mod)
-    }
-    done_nt := _lnew_str_temp(ll)
-    ll = done_nt.l
-    ll = _lemit(ll, new_inst(OpConstStr, done_nt.temp, done_idx, summary.len(), "", 0))
-    ll = _lemit(ll, new_inst(OpCall, 0, done_nt.temp, 2, "_aria_println_str", 0))
+    // Summary: "<pass> passed, <fail> failed" from runtime counters.
+    ll = _emit_summary_line(ll, pass_t.temp, fail_t.temp)
 
-    // Exit 0
-    exit_nt := _lnew_temp(ll)
-    ll = exit_nt.l
-    ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 0, 0, "", 0))
-    ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+    // Exit: 1 if any test failed, 0 otherwise.
+    zero_t := _lnew_temp(ll)
+    ll = zero_t.l
+    ll = _lemit(ll, new_inst(OpConst, zero_t.temp, 0, 0, "", 0))
+    any_fail := _lnew_temp(ll)
+    ll = any_fail.l
+    ll = _lemit(ll, new_inst(OpNeq, any_fail.temp, fail_t.temp, zero_t.temp, "", 0))
+    nonzero_exit_lbl := _lnew_label(ll)
+    ll = nonzero_exit_lbl.l
+    ll = _lemit(ll, new_inst(OpBranchTrue, 0, any_fail.temp, nonzero_exit_lbl.temp, "", 0))
+    ok_exit := _lnew_temp(ll)
+    ll = ok_exit.l
+    ll = _lemit(ll, new_inst(OpConst, ok_exit.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, ok_exit.temp, 1, "_aria_exit", 0))
+    ll = _lemit(ll, new_inst(OpLabel, 0, nonzero_exit_lbl.temp, 0, "", 0))
+    bad_exit := _lnew_temp(ll)
+    ll = bad_exit.l
+    ll = _lemit(ll, new_inst(OpConst, bad_exit.temp, 1, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, bad_exit.temp, 1, "_aria_exit", 0))
 
     ll = _lfinish_func(ll)
     mut new_mod := mod_set_entry(ll.module, "_main")
