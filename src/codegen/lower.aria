@@ -5994,14 +5994,14 @@ fn _lower_extern_fn(l: Lowerer, lib: str) -> Lowerer {
 
 fn _lower_bench(l: Lowerer) -> Lowerer {
     mut ll := _ladv(l)  // skip bench
-    // Benches share the test_count sequence for unique naming but are NOT registered
-    // as tests — otherwise the test runner would try to call non-existent _test_N
-    // functions where benches were emitted as _bench_N.
-    // Use funcs.len() for a collision-free bench index. test_count is skipped for
-    // benches (see below), so two benches would otherwise collide on test_count.
-    bidx := ll.module.funcs.len()
-    mut bench_name := "_bench_" + i2s(bidx)
-    mut bench_label := "bench " + i2s(bidx)
+    // Benches piggyback on the test-count indexing so both runners share one
+    // "_test_N" function-naming scheme with no collisions. The bench is flagged
+    // for the bench runner by prefixing its label with BENCH_PREFIX; the test
+    // runner filters those out. This avoids adding bench-specific arrays to
+    // IrModule and keeps the single setter chain simple.
+    bench_idx := ll.module.test_count
+    bench_name := "_test_" + i2s(bench_idx)
+    mut bench_label := "bench " + i2s(bench_idx)
     if _lk(ll) == "STRING" {
         bench_label = _lcur(ll).text
         ll = _ladv(ll)
@@ -6009,6 +6009,13 @@ fn _lower_bench(l: Lowerer) -> Lowerer {
         bench_label = _lcur(ll).text
         ll = _ladv(ll)
     }
+
+    // Register with BENCH_PREFIX so the test runner skips it and the bench
+    // runner picks it up.
+    mut new_mod := mod_add_test(ll.module, "__bench:" + bench_label)
+    new_mod = mod_add_string(new_mod, "__bench:" + bench_label)
+    ll = _lset_mod(ll, new_mod)
+
     ll = _lset_func(ll, new_ir_func(bench_name, 0, 0))
     lb := "\{"
     if _lk(ll) == lb {
@@ -6016,9 +6023,18 @@ fn _lower_bench(l: Lowerer) -> Lowerer {
     }
     ll = _lemit(ll, new_inst(OpRetVoid, 0, 0, 0, "", 0))
     ll = _lfinish_func(ll)
-    // Record bench label string (for future bench runner) but do NOT increment test_count.
-    mut new_mod := mod_add_string(ll.module, bench_label)
-    _lset_mod(ll, new_mod)
+    ll
+}
+
+// Shared predicate: is this test entry actually a bench?
+fn _is_bench_label(label: str) -> bool =
+    label.len() >= 8 && label.substring(0, 8) == "__bench:"
+
+fn _strip_bench_prefix(label: str) -> str {
+    if _is_bench_label(label) {
+        return label.substring(8, label.len())
+    }
+    label
 }
 
 // --- Lower before/after test fixtures ---
@@ -19791,6 +19807,25 @@ fn _skip_braces_l(l: Lowerer) -> Lowerer {
 
 // --- Lower assert ---
 
+// Join token text across [start, end) with single spaces. Used by assert
+// lowering to produce a readable expression string for FAIL messages.
+// Strings are quoted; everything else is the raw token text.
+fn _join_token_text(tokens: [Token], start: i64, end: i64) -> str {
+    mut out := ""
+    mut i := start
+    while i < end {
+        tok := tokens[i]
+        if i > start { out = out + " " }
+        if tok.name == "STRING" {
+            out = out + "\"" + tok.text + "\""
+        } else {
+            out = out + tok.text
+        }
+        i = i + 1
+    }
+    out
+}
+
 fn _lower_assert(l: Lowerer) -> Lowerer {
     // Capture the assert's source position BEFORE consuming `assert` so the
     // FAIL message can cite the file:line of the assertion itself, not the
@@ -19799,8 +19834,15 @@ fn _lower_assert(l: Lowerer) -> Lowerer {
     assert_line := assert_tok.line
     assert_file := l.file
     mut ll := _ladv(l)  // skip assert
+    expr_start_pos := ll.pos
     result := _lower_expr(ll)
     ll = result.l
+    expr_end_pos := ll.pos
+    // Reconstruct the expression text from its tokens. Token text preserves
+    // operators/idents but not original whitespace — join with single spaces.
+    // Keeping it flat is fine; users read it to identify *which* assertion
+    // failed, not to re-edit it.
+    expr_text := _join_token_text(ll.tokens, expr_start_pos, expr_end_pos)
     // If false, print a FAIL: marker then call exit(1). Without the print, a
     // failing assert is silent — test runners can't report which test died,
     // and callers see an exit code with no indication of why.
@@ -19819,11 +19861,19 @@ fn _lower_assert(l: Lowerer) -> Lowerer {
         test_idx = _parse_int_literal(suffix)
     }
     loc_suffix := " at " + assert_file + ":" + i2s(assert_line)
-    mut fail_msg := "FAIL: assertion failed" + loc_suffix
+    // Splice expression text between "assertion failed" and " at ..." so the
+    // FAIL line identifies *which* assertion tripped without requiring the
+    // user to cross-reference file:line. Empty expr is the defensive default.
+    expr_suffix := ""
+    mut expr_suffix_mut := expr_suffix
+    if expr_text.len() > 0 {
+        expr_suffix_mut = ": " + expr_text
+    }
+    mut fail_msg := "FAIL: assertion failed" + expr_suffix_mut + loc_suffix
     if test_idx >= 0 {
         label_idx := test_idx + 1  // test_names is 1-indexed, sentinel at 0
         if label_idx < ll.module.test_names.len() {
-            fail_msg = "FAIL: " + ll.module.test_names[label_idx] + ": assertion failed" + loc_suffix
+            fail_msg = "FAIL: " + ll.module.test_names[label_idx] + ": assertion failed" + expr_suffix_mut + loc_suffix
         }
     }
     mut fail_idx := mod_find_string(ll.module, fail_msg)
@@ -21235,7 +21285,7 @@ fn lower(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, re
 
 // Lower for test mode: compile test blocks and generate a test runner _main
 // Skips entry blocks to avoid duplicate _main (test runner generates its own)
-fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool, filter: str) -> IrModule {
+fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, parallel: bool, filter: str, format: str) -> IrModule {
     mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
     l = _scan_consts(l, index)
     l = _lower_bodies_skip_entry(l, index)
@@ -21255,8 +21305,186 @@ fn lower_for_tests(tokens: [Token], index: DeclIndex, pool: NodePool, store: Typ
     l = _lower_derives(l)
     l = _lower_mono_pass(l)
     // Generate test runner _main that calls each _test_N function
-    l = _generate_test_runner_p(l, parallel, filter)
+    l = _generate_test_runner_p(l, parallel, filter, format)
     return l.module
+}
+
+// Lower for bench mode: compile bench blocks and generate a bench runner _main.
+// Benches and tests coexist under the shared _test_N naming scheme; the bench
+// runner filters by the __bench: label prefix.
+fn lower_for_benches(tokens: [Token], index: DeclIndex, pool: NodePool, store: TypeStore, reg: TypeRegistry, treg: TraitRegistry, table: SymbolTable, file: str, filter: str) -> IrModule {
+    mut l := _new_lowerer(tokens, pool, store, reg, treg, table, file)
+    l = _scan_consts(l, index)
+    l = _lower_bodies_skip_entry(l, index)
+    l = _lower_trampolines(l)
+    l = _lower_derives(l)
+    l = _lower_mono_pass(l)
+    l = _generate_bench_runner_p(l, filter)
+    return l.module
+}
+
+// Synthesize a `_main` that runs each bench block for a fixed iteration count
+// and prints "BENCH: <label> - <ns_per_op> ns/op". Timing is best-effort (no
+// warmup, no statistical analysis) — this is the minimum useful bench runner,
+// matching what Go's testing.B did in its earliest form.
+const BENCH_ITERATIONS: i64 = 1000
+
+fn _generate_bench_runner_p(l: Lowerer, filter: str) -> Lowerer {
+    mut ll := l
+    total := ll.module.test_count
+    // Count matched benches so we can emit "no benches found" if empty.
+    mut matched := 0
+    mut si := 0
+    while si < total {
+        label_idx := si + 1
+        mut lbl := ""
+        if label_idx < ll.module.test_names.len() {
+            lbl = ll.module.test_names[label_idx]
+        }
+        if _is_bench_label(lbl) && _test_label_matches(_strip_bench_prefix(lbl), filter) {
+            matched = matched + 1
+        }
+        si = si + 1
+    }
+
+    ll = _lset_func(ll, new_ir_func("_main", 0, 0))
+
+    if matched == 0 {
+        no_res := _intern_module_str(ll, "no benches found")
+        ll = no_res.l
+        nt := _lnew_str_temp(ll)
+        ll = nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, nt.temp, no_res.temp, 16, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, nt.temp, 2, "_aria_println_str", 0))
+        ok := _lnew_temp(ll)
+        ll = ok.l
+        ll = _lemit(ll, new_inst(OpConst, ok.temp, 0, 0, "", 0))
+        ll = _lemit(ll, new_inst(OpCall, 0, ok.temp, 1, "_aria_exit", 0))
+        ll = _lfinish_func(ll)
+        new_mod_e := mod_set_entry(ll.module, "_main")
+        ll = _lset_mod(ll, new_mod_e)
+        return ll
+    }
+
+    // Per-bench: time, iterate, time, compute ns/op, print.
+    mut bi := 0
+    while bi < total {
+        label_idx := bi + 1
+        mut raw_label := ""
+        if label_idx < ll.module.test_names.len() {
+            raw_label = ll.module.test_names[label_idx]
+        }
+        if _is_bench_label(raw_label) && _test_label_matches(_strip_bench_prefix(raw_label), filter) {
+            display_label := _strip_bench_prefix(raw_label)
+            ll = _emit_bench_invocation(ll, bi, display_label)
+        }
+        bi = bi + 1
+    }
+
+    // Exit 0
+    exit_nt := _lnew_temp(ll)
+    ll = exit_nt.l
+    ll = _lemit(ll, new_inst(OpConst, exit_nt.temp, 0, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, exit_nt.temp, 1, "_aria_exit", 0))
+
+    ll = _lfinish_func(ll)
+    new_mod := mod_set_entry(ll.module, "_main")
+    _lset_mod(ll, new_mod)
+}
+
+// Emit one bench iteration + timing block. Naming follows the test-runner
+// helpers so reading the file top-to-bottom tells a single story.
+fn _emit_bench_invocation(l: Lowerer, bi: i64, display_label: str) -> Lowerer {
+    mut ll := l
+    test_fn_name := "_test_" + i2s(bi)
+
+    // start = _aria_get_time_ns()
+    start_t := _lnew_temp(ll)
+    ll = start_t.l
+    ll = _lemit(ll, new_inst(OpCall, start_t.temp, 0, 0, "_aria_get_time_ns", 0))
+
+    // Iteration loop: for i in 0..BENCH_ITERATIONS { _test_bi() }
+    idx_t := _lnew_temp(ll)
+    ll = idx_t.l
+    ll = _lemit(ll, new_inst(OpConst, idx_t.temp, 0, 0, "", 0))
+    n_t := _lnew_temp(ll)
+    ll = n_t.l
+    ll = _lemit(ll, new_inst(OpConst, n_t.temp, BENCH_ITERATIONS, 0, "", 0))
+    loop_lbl := _lnew_label(ll)
+    ll = loop_lbl.l
+    end_lbl := _lnew_label(ll)
+    ll = end_lbl.l
+    ll = _lemit(ll, new_inst(OpLabel, 0, loop_lbl.temp, 0, "", 0))
+    cmp_t := _lnew_temp(ll)
+    ll = cmp_t.l
+    ll = _lemit(ll, new_inst(OpLt, cmp_t.temp, idx_t.temp, n_t.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpBranchFalse, 0, cmp_t.temp, end_lbl.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, 0, 0, test_fn_name, 0))
+    one_t := _lnew_temp(ll)
+    ll = one_t.l
+    ll = _lemit(ll, new_inst(OpConst, one_t.temp, 1, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpAdd, idx_t.temp, idx_t.temp, one_t.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpJump, 0, loop_lbl.temp, 0, "", 0))
+    ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+
+    // end = _aria_get_time_ns(); elapsed = end - start; per_op = elapsed / N
+    end_t := _lnew_temp(ll)
+    ll = end_t.l
+    ll = _lemit(ll, new_inst(OpCall, end_t.temp, 0, 0, "_aria_get_time_ns", 0))
+    elapsed_t := _lnew_temp(ll)
+    ll = elapsed_t.l
+    ll = _lemit(ll, new_inst(OpSub, elapsed_t.temp, end_t.temp, start_t.temp, "", 0))
+    per_op_t := _lnew_temp(ll)
+    ll = per_op_t.l
+    ll = _lemit(ll, new_inst(OpDiv, per_op_t.temp, elapsed_t.temp, n_t.temp, "", 0))
+
+    // Print "BENCH: <label> - <per_op> ns/op"
+    prefix_res := _intern_module_str(ll, "BENCH: ")
+    ll = prefix_res.l
+    prefix_nt := _lnew_str_temp(ll)
+    ll = prefix_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, prefix_nt.temp, prefix_res.temp, 7, "", 0))
+
+    label_res := _intern_module_str(ll, display_label)
+    ll = label_res.l
+    label_nt := _lnew_str_temp(ll)
+    ll = label_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, label_nt.temp, label_res.temp, display_label.len(), "", 0))
+
+    cat1 := _lnew_str_temp(ll)
+    ll = cat1.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat1.temp, prefix_nt.temp, label_nt.temp, "", 0))
+
+    sep_res := _intern_module_str(ll, " - ")
+    ll = sep_res.l
+    sep_nt := _lnew_str_temp(ll)
+    ll = sep_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, sep_nt.temp, sep_res.temp, 3, "", 0))
+
+    cat2 := _lnew_str_temp(ll)
+    ll = cat2.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat2.temp, cat1.temp, sep_nt.temp, "", 0))
+
+    per_op_str := _lnew_str_temp(ll)
+    ll = per_op_str.l
+    ll = _lemit(ll, new_inst(OpIntToStr, per_op_str.temp, per_op_t.temp, 0, "", 0))
+
+    cat3 := _lnew_str_temp(ll)
+    ll = cat3.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cat2.temp, per_op_str.temp, "", 0))
+
+    suffix_res := _intern_module_str(ll, " ns/op")
+    ll = suffix_res.l
+    suffix_nt := _lnew_str_temp(ll)
+    ll = suffix_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, suffix_nt.temp, suffix_res.temp, 6, "", 0))
+
+    cat4 := _lnew_str_temp(ll)
+    ll = cat4.l
+    ll = _lemit(ll, new_inst(OpStrConcat, cat4.temp, cat3.temp, suffix_nt.temp, "", 0))
+
+    ll = _lemit(ll, new_inst(OpCall, 0, cat4.temp, 2, "_aria_println_str", 0))
+    ll
 }
 
 // Case-sensitive substring search, used at IR-build time to apply --filter.
@@ -21310,24 +21538,50 @@ fn _emit_pass_line(l: Lowerer, label_text: str, label_str_idx: i64) -> Lowerer {
     ll
 }
 
-// Emit the runtime summary line "<pass> passed, <fail> failed" using the
-// runtime counters. Values are read from temps, converted via OpIntToStr,
-// and chained with OpStrConcat.
-fn _emit_summary_line(l: Lowerer, pass_t: i64, fail_t: i64) -> Lowerer {
+// Emit the runtime summary line. In text mode: "<pass> passed, <fail> failed".
+// In JSON mode: {"summary":{"passed":<pass>,"failed":<fail>}}. Values come
+// from runtime counters via OpIntToStr + OpStrConcat.
+fn _emit_summary_line(l: Lowerer, pass_t: i64, fail_t: i64, json_mode: bool) -> Lowerer {
     mut ll := l
+    // Prefix + middle + suffix are the three literal fragments surrounding
+    // the two runtime counter values. Choosing format-specific text keeps
+    // the concat chain identical across modes.
+    mut prefix := ""
+    mut middle := " passed, "
+    mut suffix := " failed"
+    if json_mode {
+        prefix = "\{\"summary\":\{\"passed\":"
+        middle = ",\"failed\":"
+        suffix = "\}\}"
+    }
+
     p_str := _lnew_str_temp(ll)
     ll = p_str.l
     ll = _lemit(ll, new_inst(OpIntToStr, p_str.temp, pass_t, 0, "", 0))
 
-    lit1_res := _intern_module_str(ll, " passed, ")
-    ll = lit1_res.l
-    lit1_nt := _lnew_str_temp(ll)
-    ll = lit1_nt.l
-    ll = _lemit(ll, new_inst(OpConstStr, lit1_nt.temp, lit1_res.temp, 9, "", 0))
+    // Optional prefix (JSON wrapping)
+    mut head_temp := p_str.temp
+    if prefix.len() > 0 {
+        pref_res := _intern_module_str(ll, prefix)
+        ll = pref_res.l
+        pref_nt := _lnew_str_temp(ll)
+        ll = pref_nt.l
+        ll = _lemit(ll, new_inst(OpConstStr, pref_nt.temp, pref_res.temp, prefix.len(), "", 0))
+        head := _lnew_str_temp(ll)
+        ll = head.l
+        ll = _lemit(ll, new_inst(OpStrConcat, head.temp, pref_nt.temp, p_str.temp, "", 0))
+        head_temp = head.temp
+    }
+
+    mid_res := _intern_module_str(ll, middle)
+    ll = mid_res.l
+    mid_nt := _lnew_str_temp(ll)
+    ll = mid_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, mid_nt.temp, mid_res.temp, middle.len(), "", 0))
 
     cat1 := _lnew_str_temp(ll)
     ll = cat1.l
-    ll = _lemit(ll, new_inst(OpStrConcat, cat1.temp, p_str.temp, lit1_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpStrConcat, cat1.temp, head_temp, mid_nt.temp, "", 0))
 
     f_str := _lnew_str_temp(ll)
     ll = f_str.l
@@ -21337,17 +21591,32 @@ fn _emit_summary_line(l: Lowerer, pass_t: i64, fail_t: i64) -> Lowerer {
     ll = cat2.l
     ll = _lemit(ll, new_inst(OpStrConcat, cat2.temp, cat1.temp, f_str.temp, "", 0))
 
-    lit2_res := _intern_module_str(ll, " failed")
-    ll = lit2_res.l
-    lit2_nt := _lnew_str_temp(ll)
-    ll = lit2_nt.l
-    ll = _lemit(ll, new_inst(OpConstStr, lit2_nt.temp, lit2_res.temp, 7, "", 0))
+    suf_res := _intern_module_str(ll, suffix)
+    ll = suf_res.l
+    suf_nt := _lnew_str_temp(ll)
+    ll = suf_nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, suf_nt.temp, suf_res.temp, suffix.len(), "", 0))
 
     cat3 := _lnew_str_temp(ll)
     ll = cat3.l
-    ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cat2.temp, lit2_nt.temp, "", 0))
+    ll = _lemit(ll, new_inst(OpStrConcat, cat3.temp, cat2.temp, suf_nt.temp, "", 0))
 
     ll = _lemit(ll, new_inst(OpCall, 0, cat3.temp, 2, "_aria_println_str", 0))
+    ll
+}
+
+// Emit a single JSON result object: {"name":"<label>","status":"<status>"}.
+// Label text is interpolated at compile time — test labels in the spec corpus
+// don't contain backslashes or quotes, so we leave escaping as a known gap.
+fn _emit_json_result(l: Lowerer, label_text: str, status: str) -> Lowerer {
+    mut ll := l
+    line := "\{\"name\":\"" + label_text + "\",\"status\":\"" + status + "\"\}"
+    res := _intern_module_str(ll, line)
+    ll = res.l
+    nt := _lnew_str_temp(ll)
+    ll = nt.l
+    ll = _lemit(ll, new_inst(OpConstStr, nt.temp, res.temp, line.len(), "", 0))
+    ll = _lemit(ll, new_inst(OpCall, 0, nt.temp, 2, "_aria_println_str", 0))
     ll
 }
 
@@ -21357,7 +21626,7 @@ fn _emit_summary_line(l: Lowerer, pass_t: i64, fail_t: i64) -> Lowerer {
 // prints its own FAIL line (via _lower_assert) then exits 1, which the
 // parent treats as a fail-counter increment. This gives per-test isolation:
 // one bad assert no longer kills the whole runner.
-fn _emit_test_invocation(l: Lowerer, ti: i64, label_text: str, label_str_idx: i64, pass_t: i64, fail_t: i64) -> Lowerer {
+fn _emit_test_invocation(l: Lowerer, ti: i64, label_text: str, label_str_idx: i64, pass_t: i64, fail_t: i64, json_mode: bool) -> Lowerer {
     mut ll := l
     test_fn_name := "_test_" + i2s(ti)
 
@@ -21394,16 +21663,24 @@ fn _emit_test_invocation(l: Lowerer, ti: i64, label_text: str, label_str_idx: i6
     ll = _lemit(ll, new_inst(OpNeq, is_fail.temp, status_nt.temp, zero_nt.temp, "", 0))
     ll = _lemit(ll, new_inst(OpBranchTrue, 0, is_fail.temp, fail_lbl.temp, "", 0))
 
-    // Success: print PASS and increment pass counter
-    ll = _emit_pass_line(ll, label_text, label_str_idx)
+    // Success: emit per-test output, increment pass counter.
+    if json_mode {
+        ll = _emit_json_result(ll, label_text, "passed")
+    } else {
+        ll = _emit_pass_line(ll, label_text, label_str_idx)
+    }
     one_nt := _lnew_temp(ll)
     ll = one_nt.l
     ll = _lemit(ll, new_inst(OpConst, one_nt.temp, 1, 0, "", 0))
     ll = _lemit(ll, new_inst(OpAdd, pass_t, pass_t, one_nt.temp, "", 0))
     ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
 
-    // Fail path: increment fail counter (child already printed the FAIL line).
+    // Fail path: emit per-test JSON (text mode: child already printed FAIL),
+    // increment fail counter.
     ll = _lemit(ll, new_inst(OpLabel, 0, fail_lbl.temp, 0, "", 0))
+    if json_mode {
+        ll = _emit_json_result(ll, label_text, "failed")
+    }
     one_nt2 := _lnew_temp(ll)
     ll = one_nt2.l
     ll = _lemit(ll, new_inst(OpConst, one_nt2.temp, 1, 0, "", 0))
@@ -21432,10 +21709,12 @@ fn _emit_test_invocation(l: Lowerer, ti: i64, label_text: str, label_str_idx: i6
     ll
 }
 
-fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
+fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str, format: str) -> Lowerer {
+    json_mode := format == "json"
     mut ll := l
     total_tests := ll.module.test_count
     // Count how many tests match the filter (applied at IR-build time).
+    // Bench entries are skipped — the bench runner owns them.
     mut matched_count := 0
     mut mi := 0
     while mi < total_tests {
@@ -21444,7 +21723,9 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
         if label_idx < ll.module.test_names.len() {
             label = ll.module.test_names[label_idx]
         }
-        if _test_label_matches(label, filter) { matched_count = matched_count + 1 }
+        if _is_bench_label(label) == false && _test_label_matches(label, filter) {
+            matched_count = matched_count + 1
+        }
         mi = mi + 1
     }
     test_count := matched_count
@@ -21553,15 +21834,15 @@ fn _generate_test_runner_p(l: Lowerer, parallel: bool, filter: str) -> Lowerer {
         if test_label_idx < ll.module.test_names.len() {
             current_label = ll.module.test_names[test_label_idx]
         }
-        if _test_label_matches(current_label, filter) {
+        if _is_bench_label(current_label) == false && _test_label_matches(current_label, filter) {
             label_str_idx := mod_find_string(ll.module, current_label)
-            ll = _emit_test_invocation(ll, ti, current_label, label_str_idx, pass_t.temp, fail_t.temp)
+            ll = _emit_test_invocation(ll, ti, current_label, label_str_idx, pass_t.temp, fail_t.temp, json_mode)
         }
         ti = ti + 1
     }
 
-    // Summary: "<pass> passed, <fail> failed" from runtime counters.
-    ll = _emit_summary_line(ll, pass_t.temp, fail_t.temp)
+    // Summary: runtime-valued "<pass> passed, <fail> failed" or JSON equivalent.
+    ll = _emit_summary_line(ll, pass_t.temp, fail_t.temp, json_mode)
 
     // Exit: 1 if any test failed, 0 otherwise.
     zero_t := _lnew_temp(ll)

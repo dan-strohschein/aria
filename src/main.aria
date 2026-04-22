@@ -924,6 +924,9 @@ fn run_run(raw_files: [str], format: str, target: str, runtime_path: str, output
 }
 
 fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool, filter: str) -> i64 with [Io, Fs] {
+    // `format` is reused for both diagnostic output AND test-runner output
+    // format. Valid values: "text" (default, human-readable PASS/FAIL) or
+    // "json" (JSONL: one JSON object per test + summary line).
     user_files := expand_files(raw_files)
     if user_files.len() <= 1 {
         println("error: no input files")
@@ -945,7 +948,7 @@ fn run_test(raw_files: [str], format: str, runtime_path: str, parallel: bool, fi
     output = output + "_test_runner"
 
     // Compile with test runner
-    diags := generate_tests_from_sources(files, output, rt, parallel, filter)
+    diags := generate_tests_from_sources(files, output, rt, parallel, filter, format)
     if bag_has_errors(diags) {
         _print_diagnostics(diags, format)
         return 1
