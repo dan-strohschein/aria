@@ -3359,9 +3359,21 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                                 mut sp_ptypes := [0]
                                 mut ppi := 1
                                 while ppi < b_msig.param_types.len() {
-                                    sub := _substitute_typevars(ll, b_msig.param_types[ppi], bindings.names, bindings.tids)
-                                    ll = sub.l
-                                    sp_ptypes = sp_ptypes.append(sub.temp)
+                                    mut spt := 0
+                                    if ppi == 1 {
+                                        // self: the generic base struct (e.g. `Box`) carries
+                                        // TypeVar fields; _substitute_typevars doesn't walk
+                                        // struct kinds. Use the concrete receiver tid
+                                        // (e.g. `Box_str`) so field access in the mono body
+                                        // resolves the specialized field types — critical
+                                        // for str-typed T (2-slot packing at lower.aria:3674).
+                                        spt = b_obj_type
+                                    } else {
+                                        sub := _substitute_typevars(ll, b_msig.param_types[ppi], bindings.names, bindings.tids)
+                                        ll = sub.l
+                                        spt = sub.temp
+                                    }
+                                    sp_ptypes = sp_ptypes.append(spt)
                                     ppi = ppi + 1
                                 }
                                 sp_ret_r := _substitute_typevars(ll, b_msig.return_type, bindings.names, bindings.tids)

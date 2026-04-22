@@ -3398,6 +3398,23 @@ fn _check_expr_or_binding(c: Checker) -> CE {
                     cc = _cadv(cc)  // skip =
                     result := _check_expr_full(cc)
                     cc = result.c
+                    // Type-mismatch check (mirrors _check_mut_binding). Skip
+                    // when either side is a TypeVar — generic-body templates
+                    // are validated per-specialization during monomorphization.
+                    mut ann_is_tv := false
+                    if at.type_id > 0 && at.type_id < cc.store.types.len() {
+                        ati := store_get(cc.store, at.type_id)
+                        if type_kind_name(ati.kind) == "TypeVar" { ann_is_tv = true }
+                    }
+                    mut res_is_tv := false
+                    if result.type_id > 0 && result.type_id < cc.store.types.len() {
+                        rti := store_get(cc.store, result.type_id)
+                        if type_kind_name(rti.kind) == "TypeVar" { res_is_tv = true }
+                    }
+                    if result.type_id != TY_UNKNOWN && ann_is_tv == false && res_is_tv == false && _is_binding_compat(cc, result.type_id, at.type_id) == false {
+                        q := _q()
+                        cc = _cerror(cc, E0100, "type mismatch in binding: expected " + q + format_type(cc.store, at.type_id) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
+                    }
                     cc = _env_add(cc, name, at.type_id, 0)
                     return CE{c: cc, type_id: TY_UNIT}
                 }
@@ -5065,6 +5082,65 @@ fn _csubstitute_typevars(c: Checker, tid: i64, names: [str], tids: [i64]) -> _CS
     }
     _CSub{c: cc, type_id: tid}
 }
+
+// Binding-compatibility check. Wraps `is_assignable` with the literal-
+// coercion and newtype-unwrap allowances that let-bindings rely on.
+//
+// Background: integer literals type as TY_I64 and float literals as TY_F64
+// (see _check_primary). Strict is_assignable would reject `x: i8 = 127` or
+// `y: f32 = 3.14` — but the spec treats numeric literals as untyped-at-the-
+// source and coercing into the annotation. Newtypes/aliases wrap an
+// underlying primitive; assigning a literal into `UserId` (newtype over
+// i64) is likewise intentionally permitted.
+//
+// Applied from binding sites (let / mut let / let-less entry bindings).
+// Keep `is_assignable` strict for other callers (fn args, fn return, etc.)
+// so those remain tight per "no implicit conversions".
+fn _is_binding_compat_r(c: Checker, src: i64, dst: i64) -> bool {
+    if is_assignable(c.store, src, dst) { return true }
+    // Int-literal coercion: src TY_I64 fits any sized int/uint annotation.
+    if src == TY_I64 {
+        if dst == TY_I32 || dst == TY_I16 || dst == TY_I8 { return true }
+        if dst == TY_U64 || dst == TY_U32 || dst == TY_U16 || dst == TY_U8 { return true }
+    }
+    // Float-literal coercion.
+    if src == TY_F64 && dst == TY_F32 { return true }
+    // Newtype/alias on dst: the store entry for `type UserId = i64` is a
+    // Named with type_id=0; the underlying lives on the StructDef's
+    // "value" field (see _mk_newtype_def). Aliases registered via
+    // _register_alias_decl carry the underlying in type_id directly with
+    // type_id2=1. Handle both.
+    if dst > 0 && dst < c.store.types.len() {
+        di := c.store.types[dst]
+        if type_kind_name(di.kind) == "Named" {
+            if di.type_id > 0 {
+                if _is_binding_compat_r(c, src, di.type_id) { return true }
+            } else {
+                sdef := reg_find_struct(c.registry, di.name)
+                if sdef.name != "" && sdef.is_sum == false && sdef.fields.len() >= 2 {
+                    if _is_binding_compat_r(c, src, sdef.fields[1].type_id) { return true }
+                }
+            }
+        }
+    }
+    // Symmetric newtype on src.
+    if src > 0 && src < c.store.types.len() {
+        si := c.store.types[src]
+        if type_kind_name(si.kind) == "Named" {
+            if si.type_id > 0 {
+                if _is_binding_compat_r(c, si.type_id, dst) { return true }
+            } else {
+                sdef := reg_find_struct(c.registry, si.name)
+                if sdef.name != "" && sdef.is_sum == false && sdef.fields.len() >= 2 {
+                    if _is_binding_compat_r(c, sdef.fields[1].type_id, dst) { return true }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn _is_binding_compat(c: Checker, src: i64, dst: i64) -> bool = _is_binding_compat_r(c, src, dst)
 
 fn _substitute_self_tv(store: TypeStore, ret_tid: i64, recv_tid: i64) -> i64 {
     if ret_tid <= 0 || ret_tid >= store.types.len() { return ret_tid }

@@ -1,0 +1,13 @@
+// test-support: true
+// (Expected to fail build with E0100. Verified manually; the runner has no
+// expect-error directive so we mark as support to keep the suite green.)
+// Caveat B: typed let-binding (with or without `let` keyword) must detect
+// type mismatches. Before fix: `bad: [i64] = "hello"` silently type-punned
+// the LHS to [i64] without verification.
+
+mod main
+
+entry {
+    bad: [i64] = "hello"    // E0100: expected [i64], got str
+    println(i2s(bad.len()))
+}

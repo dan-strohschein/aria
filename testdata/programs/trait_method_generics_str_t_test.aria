@@ -1,0 +1,27 @@
+// Phase 4.6 caveat A: str-typed struct-level T must survive closure marshaling.
+// Before fix: `Box[str]{val:"hi"}.map(fn(s:str)->str{s+"!"})` lost `s`'s length
+// because the mono body's self temp was tagged with the generic base `Box`
+// (val: TypeVar T) instead of the specialized `Box_str` (val: str) — so the
+// field-access 2-slot path at lower.aria was skipped.
+trait Container[T] { fn map[U](self, f: fn(T) -> U) -> [U] }
+struct Box[T] { val: T }
+impl[T] Container[T] for Box[T] {
+    fn map[U](self, f: fn(T) -> U) -> [U] = [f(self.val)]
+}
+entry {
+    b := Box[str]{val: "hi"}
+    m := b.map(fn(s: str) -> str { s + "!" })
+    assert m.len() == 1
+    assert m[0] == "hi!"
+
+    b2 := Box[str]{val: "hello"}
+    m2 := b2.map(fn(s: str) -> i64 { s.len() })
+    assert m2[0] == 5
+
+    // Regression guard: non-str T still works.
+    b3 := Box[i64]{val: 21}
+    m3 := b3.map(fn(x: i64) -> str { "v=" + i2s(x) })
+    assert m3[0] == "v=21"
+
+    println("ok")
+}
