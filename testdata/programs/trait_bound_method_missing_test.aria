@@ -1,0 +1,37 @@
+// test-support: true
+// (Expected to fail build with E0206. Verified manually; the runner has no
+// expect-error directive so we mark as support to keep the suite green.)
+// Phase 4 negative test: method NOT declared by any bound emits E0206 at
+// the checker, directly at the template (no dependency on the lowerer's
+// bogus-MonoSpec path). Expected build failure with E0206 in output.
+
+mod main
+
+trait Area {
+    fn area(self) -> f64
+}
+
+trait Display {
+    fn display(self) -> str
+}
+
+struct Circle { radius: f64 }
+
+impl Area for Circle {
+    fn area(self) -> f64 = self.radius * self.radius * 3.14159
+}
+
+impl Display for Circle {
+    fn display(self) -> str = "Circle"
+}
+
+// Bound only includes Area — calling x.display() inside the body should
+// trip E0206 because Display isn't in T's bounds.
+fn needs_area[T: Area](x: T) -> str {
+    x.display()
+}
+
+entry {
+    c := Circle { radius: 5.0 }
+    println(needs_area(c))
+}

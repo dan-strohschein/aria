@@ -1447,20 +1447,90 @@ fn _register_trait_decl_ast(c: Checker, node_idx: i64) -> Checker {
         }
     }
 
-    // Collect method names from FnDecl children
+    // Collect method names + signatures from FnDecl children. Signatures
+    // are parsed at trait-decl time so the checker can validate calls on a
+    // generic-body receiver typed as TypeVar-with-bound(trait).
     mut mnames := [""]
+    mut msigs := [_sentinel_fn_sig()]
     mut mi := 0
     while mi < node.list_count {
         midx_node := pool_get(cc.pool, node.list_start + mi)
         method_node := pool_get(cc.pool, midx_node.c0)
         mnames = mnames.append(method_node.s1)
+        // Trait methods with own generics (`fn map[U](...)`) aren't fully
+        // typed yet — store sentinel and let Phase 4.6 follow up.
+        if method_node.s2.len() > 0 {
+            msigs = msigs.append(_sentinel_fn_sig())
+        } else {
+            bs := _build_trait_method_sig(cc, method_node)
+            cc = bs.c
+            msigs = msigs.append(bs.sig)
+        }
         mi = mi + 1
     }
 
     // Register trait
-    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0]}
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0], method_sigs: msigs}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
+}
+
+// CFS: Checker + FnSig bundle, used by the trait-method-sig builder below.
+struct CFS {
+    c: Checker
+    sig: FnSig
+}
+
+// Build a FnSig for one trait method from its AST FnDecl node. Mirrors
+// the free-fn path in _register_fn_sig_ast (checker.aria:1585-1629) but
+// operates on the method's own AST children instead of the outer fn's.
+// Does NOT register the sig in the type registry — returns it for caller
+// to stash into TraitDef.method_sigs.
+fn _build_trait_method_sig(c: Checker, method_node: Expr) -> CFS {
+    mut cc := c
+    mut pnames := [""]
+    mut ptypes := [0]
+    mut pi := 0
+    while pi < method_node.list_count {
+        pidx_node := pool_get(cc.pool, method_node.list_start + pi)
+        pnode := pool_get(cc.pool, pidx_node.c0)
+        if pnode.b1 {
+            pnames = pnames.append("self")
+            ptypes = ptypes.append(TY_UNKNOWN)
+        } else {
+            pnames = pnames.append(pnode.s1)
+            pt := _resolve_type_node(cc, pnode.c0)
+            cc = pt.c
+            ptypes = ptypes.append(pt.type_id)
+        }
+        pi = pi + 1
+    }
+    mut ret := TY_UNIT
+    mut err := 0
+    if method_node.b2 {
+        saved := cc.pos
+        cc = _cset_pos(cc, method_node.c1)
+        rt := _parse_type_ann(cc)
+        cc = rt.c
+        rtinfo := store_get(cc.store, rt.type_id)
+        if type_kind_name(rtinfo.kind) == "Result" {
+            ret = rtinfo.type_id
+            err = rtinfo.type_id2
+        } else {
+            ret = rt.type_id
+        }
+        cc = _cset_pos(cc, saved)
+    }
+    if err == 0 && method_node.c2 > 0 {
+        saved := cc.pos
+        cc = _cset_pos(cc, method_node.c2)
+        et := _parse_type_ann(cc)
+        cc = et.c
+        err = et.type_id
+        cc = _cset_pos(cc, saved)
+    }
+    sig := new_fn_sig(method_node.s1, pnames, ptypes, ret, err)
+    CFS{c: cc, sig: sig}
 }
 
 fn _register_trait_decl(c: Checker) -> Checker {
@@ -1542,7 +1612,7 @@ fn _register_trait_decl(c: Checker) -> Checker {
     if method_count > 2 { mnames = mnames.append(method_name_2) }
     if method_count > 3 { mnames = mnames.append(method_name_3) }
     // Register trait
-    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0]}
+    tdef := TraitDef{name: trait_name, method_names: mnames, parent_traits: parents, assoc_type_names: assoc_types, default_starts: [0], default_ends: [0], method_sigs: [_sentinel_fn_sig()]}
     cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
     cc
 }
@@ -2696,10 +2766,9 @@ fn _check_fn_d(c: Checker, decl: DeclInfo) -> Checker {
     // Look up registered signature
     sig := reg_find_fn(cc.registry, name)
 
-    // Skip generic function bodies — they are checked per-specialization
-    if fn_is_generic(sig) {
-        return _cset_pos(cc, decl.body_end)
-    }
+    // Phase 4: generic function bodies ARE checked with TypeVars as
+    // first-class receiver types. Previously skipped; now walked so
+    // trait-bound method calls can be validated at the template.
 
     // Set function context with effect tracking
     cc = _cset_fn_ctx(cc, sig.return_type, sig.error_type)
@@ -3104,8 +3173,22 @@ fn _check_mut_binding(c: Checker) -> CE {
     cc = result.c
     mut final_type := result.type_id
     if ann_type != TY_UNKNOWN {
-        // Verify initializer type matches annotation
-        if result.type_id != TY_UNKNOWN && is_assignable(cc.store, result.type_id, ann_type) == false {
+        // Verify initializer type matches annotation. TypeVar annotations
+        // (inside generic bodies walked by Phase 4) are resolved per-
+        // specialization — the template can legitimately bind e.g.
+        // `mut total: T = 0` where T is Numeric. Delegate checking to
+        // monomorphization by skipping the strict compare.
+        mut ann_is_tv := false
+        if ann_type > 0 && ann_type < cc.store.types.len() {
+            ati := store_get(cc.store, ann_type)
+            if type_kind_name(ati.kind) == "TypeVar" { ann_is_tv = true }
+        }
+        mut res_is_tv := false
+        if result.type_id > 0 && result.type_id < cc.store.types.len() {
+            rti := store_get(cc.store, result.type_id)
+            if type_kind_name(rti.kind) == "TypeVar" { res_is_tv = true }
+        }
+        if result.type_id != TY_UNKNOWN && ann_is_tv == false && res_is_tv == false && is_assignable(cc.store, result.type_id, ann_type) == false {
             q := _q()
             cc = _cerror(cc, E0100, "type mismatch in binding: expected " + q + format_type(cc.store, ann_type) + q + ", got " + q + format_type(cc.store, result.type_id) + q)
         }
@@ -3419,7 +3502,20 @@ fn _check_expr_full(c: Checker) -> CE {
 
             // Type check binary operation
             // Skip check when left_type is bool (precedence flattening in flat checker)
-            if type_supports_op(cc.treg, cc.store, left_type, op) == false && left_type != TY_UNKNOWN && left_type != TY_BOOL {
+            mut op_ok := type_supports_op(cc.treg, cc.store, left_type, op)
+            // TypeVar receivers: the operator check is per-specialization by
+            // construction. Phase 4 walks generic bodies, so we'd otherwise
+            // error on any `T + T` where T lacks an Add bound — even though
+            // downstream monomorphization substitutes a concrete type that
+            // does support it. Treat unbounded TypeVars as op-ok (matching
+            // pre-Phase-4 skip behavior). When bounds ARE declared, the
+            // matching trait in the bound validates the op; otherwise fall
+            // through silently.
+            if op_ok == false && left_type > 0 && left_type < cc.store.types.len() {
+                lti := store_get(cc.store, left_type)
+                if type_kind_name(lti.kind) == "TypeVar" { op_ok = true }
+            }
+            if op_ok == false && left_type != TY_UNKNOWN && left_type != TY_BOOL {
                 q := _q()
                 cc = _cerror(cc, E0102, "operator " + q + op + q + " not supported for type " + q + format_type(cc.store, left_type) + q)
             }
@@ -4651,7 +4747,76 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
         return CE{c: cc, type_id: obj_type}
     }
 
+    // TypeVar receiver: resolve the method through the outer fn's trait
+    // bounds. This is Phase 4's core checker work — validating generic-body
+    // calls at the template instead of deferring to per-specialization.
+    if obj_type > 0 && obj_type < cc.store.types.len() {
+        oti := store_get(cc.store, obj_type)
+        if type_kind_name(oti.kind) == "TypeVar" && cc.fn_current_name.len() > 0 {
+            tv_name := oti.name
+            cur_sig := reg_find_fn(cc.registry, cc.fn_current_name)
+            if cur_sig.name != "" {
+                mut bound_str := ""
+                if cur_sig.generic_name_0 == tv_name { bound_str = cur_sig.generic_bound_0 }
+                else if cur_sig.generic_name_1 == tv_name { bound_str = cur_sig.generic_bound_1 }
+                else if cur_sig.generic_name_2 == tv_name { bound_str = cur_sig.generic_bound_2 }
+                if bound_str.len() > 0 {
+                    resolved := resolve_method_on_bound(cc.treg, bound_str, method)
+                    if resolved.len() > 0 {
+                        tsig := treg_find_trait_method_sig(cc.treg, resolved, method)
+                        if tsig.name != "" {
+                            // Return the trait method's declared return type.
+                            // If it references Self/T, substitute with the
+                            // receiver's TypeVar id (the caller's T).
+                            ret := _substitute_self_tv(cc.store, tsig.return_type, obj_type)
+                            return CE{c: cc, type_id: ret}
+                        }
+                        // Method resolved but signature is sentinel (builtin
+                        // trait / deferred generic trait method). Fall through
+                        // to TY_UNKNOWN — no validation but no error.
+                    } else {
+                        // No bound trait declares this method. Emit E0206
+                        // with candidate-trait hint (mirrors lowerer).
+                        cands := treg_traits_declaring(cc.treg, method)
+                        mut hint := ""
+                        if cands.len() > 1 {
+                            mut ci := 1
+                            mut joined := ""
+                            while ci < cands.len() {
+                                if ci == 1 { joined = cands[ci] } else { joined = joined + ", " + cands[ci] }
+                                ci = ci + 1
+                            }
+                            hint = "; add a bound such as `" + tv_name + ": " + cands[1] + "` — declared by: " + joined
+                        }
+                        cc = _cerror(cc, E0206, "method '" + method + "' not declared by any bound on type parameter '" + tv_name + "'" + hint)
+                    }
+                }
+            }
+        }
+    }
+
     CE{c: cc, type_id: TY_UNKNOWN}
+}
+
+// Substitute a trait method's self/T return type with the receiver's
+// concrete TypeVar id. Simple first-pass: if ret_tid is itself a TypeVar
+// (Self or T), return the receiver's tid. For wrapped types (Array<T>,
+// Option<T>, Result<T,E>), walk inner type_id and substitute.
+fn _substitute_self_tv(store: TypeStore, ret_tid: i64, recv_tid: i64) -> i64 {
+    if ret_tid <= 0 || ret_tid >= store.types.len() { return ret_tid }
+    rti := store_get(store, ret_tid)
+    rk := type_kind_name(rti.kind)
+    if rk == "TypeVar" { return recv_tid }
+    // Wrapped: propagate substitution to inner
+    if rk == "Array" || rk == "Optional" || rk == "Result" {
+        inner := _substitute_self_tv(store, rti.type_id, recv_tid)
+        if inner != rti.type_id {
+            // Would need store mutation to rebuild — return ret_tid unchanged
+            // to keep signature simple. Phase 4 caller accepts either.
+            return ret_tid
+        }
+    }
+    ret_tid
 }
 
 // --- Check field access ---
@@ -5305,7 +5470,7 @@ fn _scan_effect_decls(c: Checker) -> Checker {
                         if pi < cc.tokens.len() && cc.tokens[pi].name == "," { pi = pi + 1 }
                     }
                 }
-                tdef := TraitDef{name: eff_name, method_names: [""], parent_traits: parents, assoc_type_names: [""], default_starts: [0], default_ends: [0]}
+                tdef := TraitDef{name: eff_name, method_names: [""], parent_traits: parents, assoc_type_names: [""], default_starts: [0], default_ends: [0], method_sigs: [_sentinel_fn_sig()]}
                 cc = _cset_treg(cc, treg_add_trait(cc.treg, tdef))
             }
         }

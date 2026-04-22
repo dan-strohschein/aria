@@ -1,0 +1,45 @@
+// Phase 4 positive test: trait-bound method call in a generic body
+// type-checks (checker walks the template, resolves x.area() through the
+// Area bound, and returns the declared f64 return type).
+
+mod main
+
+trait Area {
+    fn area(self) -> f64
+}
+
+trait Perimeter {
+    fn perimeter(self) -> f64
+}
+
+struct Circle { radius: f64 }
+
+impl Area for Circle {
+    fn area(self) -> f64 = self.radius * self.radius * 3.14159
+}
+
+impl Perimeter for Circle {
+    fn perimeter(self) -> f64 = self.radius * 2.0 * 3.14159
+}
+
+struct Rectangle { w: f64, h: f64 }
+
+impl Area for Rectangle {
+    fn area(self) -> f64 = self.w * self.h
+}
+
+impl Perimeter for Rectangle {
+    fn perimeter(self) -> f64 = self.w * 2.0 + self.h * 2.0
+}
+
+fn total[T: Area + Perimeter](shape: T) -> f64 {
+    shape.area() + shape.perimeter()
+}
+
+entry {
+    c := Circle { radius: 5.0 }
+    r := Rectangle { w: 3.0, h: 4.0 }
+    assert total(c) > 0.0
+    assert total(r) == 12.0 + 14.0
+    println("pass")
+}
