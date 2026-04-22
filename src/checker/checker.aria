@@ -4758,14 +4758,67 @@ fn _check_generic_call(c: Checker, sig: FnSig) -> CE {
 fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
     mut cc := _cadv(c)  // skip (
     cc = _cskip_nl(cc)
+    mut arg_types := [0]
     while _ck2(cc) != ")" && _ck2(cc) != "EOF" {
         cc = _cskip_nl(cc)
         result := _check_expr_full(cc)
         cc = result.c
+        arg_types = arg_types.append(result.type_id)
         cc = _cskip_nl(cc)
         if _ck2(cc) == "," { cc = _cadv(cc) }
     }
     if _ck2(cc) == ")" { cc = _cadv(cc) }
+
+    // User-impl method probe: if the receiver type is a registered struct and
+    // a matching `<StructName>_<method>` FnSig exists, dispatch to it for the
+    // return type. This handles trait-generic impl methods (e.g. `fn map[U]`
+    // on `impl[T] Container[T] for Box[T]`) — without this probe, the builtin
+    // array-method short-circuits below would return `obj_type` (Box) instead
+    // of the substituted trait return type (`[U]`). Runtime dispatch already
+    // lands at the specialized impl; this keeps the checker's type for `m`
+    // in sync.
+    if obj_type > 0 {
+        mut recv_name := ""
+        if obj_type >= TY_STRUCT_BASE {
+            idx := obj_type - TY_STRUCT_BASE + 1
+            if idx > 0 && idx < cc.registry.struct_defs.len() {
+                recv_name = cc.registry.struct_defs[idx].name
+            }
+        }
+        if recv_name != "" {
+            mut probe := recv_name + "_" + method
+            mut usig := reg_find_fn(cc.registry, probe)
+            if usig.name == "" {
+                // Fallback: strip trailing "_TypeArg" suffixes from generic
+                // struct specialization (e.g. Box_i64 -> Box) to find the
+                // base-generic method registration.
+                mut base := recv_name
+                mut k := base.len() - 1
+                while k > 0 {
+                    if base.charAt(k) == "_" { base = base.substring(0, k); k = 0 } else { k = k - 1 }
+                }
+                if base != recv_name {
+                    probe = base + "_" + method
+                    usig = reg_find_fn(cc.registry, probe)
+                }
+            }
+            if usig.name != "" {
+                // Build param-types prepended with self=obj_type so _extract
+                // sees the same shape as the runtime dispatch.
+                mut pt_plus := [0]
+                pt_plus = pt_plus.append(obj_type)
+                mut api := 1
+                while api < arg_types.len() {
+                    pt_plus = pt_plus.append(arg_types[api])
+                    api = api + 1
+                }
+                bindings := _cresolve_generic_bindings(cc.store, cc.registry, usig, pt_plus)
+                sub_r := _csubstitute_typevars(cc, usig.return_type, bindings.names, bindings.tids)
+                cc = sub_r.c
+                return CE{c: cc, type_id: sub_r.type_id}
+            }
+        }
+    }
 
     // Conversion methods
     if method == "toStr" || method == "toString" {
@@ -4891,6 +4944,128 @@ fn _check_method_call(c: Checker, obj_type: i64, method: str) -> CE {
 // concrete TypeVar id. Simple first-pass: if ret_tid is itself a TypeVar
 // (Self or T), return the receiver's tid. For wrapped types (Array<T>,
 // Option<T>, Result<T,E>), walk inner type_id and substitute.
+// Checker-side companions to lower.aria's _extract_typevar_bindings and
+// _substitute_typevars. Kept here so the checker can probe user impl methods
+// without depending on codegen. Operate on the same TypeStore used at runtime
+// so bindings match what the lowerer infers.
+
+struct _CTvPair {
+    names: [str]
+    tys: [str]
+    tids: [i64]
+}
+
+fn _cextract_typevar_bindings(store: TypeStore, reg: TypeRegistry, pt: i64, at: i64, tvs: [str], tys: [str], tids: [i64]) -> _CTvPair {
+    mut out_tvs := tvs
+    mut out_tys := tys
+    mut out_tids := tids
+    mut ppt := pt
+    mut aat := at
+    if aat == 13 && ppt > 0 && ppt < store.types.len() {
+        ptik0 := type_kind_name(store_get(store, ppt).kind)
+        if ptik0 == "Array" {
+            ppt = store_get(store, ppt).type_id
+            aat = 12
+        }
+    }
+    if ppt <= 0 || ppt >= store.types.len() { return _CTvPair{names: out_tvs, tys: out_tys, tids: out_tids} }
+    pti := store_get(store, ppt)
+    pk := type_kind_name(pti.kind)
+    if pk == "TypeVar" {
+        tv_name := pti.name
+        mut already := false
+        mut ri := 1
+        while ri < out_tvs.len() {
+            if out_tvs[ri] == tv_name { already = true }
+            ri = ri + 1
+        }
+        if already == false && aat > 0 {
+            out_tvs = out_tvs.append(tv_name)
+            out_tys = out_tys.append("")
+            out_tids = out_tids.append(aat)
+        }
+        return _CTvPair{names: out_tvs, tys: out_tys, tids: out_tids}
+    }
+    if aat <= 0 || aat >= store.types.len() { return _CTvPair{names: out_tvs, tys: out_tys, tids: out_tids} }
+    ati := store_get(store, aat)
+    ak := type_kind_name(ati.kind)
+    if pk == "Array" && ak == "Array" {
+        return _cextract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
+    }
+    if pk == "Optional" && ak == "Optional" {
+        return _cextract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
+    }
+    if pk == "Result" && ak == "Result" {
+        left := _cextract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
+        return _cextract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, left.names, left.tys, left.tids)
+    }
+    if pk == "Function" && ak == "Function" {
+        left := _cextract_typevar_bindings(store, reg, pti.type_id, ati.type_id, out_tvs, out_tys, out_tids)
+        mut after_ret := left
+        if pti.type_id2 > 0 && ati.type_id2 > 0 {
+            next := _cextract_typevar_bindings(store, reg, pti.type_id2, ati.type_id2, after_ret.names, after_ret.tys, after_ret.tids)
+            after_ret = next
+        }
+        return after_ret
+    }
+    _CTvPair{names: out_tvs, tys: out_tys, tids: out_tids}
+}
+
+fn _cresolve_generic_bindings(store: TypeStore, reg: TypeRegistry, sig: FnSig, arg_types: [i64]) -> _CTvPair {
+    mut resolved_tvs := [""]
+    mut resolved_tys := [""]
+    mut resolved_tids := [0]
+    mut gi := 1
+    while gi < arg_types.len() && gi < sig.param_types.len() {
+        pt := sig.param_types[gi]
+        at := arg_types[gi]
+        pair := _cextract_typevar_bindings(store, reg, pt, at, resolved_tvs, resolved_tys, resolved_tids)
+        resolved_tvs = pair.names
+        resolved_tys = pair.tys
+        resolved_tids = pair.tids
+        gi = gi + 1
+    }
+    _CTvPair{names: resolved_tvs, tys: resolved_tys, tids: resolved_tids}
+}
+
+struct _CSub { c: Checker, type_id: i64 }
+
+fn _csubstitute_typevars(c: Checker, tid: i64, names: [str], tids: [i64]) -> _CSub {
+    mut cc := c
+    if tid <= 0 || tid >= cc.store.types.len() { return _CSub{c: cc, type_id: tid} }
+    ti := store_get(cc.store, tid)
+    k := type_kind_name(ti.kind)
+    if k == "TypeVar" {
+        mut i := 1
+        while i < names.len() {
+            if names[i] == ti.name { return _CSub{c: cc, type_id: tids[i]} }
+            i = i + 1
+        }
+        return _CSub{c: cc, type_id: tid}
+    }
+    if k == "Array" || k == "Optional" {
+        inner := _csubstitute_typevars(cc, ti.type_id, names, tids)
+        cc = inner.c
+        if inner.type_id == ti.type_id { return _CSub{c: cc, type_id: tid} }
+        new_ti := TypeInfo{kind: ti.kind, name: ti.name, type_id: inner.type_id, type_id2: ti.type_id2, param_start: 0, param_count: ti.param_count}
+        sar := store_add_canonical(cc.store, new_ti)
+        cc = _cset_store(cc, sar.store)
+        return _CSub{c: cc, type_id: sar.id}
+    }
+    if k == "Result" {
+        okr := _csubstitute_typevars(cc, ti.type_id, names, tids)
+        cc = okr.c
+        errr := _csubstitute_typevars(cc, ti.type_id2, names, tids)
+        cc = errr.c
+        if okr.type_id == ti.type_id && errr.type_id == ti.type_id2 { return _CSub{c: cc, type_id: tid} }
+        new_ti := TypeInfo{kind: ti.kind, name: ti.name, type_id: okr.type_id, type_id2: errr.type_id, param_start: 0, param_count: ti.param_count}
+        sar := store_add_canonical(cc.store, new_ti)
+        cc = _cset_store(cc, sar.store)
+        return _CSub{c: cc, type_id: sar.id}
+    }
+    _CSub{c: cc, type_id: tid}
+}
+
 fn _substitute_self_tv(store: TypeStore, ret_tid: i64, recv_tid: i64) -> i64 {
     if ret_tid <= 0 || ret_tid >= store.types.len() { return ret_tid }
     rti := store_get(store, ret_tid)

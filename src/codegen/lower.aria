@@ -3329,6 +3329,55 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
                         b_arg_types = b_arg_types.append(_lget_type(ll, b_lr.temp))
                         b_ai = b_ai + 1
                     }
+                    // Method-level generic specialization: if the impl method
+                    // declares its own [U] params (e.g. `fn map[U]`), infer U
+                    // from the concrete arg types and register a MonoSpec so
+                    // the mono pass emits a body with U's real element packing.
+                    // Without this, a single generic body is emitted once and
+                    // mis-packs str (2 slots) when U resolves to str at a
+                    // later callsite.
+                    if fn_is_generic(b_msig) {
+                        mut g_arg_types := [0]
+                        g_arg_types = g_arg_types.append(b_obj_type)
+                        mut gi2 := 1
+                        while gi2 < b_arg_types.len() {
+                            g_arg_types = g_arg_types.append(b_arg_types[gi2])
+                            gi2 = gi2 + 1
+                        }
+                        bindings := _resolve_generic_bindings(ll.store, ll.registry, b_msig, g_arg_types)
+                        if bindings.tys.len() > 1 {
+                            mut b_spec_suffix := ""
+                            mut si2 := 1
+                            while si2 < bindings.tys.len() {
+                                if b_spec_suffix == "" { b_spec_suffix = bindings.tys[si2] }
+                                else { b_spec_suffix = b_spec_suffix + "_" + bindings.tys[si2] }
+                                si2 = si2 + 1
+                            }
+                            b_spec_name := b_qualified + "_" + b_spec_suffix
+                            b_existing := reg_find_fn(ll.registry, b_spec_name)
+                            if b_existing.name == "" {
+                                mut sp_ptypes := [0]
+                                mut ppi := 1
+                                while ppi < b_msig.param_types.len() {
+                                    sub := _substitute_typevars(ll, b_msig.param_types[ppi], bindings.names, bindings.tids)
+                                    ll = sub.l
+                                    sp_ptypes = sp_ptypes.append(sub.temp)
+                                    ppi = ppi + 1
+                                }
+                                sp_ret_r := _substitute_typevars(ll, b_msig.return_type, bindings.names, bindings.tids)
+                                ll = sp_ret_r.l
+                                new_sig := new_fn_sig(b_spec_name, b_msig.param_names, sp_ptypes, sp_ret_r.temp, b_msig.error_type)
+                                ll = _lset_reg(ll, reg_add_fn(ll.registry, new_sig))
+                                b_spec := MonoSpec{generic_name: b_qualified, specialized_name: b_spec_name,
+                                                    type_arg_0: b_obj_type, type_arg_1: 0, type_arg_2: 0}
+                                ll = _lset_reg(ll, reg_add_mono(ll.registry, b_spec))
+                                b_msig = new_sig
+                            } else {
+                                b_msig = b_existing
+                            }
+                            b_qualified = b_spec_name
+                        }
+                    }
                     // Register slots: receiver (1) + args (str=2, else=1 each).
                     mut b_reg_count := 1
                     if b_obj_type == 12 { b_reg_count = 2 }

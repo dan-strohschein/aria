@@ -1,0 +1,26 @@
+// Phase 4.6 step 5: method-level U monomorphization.
+// Covers: impl[T] Container[T] for Box[T] { fn map[U](self, f: fn(T)->U) -> [U] }
+// - U = i64 (non-str element): single-slot packing
+// - U = str (str element): 2-slot packing via MonoSpec per-U
+// - U = str with i64 T: distinct specializations don't collide
+trait Container[T] { fn map[U](self, f: fn(T) -> U) -> [U] }
+struct Box[T] { val: T }
+impl[T] Container[T] for Box[T] {
+    fn map[U](self, f: fn(T) -> U) -> [U] = [f(self.val)]
+}
+entry {
+    b := Box[i64]{val: 21}
+    m_i := b.map(fn(x: i64) -> i64 { x * 2 })
+    assert m_i.len() == 1
+    assert m_i[0] == 42
+
+    m_s := b.map(fn(x: i64) -> str { "doubled" })
+    assert m_s.len() == 1
+    assert m_s[0] == "doubled"
+
+    b2 := Box[i64]{val: 3}
+    m_s2 := b2.map(fn(x: i64) -> str { i2s(x + 100) })
+    assert m_s2[0] == "103"
+
+    println("ok")
+}
