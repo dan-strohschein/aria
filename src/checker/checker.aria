@@ -1457,15 +1457,9 @@ fn _register_trait_decl_ast(c: Checker, node_idx: i64) -> Checker {
         midx_node := pool_get(cc.pool, node.list_start + mi)
         method_node := pool_get(cc.pool, midx_node.c0)
         mnames = mnames.append(method_node.s1)
-        // Trait methods with own generics (`fn map[U](...)`) aren't fully
-        // typed yet — store sentinel and let Phase 4.6 follow up.
-        if method_node.s2.len() > 0 {
-            msigs = msigs.append(_sentinel_fn_sig())
-        } else {
-            bs := _build_trait_method_sig(cc, method_node)
-            cc = bs.c
-            msigs = msigs.append(bs.sig)
-        }
+        bs := _build_trait_method_sig(cc, method_node)
+        cc = bs.c
+        msigs = msigs.append(bs.sig)
         mi = mi + 1
     }
 
@@ -1488,6 +1482,33 @@ struct CFS {
 // to stash into TraitDef.method_sigs.
 fn _build_trait_method_sig(c: Checker, method_node: Expr) -> CFS {
     mut cc := c
+    // Parse method-level generic params (Phase 4.6). Register TypeVars BEFORE
+    // resolving param types so `fn map[U](self, f: fn(T) -> U)` finds U in the
+    // store. Outer trait-level TypeVars (`T`) are already in the store.
+    gp_result := _parse_generic_str(method_node.s2, "", "", "", "", "", "")
+    mut mgp_count := 0
+    if gp_result[0] == "1" { mgp_count = 1 }
+    if gp_result[0] == "2" { mgp_count = 2 }
+    if gp_result[0] == "3" { mgp_count = 3 }
+    mgp_0 := gp_result[1]
+    mgp_1 := gp_result[2]
+    mgp_2 := gp_result[3]
+    mgb_0 := gp_result[4]
+    mgb_1 := gp_result[5]
+    mgb_2 := gp_result[6]
+    if mgp_count > 0 {
+        new_st := store_add(cc.store, mk_typevar(mgp_0))
+        cc = _cset_store(cc, new_st)
+    }
+    if mgp_count > 1 {
+        new_st := store_add(cc.store, mk_typevar(mgp_1))
+        cc = _cset_store(cc, new_st)
+    }
+    if mgp_count > 2 {
+        new_st := store_add(cc.store, mk_typevar(mgp_2))
+        cc = _cset_store(cc, new_st)
+    }
+
     mut pnames := [""]
     mut ptypes := [0]
     mut pi := 0
@@ -1529,7 +1550,10 @@ fn _build_trait_method_sig(c: Checker, method_node: Expr) -> CFS {
         err = et.type_id
         cc = _cset_pos(cc, saved)
     }
-    sig := new_fn_sig(method_node.s1, pnames, ptypes, ret, err)
+    mut sig := new_fn_sig(method_node.s1, pnames, ptypes, ret, err)
+    if mgp_count > 0 {
+        sig = new_generic_fn_sig(method_node.s1, pnames, ptypes, ret, err, mgp_count, _strip_hkt_suffix(mgp_0), _strip_hkt_suffix(mgp_1), _strip_hkt_suffix(mgp_2), mgb_0, mgb_1, mgb_2, 0)
+    }
     CFS{c: cc, sig: sig}
 }
 
@@ -2239,6 +2263,19 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
         impl_type = first_name
         cc = _cadv(cc)
     }
+    // Skip trait-level generic args `[...]` between trait name and `for`:
+    // `impl Container[T] for Box[T]` — without this, the `for` check below
+    // misses and `impl_type` stays as the trait name.
+    if _ck2(cc) == "[" {
+        cc = _cadv(cc)
+        mut tgdepth := 1
+        while tgdepth > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { tgdepth = tgdepth + 1 }
+            else if _ck2(cc) == "]" { tgdepth = tgdepth - 1 }
+            if tgdepth > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
     // Check for "for TypeName" pattern (impl Trait for Type)
     if _ck2(cc) == "for" {
         impl_trait = first_name
@@ -2246,6 +2283,17 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
         if _ck2(cc) == "IDENT" {
             impl_type = _ccur(cc).text
             cc = _cadv(cc)
+            // Skip type-level generic args on the impl target: `for Box[T]`.
+            if _ck2(cc) == "[" {
+                cc = _cadv(cc)
+                mut tydepth := 1
+                while tydepth > 0 && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == "[" { tydepth = tydepth + 1 }
+                    else if _ck2(cc) == "]" { tydepth = tydepth - 1 }
+                    if tydepth > 0 { cc = _cadv(cc) }
+                }
+                if _ck2(cc) == "]" { cc = _cadv(cc) }
+            }
         }
     }
     // Blanket impl: register as special marker
@@ -2324,8 +2372,16 @@ fn _register_impl_fns(c: Checker, node_idx: i64) -> Checker {
     // True blanket impls always take the form `impl[T: Trait] ThatTrait2 for T`
     // (impl_trait is set). A generic struct impl `impl[A, B] Pair[A, B] { ... }`
     // is *parameterized*, not blanket — its methods still need the type prefix so
-    // `Pair.new(...)` can resolve to `Pair_new`.
-    if is_blanket && impl_trait != "" { reg_prefix = "" }
+    // `Pair.new(...)` can resolve to `Pair_new`. Likewise, `impl[T] Trait[T] for Box[T]`
+    // is a parameterized impl of a specific generic struct; register as `Box_method`
+    // so method-call dispatch on `Box[i64]` can find it.
+    if is_blanket && impl_trait != "" {
+        reg_prefix = ""
+        if impl_type != "" {
+            sdef_probe := reg_find_struct(cc.registry, impl_type)
+            if sdef_probe.name != "" { reg_prefix = impl_type }
+        }
+    }
     // AST path: iterate method children from the EkImplDecl node
     if node_idx > 0 {
         saved_impl_pos := cc.pos
@@ -2830,17 +2886,50 @@ fn _check_fn_d(c: Checker, decl: DeclInfo) -> Checker {
 // DeclInfo-aware impl block checker — walks AST method children when available
 fn _check_impl_d(c: Checker, decl: DeclInfo) -> Checker {
     mut cc := _cadv(c)  // skip impl
+    // Skip leading `[T: Bound]` blanket-impl generics so subsequent IDENT is
+    // the trait or type name, matching the pre-registration path.
+    if _ck2(cc) == "[" {
+        cc = _cadv(cc)
+        mut bgdepth := 1
+        while bgdepth > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { bgdepth = bgdepth + 1 }
+            else if _ck2(cc) == "]" { bgdepth = bgdepth - 1 }
+            if bgdepth > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
     // Capture impl type for qualified fn lookup
     mut impl_type := ""
     if _ck2(cc) == "IDENT" {
         impl_type = _ccur(cc).text
         cc = _cadv(cc)
     }
+    // Skip trait-generic args between trait name and `for`.
+    if _ck2(cc) == "[" {
+        cc = _cadv(cc)
+        mut tgdepth := 1
+        while tgdepth > 0 && _ck2(cc) != "EOF" {
+            if _ck2(cc) == "[" { tgdepth = tgdepth + 1 }
+            else if _ck2(cc) == "]" { tgdepth = tgdepth - 1 }
+            if tgdepth > 0 { cc = _cadv(cc) }
+        }
+        if _ck2(cc) == "]" { cc = _cadv(cc) }
+    }
     if _ck2(cc) == "for" {
         cc = _cadv(cc)
         if _ck2(cc) == "IDENT" {
             impl_type = _ccur(cc).text
             cc = _cadv(cc)
+            if _ck2(cc) == "[" {
+                cc = _cadv(cc)
+                mut tydepth := 1
+                while tydepth > 0 && _ck2(cc) != "EOF" {
+                    if _ck2(cc) == "[" { tydepth = tydepth + 1 }
+                    else if _ck2(cc) == "]" { tydepth = tydepth - 1 }
+                    if tydepth > 0 { cc = _cadv(cc) }
+                }
+                if _ck2(cc) == "]" { cc = _cadv(cc) }
+            }
         }
     }
 

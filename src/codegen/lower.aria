@@ -1770,6 +1770,34 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             return LT{l: ll, temp: ok_val.temp}
         }
 
+        // `left ?? default` — Optional coalesce: Some unwraps; None yields default
+        if op == "??" {
+            left_lt := _lower_expr_node(ll, node.c0)
+            ll = left_lt.l
+            default_lt := _lower_expr_node(ll, node.c1)
+            ll = default_lt.l
+            tag_nt := _lnew_temp(ll)
+            ll = tag_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, tag_nt.temp, left_lt.temp, 0, "_tag", 0))
+            some_lbl := _lnew_label(ll)
+            ll = some_lbl.l
+            end_lbl := _lnew_label(ll)
+            ll = end_lbl.l
+            final_nt := _lnew_temp(ll)
+            ll = final_nt.l
+            // tag=1 (Some) → branch to some_lbl; tag=0 (None) → fall through to default path
+            ll = _lemit(ll, new_inst(OpBranchTrue, 0, tag_nt.temp, some_lbl.temp, "", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, default_lt.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpJump, 0, end_lbl.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, some_lbl.temp, 0, "", 0))
+            some_val := _lnew_temp(ll)
+            ll = some_val.l
+            ll = _lemit(ll, new_inst(OpFieldGet, some_val.temp, left_lt.temp, 1, "_val", 0))
+            ll = _lemit(ll, new_inst(OpStore, final_nt.temp, some_val.temp, 0, "", 0))
+            ll = _lemit(ll, new_inst(OpLabel, 0, end_lbl.temp, 0, "", 0))
+            ll = _lset_type(ll, final_nt.temp, 1)
+            return LT{l: ll, temp: final_nt.temp}
+        }
 
         // Binding: x := expr  or  (a, b) := tuple_expr
         if op == ":=" {
@@ -3229,14 +3257,29 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
         // each method body. Without this, _lower_method_with_args falls through
         // to its warn-and-return-obj fallback and every pipeline op is a no-op.
         if node.list_count > 0 && _is_pipeline_method(method) {
-            // Same Span-layout skew as in the Binary `|>` dispatcher: use
-            // `.col` (which actually holds the byte offset) to locate the
-            // method call site reliably instead of `.offset` (which holds
-            // the length due to `file: str` empty-slot collapse).
-            mut tp := _find_tok_pos(ll, node.span.offset)
-            while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
-            ll = _lset_pos(ll, tp)
-            return _lower_method_call(ll, recv.temp, method)
+            // Don't take the builtin-array short-circuit when the receiver
+            // has a user-defined method of the same name (e.g. a trait impl
+            // for Container.map on Box). Fall through to the user-impl
+            // dispatch below in that case.
+            pre_obj_type := _lget_type(ll, recv.temp)
+            pre_sname := _struct_name_for_type(ll.store, ll.registry, pre_obj_type)
+            mut pipe_has_user := false
+            if pre_sname != "" {
+                if reg_find_fn(ll.registry, pre_sname + "_" + method).name != "" {
+                    pipe_has_user = true
+                } else {
+                    pre_base := _base_generic_name(pre_sname)
+                    if pre_base != pre_sname && reg_find_fn(ll.registry, pre_base + "_" + method).name != "" {
+                        pipe_has_user = true
+                    }
+                }
+            }
+            if !pipe_has_user {
+                mut tp := _find_tok_pos(ll, node.span.offset)
+                while tp < ll.tokens.len() && ll.tokens[tp].name != "(" { tp = tp + 1 }
+                ll = _lset_pos(ll, tp)
+                return _lower_method_call(ll, recv.temp, method)
+            }
         }
         // Issue B: method call on an arbitrary expression whose type is a
         // registered struct — dispatch to `TypeName_method(receiver, args)`.
@@ -3251,8 +3294,22 @@ fn _lower_expr_node(l: Lowerer, idx: i64) -> LT {
             b_obj_type := _lget_type(ll, recv.temp)
             b_sname := _struct_name_for_type(ll.store, ll.registry, b_obj_type)
             if b_sname != "" {
-                b_qualified := b_sname + "_" + method
-                b_msig := reg_find_fn(ll.registry, b_qualified)
+                mut b_qualified := b_sname + "_" + method
+                mut b_msig := reg_find_fn(ll.registry, b_qualified)
+                if b_msig.name == "" {
+                    // Generic struct specialization: receiver is Box_i64 but
+                    // the trait impl registered as Box_map. Fall back to the
+                    // base generic name so the (generic) user impl dispatches.
+                    b_base := _base_generic_name(b_sname)
+                    if b_base != b_sname {
+                        b_cand := b_base + "_" + method
+                        b_fallback := reg_find_fn(ll.registry, b_cand)
+                        if b_fallback.name != "" {
+                            b_msig = b_fallback
+                            b_qualified = b_cand
+                        }
+                    }
+                }
                 if b_msig.name != "" {
                     // Reorder labeled args against the callee's params,
                     // skipping param[1] which is the receiver synthesized
@@ -5105,6 +5162,57 @@ fn _lower_call_node(l: Lowerer, node: Expr) -> LT {
         }
     }
 
+    // --- Closure-taking concurrency builtins ---
+    // These take an Aria closure (fat pointer = {fn_ptr, env_ptr}) that must
+    // be unpacked into consecutive i64 temps before calling the runtime. The
+    // generic packing path below would instead pass the closure struct pointer
+    // as a single i64, which the runtime would misinterpret.
+    if name == "_ariaSpawn" || name == "_ariaSpawn2" {
+        if node.list_count > 0 {
+            cl := _lower_expr_node(ll, pool_get(ll.pool, node.list_start).c0)
+            ll = cl.l
+            fn_ptr_nt := _lnew_temp(ll)
+            ll = fn_ptr_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, fn_ptr_nt.temp, cl.temp, 0, "_fn", 0))
+            env_ptr_nt := _lnew_temp(ll)
+            ll = env_ptr_nt.l
+            ll = _lemit(ll, new_inst(OpFieldGet, env_ptr_nt.temp, cl.temp, 1, "_env", 0))
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            mut rt_name := "_aria_spawn"
+            if name == "_ariaSpawn2" { rt_name = "_aria_spawn2" }
+            ll = _lemit(ll, new_inst(OpCall, nt.temp, fn_ptr_nt.temp, 2, rt_name, 1))
+            ll = _lset_type(ll, nt.temp, 1)
+            return LT{l: ll, temp: nt.temp}
+        }
+    }
+
+    if name == "_ariaOnceCall" {
+        if node.list_count >= 2 {
+            h_holder := pool_get(ll.pool, node.list_start)
+            h_arg := _lower_expr_node(ll, h_holder.c0)
+            ll = h_arg.l
+            cl_holder := pool_get(ll.pool, node.list_start + 1)
+            cl := _lower_expr_node(ll, cl_holder.c0)
+            ll = cl.l
+            // Pack (handle, fn_ptr, env_ptr) into 3 consecutive temps.
+            p0 := _lnew_temp(ll)
+            ll = p0.l
+            ll = _lemit(ll, new_inst(OpStore, p0.temp, h_arg.temp, 0, "", 0))
+            p1 := _lnew_temp(ll)
+            ll = p1.l
+            ll = _lemit(ll, new_inst(OpFieldGet, p1.temp, cl.temp, 0, "_fn", 0))
+            p2 := _lnew_temp(ll)
+            ll = p2.l
+            ll = _lemit(ll, new_inst(OpFieldGet, p2.temp, cl.temp, 1, "_env", 0))
+            nt := _lnew_temp(ll)
+            ll = nt.l
+            ll = _lemit(ll, new_inst(OpCall, nt.temp, p0.temp, 3, "_aria_once_call", 1))
+            ll = _lset_type(ll, nt.temp, 1)
+            return LT{l: ll, temp: nt.temp}
+        }
+    }
+
     // --- Lower all args generically, then dispatch ---
     // Look up the sig early so we can reorder named args against its
     // declared parameter names.
@@ -5455,6 +5563,27 @@ fn _builtin_runtime_name(name: str) -> str {
     if name == "_ariaGcCollect" { return "_aria_gc_collect" }
     if name == "_ariaGcTotalBytes" { return "_aria_gc_total_bytes" }
     if name == "_ariaGcAllocationCount" { return "_aria_gc_allocation_count" }
+    if name == "_ariaSpawn2" { return "_aria_spawn2" }
+    if name == "_ariaTaskAwait2" { return "_aria_task_await2" }
+    if name == "_ariaTaskDone" { return "_aria_task_done" }
+    if name == "_ariaTaskResult" { return "_aria_task_result" }
+    if name == "_ariaTaskCancel" { return "_aria_task_cancel" }
+    if name == "_ariaCancelCheck" { return "_aria_cancel_check" }
+    if name == "_ariaRWMutexNew" { return "_aria_rwmutex_new" }
+    if name == "_ariaRWMutexRlock" { return "_aria_rwmutex_rlock" }
+    if name == "_ariaRWMutexRunlock" { return "_aria_rwmutex_runlock" }
+    if name == "_ariaRWMutexWlock" { return "_aria_rwmutex_wlock" }
+    if name == "_ariaRWMutexWunlock" { return "_aria_rwmutex_wunlock" }
+    if name == "_ariaWgNew" { return "_aria_wg_new" }
+    if name == "_ariaWgAdd" { return "_aria_wg_add" }
+    if name == "_ariaWgDone" { return "_aria_wg_done" }
+    if name == "_ariaWgWait" { return "_aria_wg_wait" }
+    if name == "_ariaOnceNew" { return "_aria_once_new" }
+    if name == "_ariaOnceCall" { return "_aria_once_call" }
+    if name == "_ariaCancelNew" { return "_aria_cancel_new" }
+    if name == "_ariaCancelChild" { return "_aria_cancel_child" }
+    if name == "_ariaCancelTrigger" { return "_aria_cancel_trigger" }
+    if name == "_ariaCancelIsTriggered" { return "_aria_cancel_is_triggered" }
     if name == "i2s" { return "i2s" }
     return name
 }
@@ -5473,12 +5602,19 @@ fn _builtin_return_type(name: str) -> i64 {
     if name == "_ariaArgs" || name == "_ariaListDir" {
         return 13  // returns [str] array
     }
+    if name == "_ariaChanNew" {
+        return 17  // TY_CHAN — needed so `for v in ch` and ch.send/recv/close dispatch
+    }
     if name == "_ariaWriteFile" || name == "_ariaAppendFile" || name == "_ariaWriteBinaryFile" ||
        name == "_ariaExit" || name == "_ariaSleep" ||
        name == "_ariaTcpClose" || name == "_ariaPgClose" ||
        name == "_ariaPgClear" || name == "_ariaChanClose" || name == "_ariaMutexLock" ||
        name == "_ariaMutexUnlock" ||
-       name == "_ariaArenaReset" || name == "_ariaArenaFree" || name == "_ariaPoolPut" {
+       name == "_ariaArenaReset" || name == "_ariaArenaFree" || name == "_ariaPoolPut" ||
+       name == "_ariaTaskCancel" ||
+       name == "_ariaRWMutexRlock" || name == "_ariaRWMutexRunlock" ||
+       name == "_ariaRWMutexWlock" || name == "_ariaRWMutexWunlock" ||
+       name == "_ariaWgAdd" || name == "_ariaWgDone" || name == "_ariaWgWait" {
         return 0
     }
     return 1
@@ -5875,6 +6011,19 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
         impl_type = _lcur(ll).text
         ll = _ladv(ll)
     }
+    // Skip trait-generic args between trait name and `for`:
+    // `impl Container[T] for Box[T]` — otherwise impl_type sticks as the
+    // trait name and impl methods register under the wrong prefix.
+    if _lk(ll) == "[" {
+        ll = _ladv(ll)
+        mut tgdepth := 1
+        while tgdepth > 0 && _lk(ll) != "EOF" {
+            if _lk(ll) == "[" { tgdepth = tgdepth + 1 }
+            else if _lk(ll) == "]" { tgdepth = tgdepth - 1 }
+            if tgdepth > 0 { ll = _ladv(ll) }
+        }
+        if _lk(ll) == "]" { ll = _ladv(ll) }
+    }
     if _lk(ll) == "for" {
         // The IDENT before `for` was the trait name, not the impl type.
         impl_trait_name = impl_type
@@ -5882,6 +6031,16 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
         if _lk(ll) == "IDENT" {
             impl_type = _lcur(ll).text
             ll = _ladv(ll)
+            if _lk(ll) == "[" {
+                ll = _ladv(ll)
+                mut tydepth := 1
+                while tydepth > 0 && _lk(ll) != "EOF" {
+                    if _lk(ll) == "[" { tydepth = tydepth + 1 }
+                    else if _lk(ll) == "]" { tydepth = tydepth - 1 }
+                    if tydepth > 0 { ll = _ladv(ll) }
+                }
+                if _lk(ll) == "]" { ll = _ladv(ll) }
+            }
         }
     }
     // For blanket impls, use empty prefix — BUT only if impl_type is a type parameter
@@ -5951,7 +6110,10 @@ fn _lower_impl_d(l: Lowerer, decl: DeclInfo) -> Lowerer {
                     ci = ci + 1
                 }
             }
-            if sig.name != "" && fn_is_generic(sig) == false && method_node.b1 {
+            if sig.name != "" && method_node.b1 && (fn_is_generic(sig) == false || is_blanket == false) {
+                // Non-blanket generic impl methods (method-level generics like
+                // `fn map[U](self, f) -> [U]`): emit a single body — Aria's
+                // uniform 8-byte representation lets one body serve all U.
                 ll = _lower_impl_method_by_name(ll, impl_type, raw_name, sig)
                 // For blanket impls, also emit specializations per concrete type.
                 // Reset position to body start before each specialization so the
@@ -17455,8 +17617,8 @@ fn _lower_select(l: Lowerer) -> LT {
             //   binding_name := <-channel_expr => body         (ex09 form)
             bname := _lcur(ll).text
             ll = _ladv(ll)
-            if _lk(ll) == "IDENT" && _lcur(ll).text == "from" {
-                ll = _ladv(ll)  // skip from
+            if _lk(ll) == "from" {
+                ll = _ladv(ll)  // skip from (tokenized as TkFrom, not IDENT)
             } else if _lk(ll) == ":=" {
                 ll = _ladv(ll)  // skip :=
                 if _lk(ll) == "<" { ll = _ladv(ll) }
